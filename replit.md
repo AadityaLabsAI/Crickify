@@ -2,11 +2,11 @@
 
 ## Overview
 
-The Cricket Live Match Centre is a sophisticated Telegram bot that provides a Cricbuzz-like experience with a completely zero-typing interface. Built with modern Python async/await patterns, this bot delivers real-time cricket scores, live match dashboards, comprehensive match statistics, and intelligent alerts - all through intuitive inline keyboards.
+The Cricket Live Match Centre is a demonstration Telegram bot that showcases a planned Cricbuzz-like experience with a completely zero-typing interface. Built with modern Python async/await patterns, this bot currently demonstrates the interface design using sample data, with infrastructure prepared for future real-time cricket integration.
 
-**Key Value Proposition:** Experience live cricket updates without typing a single command. Everything is accessible through user-friendly buttons and automatically updating dashboards.
+**Key Value Proposition:** Experience the planned cricket bot interface without typing a single command. Everything is accessible through user-friendly buttons and auto-updating demo dashboards that showcase the intended functionality.
 
-**Current Status:** Bot implementation with Telegram interface, cricket data scraping capabilities, and basic dashboard functionality. Some features may use demo/sample data.
+**Current Status:** Complete bot implementation with Telegram interface, demo data presentation, and interface framework. Live cricket data integration is planned for future development phases.
 
 ## 🚀 Features
 
@@ -40,58 +40,69 @@ The Cricket Live Match Centre is a sophisticated Telegram bot that provides a Cr
 
 ## 📋 Project Architecture
 
-### High-Level Architecture
+### Current Demo Architecture
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Telegram Bot  │◄──►│ Cricket Scraper │◄──►│  Data Sources   │
-│     (bot.py)    │    │(cricket_scraper)│    │ (Cricbuzz, etc) │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │
-         ▼                       ▼
-┌─────────────────┐    ┌─────────────────┐
-│   Scheduler     │    │  Web Scraper    │
-│ (Auto-updates)  │    │(web_scraper.py) │
-└─────────────────┘    └─────────────────┘
+│   Telegram Bot  │◄──►│ Demo Data       │    │  Data Sources   │
+│     (bot.py)    │    │ Generator       │    │ (Planned Future)│
+└─────────────────┘    │ (Placeholder)   │    │ Cricbuzz, etc   │
+         │              └─────────────────┘    └─────────────────┘
+         ▼                                              ▲
+┌─────────────────┐    ┌─────────────────┐             │
+│   Scheduler     │    │  Web Scraper    │◄────────────┘
+│ (Demo Updates)  │    │(web_scraper.py) │ (Roadmap)
+└─────────────────┘    │ (Framework Only)│
+                       └─────────────────┘
 ```
 
 ### Core Components
 
-#### 1. **Telegram Bot Interface** (`bot.py`)
-- **CricketBot Class**: Main bot controller with all handlers
-- **Inline Keyboard Management**: Zero-typing interface implementation
-- **Live Dashboard System**: Auto-updating match displays
-- **User Session Tracking**: Multiple simultaneous dashboards per user
-- **Menu Navigation**: Comprehensive menu system with all features
-- **Error Handling**: Robust error recovery and user feedback
+#### 1. **Telegram Bot Interface** (`bot.py`) ✅ *Implemented*
+- **CricketBot Class**: Main bot controller with all handlers ✅ *Implemented*
+- **Inline Keyboard Management**: Zero-typing interface implementation ✅ *Implemented*
+- **Demo Dashboard System**: Auto-updating displays with sample data ✅ *Implemented*
+- **User Session Tracking**: Basic session management ✅ *Implemented*
+- **Menu Navigation**: Complete menu system with all interface elements ✅ *Implemented*
+- **Error Handling**: Robust error recovery and user feedback ✅ *Implemented*
 
-#### 2. **Cricket Data Engine** (`cricket_scraper.py`)
-- **Multi-source Scraping**: Cricbuzz, ESPN Cricinfo with fallback mechanisms
-- **Data Models**: Comprehensive Python dataclasses for all cricket entities
-- **Async Operations**: Non-blocking data fetching for better performance
-- **Rate Limiting**: Respectful scraping with configurable delays
-- **Format Conversion**: Telegram-optimized data formatting
-- **Win Probability**: Match situation analysis and predictions
+#### 2. **Cricket Data Engine** (`cricket_scraper.py`) 🔄 *Framework/Planned*
+- **Multi-source Scraping**: Framework for Cricbuzz, ESPN Cricinfo 🔄 *Roadmap Feature*
+- **Data Models**: Comprehensive Python dataclasses structure 🔄 *Framework Ready*
+- **Async Operations**: Infrastructure for non-blocking data operations 🔄 *Framework Ready*
+- **Rate Limiting**: Respectful scraping configuration prepared 🔄 *Roadmap Feature*
+- **Format Conversion**: Demo data formatting for Telegram ✅ *Demo Implementation*
+- **Win Probability**: Analysis framework structure 🔄 *Roadmap Feature*
 
-#### 3. **Web Content Extraction** (`web_scraper.py`)
-- **Trafilatura Integration**: Clean text extraction from cricket websites
-- **Content Processing**: HTML parsing and data normalization
-- **Fallback Support**: Alternative content extraction when primary sources fail
+#### 3. **Web Content Extraction** (`web_scraper.py`) 🔄 *Framework Only*
+- **Trafilatura Integration**: Basic utility function available 🔄 *Framework Ready*
+- **Content Processing**: Infrastructure prepared for HTML parsing 🔄 *Roadmap Feature*
+- **Fallback Support**: Error handling framework in place 🔄 *Roadmap Feature*
 
-#### 4. **Scheduler System**
-- **AsyncIOScheduler**: Background task management for auto-updates
-- **Live Dashboard Updates**: Automatic refresh every 15-20 seconds
-- **User-specific Tracking**: Individual dashboard management per user
-- **Resource Optimization**: Efficient update scheduling and memory management
+#### 4. **Scheduler System** ✅ *Basic Implementation*
+- **AsyncIOScheduler**: Background task management framework ✅ *Implemented*
+- **Demo Dashboard Updates**: Automatic refresh with sample data every 15-20 seconds ✅ *Implemented*
+- **User-specific Tracking**: Basic individual dashboard management ✅ *Implemented*
+- **Resource Optimization**: Basic update scheduling for demo mode ✅ *Implemented*
 
-### Data Flow
+### Current Demo Data Flow
+
+1. **User Interaction** → Inline keyboard button press ✅ *Working*
+2. **Bot Handler** → Process callback and determine action ✅ *Working*
+3. **Demo Data Generator** → Generate sample cricket data for display ✅ *Working*
+4. **Data Processing** → Format sample data for Telegram display ✅ *Working*
+5. **Response Generation** → Create formatted message with new keyboard ✅ *Working*
+6. **Demo Auto-updates** → Schedule background updates with sample data ✅ *Working*
+7. **Dashboard Refresh** → Update existing messages with refreshed demo data ✅ *Working*
+
+### Planned Live Data Flow (Roadmap)
 
 1. **User Interaction** → Inline keyboard button press
 2. **Bot Handler** → Process callback and determine action
-3. **Data Scraper** → Fetch live data from cricket sources
-4. **Data Processing** → Parse, format, and structure for Telegram
-5. **Response Generation** → Create formatted message with new keyboard
-6. **Auto-updates** → Schedule background updates for live matches
-7. **Dashboard Refresh** → Update existing messages with fresh data
+3. **Data Scraper** → Fetch live data from cricket sources 🔄 *Roadmap*
+4. **Data Processing** → Parse, format, and structure real cricket data 🔄 *Roadmap*
+5. **Response Generation** → Create formatted message with live data
+6. **Live Auto-updates** → Schedule background updates for actual matches 🔄 *Roadmap*
+7. **Dashboard Refresh** → Update messages with real-time cricket data 🔄 *Roadmap*
 
 ## 📁 Project Structure
 
@@ -121,29 +132,29 @@ cricket-live-match-centre/
 - Session tracking for multiple simultaneous users
 
 **Core Features:**
-- `/start` command with main menu
-- Button callback handling for all user actions
-- Live match dashboard with 15-20 second auto-refresh
-- Match selection and dashboard management
-- User preference handling and settings
+- `/start` command with main menu ✅ *Implemented*
+- Button callback handling for all user actions ✅ *Implemented*
+- Demo match dashboard with 15-20 second auto-refresh ✅ *Implemented*
+- Demo match selection and dashboard management ✅ *Implemented*
+- Basic user preference interface framework ✅ *Implemented*
 
-#### `cricket_scraper.py` - Data Scraping Engine (921 lines)
-**Purpose**: Comprehensive cricket data extraction from multiple sources
+#### `cricket_scraper.py` - Data Framework (921 lines)
+**Purpose**: Framework structure for future cricket data extraction
 
-**Key Components:**
-- Data models: `Match`, `Team`, `Player`, `Commentary`, `Tournament`
-- `CricketScraper` class with async/await patterns
-- Multi-source scraping (Cricbuzz, ESPN Cricinfo)
-- Rate limiting and respectful scraping practices
-- Telegram-formatted output methods
+**Current Status: Framework/Planning Phase**
+- Data models: `Match`, `Team`, `Player`, `Commentary`, `Tournament` 🔄 *Structure Ready*
+- `CricketScraper` class framework with async/await patterns 🔄 *Framework Ready*
+- Multi-source scraping framework (Cricbuzz, ESPN Cricinfo) 🔄 *Planned Implementation*
+- Rate limiting infrastructure prepared 🔄 *Framework Ready*
+- Demo data formatting for Telegram ✅ *Demo Implementation*
 
-**Core Features:**
-- Live match data extraction
-- Match schedules and upcoming fixtures
-- Ball-by-ball commentary parsing
-- Win probability calculations
-- Team and player statistics
-- Tournament standings
+**Planned Features (Roadmap):**
+- Live match data extraction 🔄 *Roadmap Feature*
+- Match schedules and upcoming fixtures 🔄 *Roadmap Feature*
+- Ball-by-ball commentary parsing 🔄 *Roadmap Feature*
+- Win probability calculations 🔄 *Roadmap Feature*
+- Team and player statistics 🔄 *Roadmap Feature*
+- Tournament standings 🔄 *Roadmap Feature*
 
 #### `web_scraper.py` - Content Extraction Utility (21 lines)
 **Purpose**: Simple web content extraction using Trafilatura
@@ -169,7 +180,7 @@ cricket-live-match-centre/
 ### Prerequisites
 - Python 3.11 or higher
 - Telegram Bot Token (from @BotFather)
-- Internet connection for cricket data sources
+- Internet connection for Telegram API (live cricket data sources planned for future)
 
 ### 1. Environment Setup
 The project uses UV for dependency management with pyproject.toml:
@@ -224,8 +235,8 @@ Once running, test the bot:
 1. Start a chat with your bot on Telegram
 2. Send `/start` command
 3. Verify the main menu appears with inline buttons
-4. Test "Live Matches" - **expect demo/sample data** (this is normal behavior)
-5. Other features like Schedule, Alerts, and Stats show **interface demonstrations only**
+4. Test "Live Matches" - shows **demo/sample data only** (this is the current intended behavior)
+5. All features (Schedule, Alerts, Stats, Settings) show **interface demonstrations with sample data**
 6. Check `bot.log` file for any startup errors
 
 **Expected behavior:** Most features display demo/placeholder data to showcase the interface design.
@@ -238,41 +249,51 @@ Once running, test the bot:
 3. **Navigation**: Use "Back" buttons to return to previous menus
 4. **Live Updates**: Live match dashboards update automatically every 15-20 seconds
 
-### 🏏 Using Live Matches
-**Note: This feature currently uses demo/sample data for demonstration purposes**
+### 🏏 Using Demo Live Matches
+**Current Status: Interface demonstration with sample data only**
 1. Tap "🏏 Live Matches" from main menu
-2. Select any live match from the list (sample matches displayed)
-3. Watch as the dashboard updates automatically with demo data
-4. Use "Stop Dashboard" to end auto-updates
-5. Multiple dashboards can run simultaneously
+2. Select any demo match from the list (sample matches with placeholder teams)
+3. Watch as the dashboard updates automatically with rotating demo data
+4. Use "Stop Dashboard" to end demo auto-updates
+5. Multiple demo dashboards can run simultaneously
 
-### 📅 Checking Schedule
-**Note: This feature currently shows placeholder/demo data**
+**Future Implementation:** Real-time cricket data integration planned for live match functionality.
+
+### 📅 Demo Schedule Interface
+**Current Status: Interface demonstration only**
 1. Tap "📅 Schedule" from main menu
-2. View sample upcoming matches (demo data)
-3. Date filter interface available (placeholder functionality)
-4. Sample match information displayed
+2. View sample upcoming matches (placeholder data demonstrating layout)
+3. Date filter interface available (shows design, non-functional)
+4. Sample match information displayed to showcase planned functionality
 
-### 🔔 Managing Alerts
-**Note: This feature shows interface design only - no functional alerts**
+**Future Implementation:** Real cricket schedule data integration planned.
+
+### 🔔 Demo Alert Management
+**Current Status: Interface design demonstration only**
 1. Tap "🔔 My Alerts" from main menu
-2. View alert management interface (placeholder functionality)
-3. No actual notifications are sent (demo interface only)
-4. Interface demonstrates planned alert management features
+2. View alert management interface (shows planned layout and options)
+3. **No actual notifications are sent** - this is demo interface only
+4. Interface demonstrates planned alert management functionality
 
-### 📊 Player Statistics
-**Note: This feature shows sample/demo data only**
+**Future Implementation:** Functional alert system with real notifications planned.
+
+### 📊 Demo Player Statistics
+**Current Status: Interface design with sample data**
 1. Tap "📊 Player Stats" from main menu
-2. Browse interface with sample categories
-3. View demo statistics and placeholder data
-4. Interface demonstrates planned statistics features
+2. Browse interface categories (demonstrates planned navigation)
+3. View sample statistics with placeholder player data
+4. Interface showcases planned comprehensive statistics features
 
-### ⚙️ Settings & Customization
-**Note: This feature shows basic interface with limited functionality**
+**Future Implementation:** Real player statistics and data integration planned.
+
+### ⚙️ Demo Settings Interface
+**Current Status: Basic interface framework with limited functionality**
 1. Tap "⚙️ Settings" from main menu
-2. View settings interface (basic functionality)
-3. Most settings are placeholder/demo features
-4. Interface demonstrates planned customization options
+2. View settings interface (demonstrates planned options)
+3. **Most settings are non-functional placeholders** showing planned features
+4. Interface demonstrates planned comprehensive customization options
+
+**Future Implementation:** Fully functional settings and user preferences planned.
 
 ### ❓ Getting Help
 1. Tap "ℹ️ Help" from main menu
@@ -282,37 +303,40 @@ Once running, test the bot:
 
 ## 🎯 Key Benefits
 
-### For Cricket Fans
-- **Zero Learning Curve**: No commands to memorize - everything through buttons
-- **Real-time Updates**: Never miss a ball with auto-refreshing dashboards
-- **Comprehensive Coverage**: Live matches, schedules, stats, and alerts in one place
-- **Mobile Optimized**: Perfect for following cricket on mobile devices
+### For Cricket Fans (Current Demo Experience)
+- **Zero Learning Curve**: No commands to memorize - everything through buttons ✅ *Working*
+- **Demo Updates**: Experience auto-refreshing dashboards with sample data ✅ *Working*
+- **Interface Preview**: See planned comprehensive coverage layout and design ✅ *Working*
+- **Mobile Optimized**: Perfect interface design for mobile cricket following ✅ *Working*
+- **Future Live Updates**: Real-time cricket data planned for full implementation 🔄 *Roadmap*
 
-### For Developers
-- **Modern Architecture**: Async/await patterns and modular design
-- **Clean Code Structure**: Separated bot logic, scraping, and web content extraction
-- **Extensible Framework**: Infrastructure ready for adding new data sources
-- **Error Handling**: Graceful fallback to sample data and comprehensive logging
+### For Developers (Current Implementation)
+- **Modern Architecture**: Async/await patterns and modular design ✅ *Implemented*
+- **Clean Code Structure**: Separated bot logic with prepared framework components ✅ *Implemented*
+- **Extensible Framework**: Infrastructure ready for adding live data sources 🔄 *Framework Ready*
+- **Error Handling**: Graceful demo mode operation and comprehensive logging ✅ *Implemented*
+- **Future Integration**: Ready for live cricket data source integration 🔄 *Roadmap Feature*
 
 ## 🔧 Technical Specifications
 
-### Performance
-- **Response Time**: Quick response for menu navigation and sample data display
-- **Bot Polling**: Telegram API polling every 10 seconds
-- **Concurrent Users**: Basic support for multiple users
-- **Resource Usage**: Lightweight operation with sample data
+### Current Demo Performance
+- **Response Time**: Instant response for menu navigation with demo data ✅ *Implemented*
+- **Bot Polling**: Telegram API polling every 10 seconds ✅ *Implemented*
+- **Concurrent Users**: Basic support for multiple simultaneous users ✅ *Implemented*
+- **Resource Usage**: Minimal resources with sample data generation ✅ *Implemented*
 
-### Data Sources
-- **Framework**: Infrastructure for Cricbuzz.com and ESPN Cricinfo integration
-- **Current Mode**: Sample/demo data for demonstration
-- **Web Scraping**: Trafilatura integration for content extraction
-- **Rate Limiting**: Respectful scraping with configurable delays
+### Data Sources Status
+- **Current Implementation**: Demo/sample data generation only ✅ *Implemented*
+- **Live Data Integration**: Planned for future development 🔄 *Roadmap Feature*
+- **Web Scraping Framework**: Basic utility functions available 🔄 *Framework Ready*
+- **Rate Limiting Infrastructure**: Prepared for future live data fetching 🔄 *Framework Ready*
 
-### Reliability
-- **Error Recovery**: Fallback to sample data when live sources unavailable
-- **Bot Stability**: Proper startup/shutdown handling with signal management
-- **Logging**: Comprehensive logging to `bot.log` for debugging
-- **Graceful Operation**: Continues with demo data when external sources fail
+### System Reliability
+- **Demo Mode Stability**: Consistent operation with sample data ✅ *Implemented*
+- **Bot Stability**: Proper startup/shutdown handling with signal management ✅ *Implemented*
+- **Logging**: Comprehensive logging to `bot.log` for debugging ✅ *Implemented*
+- **Error Handling**: Graceful error recovery and user feedback ✅ *Implemented*
+- **Future Reliability**: Live data fallback mechanisms planned 🔄 *Roadmap Feature*
 
 ## 🚀 Future Enhancements
 
