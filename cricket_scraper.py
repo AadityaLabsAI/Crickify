@@ -27,10 +27,10 @@ import json
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any, Union, Tuple
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from enum import Enum
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 import trafilatura
 
 # Import web scraper from existing module
@@ -63,14 +63,9 @@ class Player:
     """Data model for a cricket player."""
     name: str
     role: str = ""
-    batting_stats: Dict[str, Any] = None
-    bowling_stats: Dict[str, Any] = None
+    batting_stats: Dict[str, Any] = field(default_factory=dict)
+    bowling_stats: Dict[str, Any] = field(default_factory=dict)
     
-    def __post_init__(self):
-        if self.batting_stats is None:
-            self.batting_stats = {}
-        if self.bowling_stats is None:
-            self.bowling_stats = {}
     
     def to_telegram_format(self) -> str:
         """Format player info for Telegram display."""
@@ -94,11 +89,9 @@ class Team:
     overs: str = "0.0"
     run_rate: float = 0.0
     required_rate: Optional[float] = None
-    players: List[Player] = None
+    players: List[Player] = field(default_factory=list)
     
     def __post_init__(self):
-        if self.players is None:
-            self.players = []
         if not self.short_name:
             self.short_name = self.name[:3].upper()
     
@@ -141,17 +134,10 @@ class Match:
     toss: str = ""
     innings_status: InningsStatus = InningsStatus.FIRST_INNINGS
     current_partnership: str = ""
-    recent_overs: List[str] = None
-    commentary: List[Commentary] = None
-    win_probability: Dict[str, float] = None
+    recent_overs: List[str] = field(default_factory=list)
+    commentary: List[Commentary] = field(default_factory=list)
+    win_probability: Dict[str, float] = field(default_factory=dict)
     
-    def __post_init__(self):
-        if self.recent_overs is None:
-            self.recent_overs = []
-        if self.commentary is None:
-            self.commentary = []
-        if self.win_probability is None:
-            self.win_probability = {}
     
     def to_telegram_format(self, include_commentary: bool = False) -> str:
         """Format match info for Telegram display."""
@@ -210,11 +196,8 @@ class Tournament:
     """Data model for cricket tournament/series."""
     name: str
     teams: List[str]
-    standings: Dict[str, Dict[str, Any]] = None
+    standings: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     
-    def __post_init__(self):
-        if self.standings is None:
-            self.standings = {}
 
 
 class CricketScraper:
@@ -349,9 +332,14 @@ class CricketScraper:
             for card in match_cards:
                 try:
                     # Extract match details - simplified parsing logic
-                    match_id = card.get('data-match-id', f"cb_{int(time.time())}")
+                    if not isinstance(card, Tag):
+                        continue
+                    
+                    match_id_attr = card.get('data-match-id')
+                    match_id = str(match_id_attr) if match_id_attr else f"cb_{int(time.time())}"
+                    
                     title = card.find('h3', class_='cb-lv-scr-mtch-hdr')
-                    title_text = title.get_text(strip=True) if title else "Live Match"
+                    title_text = title.get_text(strip=True) if isinstance(title, Tag) else "Live Match"
                     
                     # Create placeholder match object
                     # In a real implementation, you'd extract all details from the HTML
@@ -401,9 +389,12 @@ class CricketScraper:
             for container in match_containers:
                 try:
                     # Extract match details
+                    if not isinstance(container, Tag):
+                        continue
+                    
                     match_id = f"ci_{int(time.time())}"
                     title_elem = container.find('span', class_='description')
-                    title = title_elem.get_text(strip=True) if title_elem else "Live Match"
+                    title = title_elem.get_text(strip=True) if isinstance(title_elem, Tag) else "Live Match"
                     
                     # Create placeholder match - in practice, extract from HTML
                     team1 = Team("Team A", "TMA", 180, 4, "19.3", 9.33)

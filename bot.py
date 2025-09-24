@@ -387,6 +387,285 @@ class CricketBot:
             reply_markup=reply_markup
         )
 
+    async def start_live_dashboard(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, match_id: str) -> None:
+        """Start a live dashboard for a specific match with auto-updates."""
+        if not query or not query.message:
+            logger.error("Invalid query: missing query or message")
+            return
+            
+        # Check if message is accessible - need proper Message type
+        from telegram import Message
+        if not isinstance(query.message, Message):
+            logger.error("Message is not accessible or not a proper Message object")
+            return
+            
+        chat_id = query.message.chat_id
+        user = query.from_user
+        username = user.username if user else "Unknown"
+        
+        logger.info(f"Starting live dashboard for match {match_id} - User: {user.id if user else 'Unknown'} ({username})")
+        
+        # Show loading message first
+        loading_text = "🏏 *Live Match Dashboard*\n\n🔄 Loading live match data..."
+        await query.edit_message_text(loading_text, parse_mode='Markdown')
+        
+        try:
+            # Get detailed match information
+            match_details = await get_match_details(match_id)
+            
+            if not match_details:
+                error_text = (
+                    "🏏 *Live Match Dashboard*\n\n"
+                    "⚠️ Unable to load match details.\n\n"
+                    "_The match may have ended or the ID is invalid._"
+                )
+                
+                keyboard = [
+                    [InlineKeyboardButton("🔙 Back to Live Matches", callback_data="live_matches")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    error_text,
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+                return
+            
+            # Format match information for display
+            dashboard_text = self._format_live_dashboard(match_details)
+            
+            # Create dashboard controls
+            keyboard = [
+                [InlineKeyboardButton(f"🛑 Stop Dashboard", callback_data=f"stop_dashboard_{match_id}")],
+                [InlineKeyboardButton("🔄 Refresh Now", callback_data=f"match_{match_id}")],
+                [InlineKeyboardButton("🔙 Back to Live Matches", callback_data="live_matches")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Update the message with dashboard content
+            await query.edit_message_text(
+                dashboard_text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+            
+            # Track this dashboard
+            if chat_id not in self.active_dashboards:
+                self.active_dashboards[chat_id] = {}
+            
+            # The edit_message_text returns True when successful, we use the original message_id
+            message_id = query.message.message_id
+            self.active_dashboards[chat_id][message_id] = match_id
+            
+            # Schedule automatic updates
+            job_id = f"dashboard_{chat_id}_{message_id}_{match_id}"
+            
+            # Remove any existing job for this dashboard
+            try:
+                self.scheduler.remove_job(job_id)
+            except:
+                pass  # Job doesn't exist
+            
+            # Add new scheduled job for updates
+            self.scheduler.add_job(
+                self._update_live_dashboard,
+                trigger=IntervalTrigger(seconds=self.update_interval),
+                args=[chat_id, message_id, match_id],
+                id=job_id,
+                max_instances=1,
+                replace_existing=True
+            )
+            
+            # Start scheduler if not already running
+            if not self.scheduler.running:
+                self.scheduler.start()
+            
+            logger.info(f"Live dashboard started for match {match_id} in chat {chat_id}, message {message_id}")
+            
+        except Exception as e:
+            logger.error(f"Error starting live dashboard for match {match_id}: {e}")
+            
+            error_text = (
+                "🏏 *Live Match Dashboard*\n\n"
+                "⚠️ Failed to start live dashboard.\n\n"
+                "_Please try again in a few moments._"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 Try Again", callback_data=f"match_{match_id}")],
+                [InlineKeyboardButton("🔙 Back to Live Matches", callback_data="live_matches")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                error_text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+    
+    async def stop_live_dashboard(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, match_id: str) -> None:
+        """Stop a live dashboard and clean up resources."""
+        if not query or not query.message:
+            logger.error("Invalid query: missing query or message")
+            return
+            
+        # Check if message is accessible - need proper Message type
+        from telegram import Message
+        if not isinstance(query.message, Message):
+            logger.error("Message is not accessible or not a proper Message object")
+            return
+            
+        chat_id = query.message.chat_id
+        message_id = query.message.message_id
+        user = query.from_user
+        username = user.username if user else "Unknown"
+        
+        logger.info(f"Stopping live dashboard for match {match_id} - User: {user.id if user else 'Unknown'} ({username})")
+        
+        try:
+            # Remove from active dashboards tracking
+            if chat_id in self.active_dashboards:
+                if message_id in self.active_dashboards[chat_id]:
+                    del self.active_dashboards[chat_id][message_id]
+                    
+                # Clean up empty chat entries
+                if not self.active_dashboards[chat_id]:
+                    del self.active_dashboards[chat_id]
+            
+            # Remove scheduled job
+            job_id = f"dashboard_{chat_id}_{message_id}_{match_id}"
+            try:
+                self.scheduler.remove_job(job_id)
+                logger.info(f"Removed scheduled job: {job_id}")
+            except Exception as e:
+                logger.warning(f"Job {job_id} not found or already removed: {e}")
+            
+            # Update message to show dashboard is stopped
+            stopped_text = (
+                "🏏 *Live Match Dashboard - Stopped*\n\n"
+                "✅ Dashboard has been stopped successfully.\n\n"
+                "_No more automatic updates will be sent._"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton(f"🔄 Restart Dashboard", callback_data=f"match_{match_id}")],
+                [InlineKeyboardButton("🔙 Back to Live Matches", callback_data="live_matches")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                stopped_text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+            
+            # Send confirmation to user
+            await query.answer("✅ Live dashboard stopped!")
+            
+            logger.info(f"Successfully stopped live dashboard for match {match_id}")
+            
+        except Exception as e:
+            logger.error(f"Error stopping live dashboard for match {match_id}: {e}")
+            
+            # Try to send error message
+            try:
+                await query.answer("⚠️ Error stopping dashboard. Please try again.")
+            except:
+                pass
+    
+    def _format_live_dashboard(self, match) -> str:
+        """Format match details for live dashboard display."""
+        try:
+            # Use the match's built-in telegram formatting with commentary
+            dashboard_text = "🏏 *Live Match Dashboard*\n\n"
+            dashboard_text += match.to_telegram_format(include_commentary=True)
+            dashboard_text += "\n\n🔄 _Auto-updates every 15-20 seconds_"
+            dashboard_text += f"\n⏰ Last updated: {datetime.now().strftime('%H:%M:%S')}"
+            
+            return dashboard_text
+        except Exception as e:
+            logger.error(f"Error formatting live dashboard: {e}")
+            return (
+                "🏏 *Live Match Dashboard*\n\n"
+                "⚠️ Error formatting match data.\n\n"
+                "_Please refresh to try again._"
+            )
+    
+    async def _update_live_dashboard(self, chat_id: int, message_id: int, match_id: str) -> None:
+        """Update a live dashboard with fresh match data."""
+        try:
+            # Check if dashboard is still active
+            if chat_id not in self.active_dashboards or message_id not in self.active_dashboards[chat_id]:
+                logger.info(f"Dashboard {chat_id}/{message_id} no longer active, stopping updates")
+                return
+            
+            # Get fresh match data
+            match_details = await get_match_details(match_id)
+            
+            if not match_details:
+                logger.warning(f"Could not get match details for {match_id}, skipping update")
+                return
+            
+            # Check if match is still live
+            if match_details.status != MatchStatus.LIVE:
+                logger.info(f"Match {match_id} is no longer live, stopping dashboard updates")
+                
+                # Remove from tracking and stop updates
+                if chat_id in self.active_dashboards and message_id in self.active_dashboards[chat_id]:
+                    del self.active_dashboards[chat_id][message_id]
+                    if not self.active_dashboards[chat_id]:
+                        del self.active_dashboards[chat_id]
+                
+                job_id = f"dashboard_{chat_id}_{message_id}_{match_id}"
+                try:
+                    self.scheduler.remove_job(job_id)
+                except:
+                    pass
+                
+                return
+            
+            # Format updated dashboard
+            dashboard_text = self._format_live_dashboard(match_details)
+            
+            # Create updated keyboard
+            keyboard = [
+                [InlineKeyboardButton(f"🛑 Stop Dashboard", callback_data=f"stop_dashboard_{match_id}")],
+                [InlineKeyboardButton("🔄 Refresh Now", callback_data=f"match_{match_id}")],
+                [InlineKeyboardButton("🔙 Back to Live Matches", callback_data="live_matches")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Update the message
+            if self.application and self.application.bot:
+                await self.application.bot.edit_message_text(
+                    text=dashboard_text,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+                
+                logger.debug(f"Updated live dashboard for match {match_id} in chat {chat_id}")
+            
+        except Exception as e:
+            logger.error(f"Error updating live dashboard for match {match_id}: {e}")
+            
+            # If we get a message not found error, clean up the dashboard
+            if "message to edit not found" in str(e).lower() or "message is not modified" in str(e).lower():
+                logger.info(f"Cleaning up dashboard {chat_id}/{message_id} due to message error")
+                
+                if chat_id in self.active_dashboards and message_id in self.active_dashboards[chat_id]:
+                    del self.active_dashboards[chat_id][message_id]
+                    if not self.active_dashboards[chat_id]:
+                        del self.active_dashboards[chat_id]
+                
+                job_id = f"dashboard_{chat_id}_{message_id}_{match_id}"
+                try:
+                    self.scheduler.remove_job(job_id)
+                except:
+                    pass
+
     async def handle_unknown_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle unknown messages - redirect to menu."""
         if not update.message:
