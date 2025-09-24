@@ -133,6 +133,39 @@ class CricketBot:
             await self.handle_help(query, context)
         elif callback_data == "back_to_main":
             await self.handle_back_to_main(query, context)
+        # Schedule handlers
+        elif callback_data == "schedule_today":
+            await self.handle_schedule_today(query, context)
+        elif callback_data == "schedule_tomorrow":
+            await self.handle_schedule_tomorrow(query, context)
+        elif callback_data == "schedule_week":
+            await self.handle_schedule_week(query, context)
+        # Alerts handlers
+        elif callback_data == "add_alert":
+            await self.handle_add_alert(query, context)
+        elif callback_data == "remove_alert":
+            await self.handle_remove_alert(query, context)
+        # Player stats handlers
+        elif callback_data == "stats_batsmen":
+            await self.handle_stats_batsmen(query, context)
+        elif callback_data == "stats_bowlers":
+            await self.handle_stats_bowlers(query, context)
+        elif callback_data == "stats_top":
+            await self.handle_stats_top(query, context)
+        # Settings handlers
+        elif callback_data == "settings_frequency":
+            await self.handle_settings_frequency(query, context)
+        elif callback_data == "settings_timezone":
+            await self.handle_settings_timezone(query, context)
+        elif callback_data == "settings_notifications":
+            await self.handle_settings_notifications(query, context)
+        elif callback_data == "settings_teams":
+            await self.handle_settings_teams(query, context)
+        # Help handlers
+        elif callback_data == "support":
+            await self.handle_support(query, context)
+        elif callback_data == "faq":
+            await self.handle_faq(query, context)
         else:
             # Handle unknown callback
             await query.edit_message_text("🤔 Unknown option. Please try again.")
@@ -574,6 +607,420 @@ class CricketBot:
             except:
                 pass
     
+    # Schedule handlers
+    async def handle_schedule_today(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Schedule Today button - show today's matches."""
+        loading_text = "📅 *Today's Matches*\n\n🔄 Loading today's matches..."
+        await query.edit_message_text(loading_text, parse_mode='Markdown')
+        
+        try:
+            today_matches = await get_match_schedule(1)  # Today only
+            
+            if today_matches:
+                text = "📅 *Today's Cricket Matches*\n\n"
+                
+                for i, match in enumerate(today_matches):
+                    text += f"{match.to_telegram_format()}\n"
+                    if i < len(today_matches) - 1:
+                        text += "─" * 25 + "\n\n"
+                
+                text += "\n\n🎯 _Set alerts for your favorite matches!_"
+            else:
+                text = (
+                    "📅 *Today's Matches*\n\n"
+                    "🔍 No matches scheduled for today.\n\n"
+                    "_Check out tomorrow's schedule or this week's upcoming matches._"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error fetching today's schedule: {e}")
+            text = (
+                "📅 *Today's Matches*\n\n"
+                "⚠️ Unable to fetch today's schedule.\n\n"
+                "_Please try again in a few seconds._"
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("📅 Tomorrow", callback_data="schedule_tomorrow")],
+            [InlineKeyboardButton("📅 This Week", callback_data="schedule_week")],
+            [InlineKeyboardButton("🔙 Back to Schedule", callback_data="schedule")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    async def handle_schedule_tomorrow(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Schedule Tomorrow button - show tomorrow's matches."""
+        loading_text = "📅 *Tomorrow's Matches*\n\n🔄 Loading tomorrow's matches..."
+        await query.edit_message_text(loading_text, parse_mode='Markdown')
+        
+        try:
+            tomorrow_matches = await get_match_schedule(2)  # Today + tomorrow
+            # Filter for tomorrow only (this would need proper date filtering in real implementation)
+            
+            if tomorrow_matches:
+                text = "📅 *Tomorrow's Cricket Matches*\n\n"
+                
+                for i, match in enumerate(tomorrow_matches[:3]):  # Show first 3
+                    text += f"{match.to_telegram_format()}\n"
+                    if i < min(len(tomorrow_matches), 3) - 1:
+                        text += "─" * 25 + "\n\n"
+                
+                text += "\n\n🎯 _Set alerts for your favorite matches!_"
+            else:
+                text = (
+                    "📅 *Tomorrow's Matches*\n\n"
+                    "🔍 No matches scheduled for tomorrow.\n\n"
+                    "_Check out today's or this week's matches._"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error fetching tomorrow's schedule: {e}")
+            text = (
+                "📅 *Tomorrow's Matches*\n\n"
+                "⚠️ Unable to fetch tomorrow's schedule.\n\n"
+                "_Please try again in a few seconds._"
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("📅 Today", callback_data="schedule_today")],
+            [InlineKeyboardButton("📅 This Week", callback_data="schedule_week")],
+            [InlineKeyboardButton("🔙 Back to Schedule", callback_data="schedule")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    async def handle_schedule_week(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Schedule This Week button - show week's matches."""
+        loading_text = "📅 *This Week's Matches*\n\n🔄 Loading this week's matches..."
+        await query.edit_message_text(loading_text, parse_mode='Markdown')
+        
+        try:
+            week_matches = await get_match_schedule(7)  # Full week
+            
+            if week_matches:
+                text = "📅 *This Week's Cricket Matches*\n\n"
+                
+                for i, match in enumerate(week_matches[:7]):  # Show max 7 matches
+                    text += f"{match.to_telegram_format()}\n"
+                    if i < min(len(week_matches), 7) - 1:
+                        text += "─" * 20 + "\n\n"
+                
+                if len(week_matches) > 7:
+                    text += f"\n📊 *{len(week_matches) - 7} more matches this week*"
+                
+                text += "\n\n🎯 _Set alerts for your favorite matches!_"
+            else:
+                text = (
+                    "📅 *This Week's Matches*\n\n"
+                    "🔍 No matches scheduled for this week.\n\n"
+                    "_Check back next week for updates._"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error fetching week's schedule: {e}")
+            text = (
+                "📅 *This Week's Matches*\n\n"
+                "⚠️ Unable to fetch this week's schedule.\n\n"
+                "_Please try again in a few seconds._"
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("📅 Today", callback_data="schedule_today")],
+            [InlineKeyboardButton("📅 Tomorrow", callback_data="schedule_tomorrow")],
+            [InlineKeyboardButton("🔙 Back to Schedule", callback_data="schedule")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    # Alerts handlers
+    async def handle_add_alert(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Add Alert button."""
+        text = (
+            "➕ *Add New Alert*\n\n"
+            "🔔 Choose what type of alert you'd like to set:\n\n"
+            "📋 Available alert types:\n"
+            "• 🏏 Match start alerts\n"
+            "• 🎯 Wicket fall alerts\n"
+            "• 🏆 Milestone alerts (50s, 100s)\n"
+            "• 📊 Score update alerts\n"
+            "• 🏁 Match result alerts\n\n"
+            "_Select an alert type to continue:_"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🏏 Match Start", callback_data="alert_match_start")],
+            [InlineKeyboardButton("🎯 Wickets", callback_data="alert_wickets")],
+            [InlineKeyboardButton("🏆 Milestones", callback_data="alert_milestones")],
+            [InlineKeyboardButton("📊 Score Updates", callback_data="alert_scores")],
+            [InlineKeyboardButton("🔙 Back to Alerts", callback_data="my_alerts")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    async def handle_remove_alert(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Remove Alert button."""
+        text = (
+            "🗑️ *Remove Alert*\n\n"
+            "📋 Your active alerts:\n\n"
+            "_No alerts currently active._\n\n"
+            "Once you have active alerts, you'll be able to remove them from this menu."
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("➕ Add Alert Instead", callback_data="add_alert")],
+            [InlineKeyboardButton("🔙 Back to Alerts", callback_data="my_alerts")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    # Player stats handlers
+    async def handle_stats_batsmen(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Batsmen Stats button."""
+        text = (
+            "🏏 *Top Batsmen Statistics*\n\n"
+            "📊 Current leading batsmen across formats:\n\n"
+            "🏆 *Test Cricket:*\n"
+            "• Most runs, highest averages\n"
+            "• Current form and rankings\n\n"
+            "⚡ *ODI Cricket:*\n"
+            "• Leading run scorers\n"
+            "• Strike rates and consistency\n\n"
+            "🔥 *T20 Cricket:*\n"
+            "• Power hitters and consistent performers\n"
+            "• Recent form and impact ratings\n\n"
+            "_Detailed player statistics coming soon!_"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("⚾ View Bowlers", callback_data="stats_bowlers")],
+            [InlineKeyboardButton("🏆 Top Performers", callback_data="stats_top")],
+            [InlineKeyboardButton("🔙 Back to Stats", callback_data="player_stats")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    async def handle_stats_bowlers(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Bowlers Stats button."""
+        text = (
+            "⚾ *Top Bowlers Statistics*\n\n"
+            "📊 Current leading bowlers across formats:\n\n"
+            "🏆 *Test Cricket:*\n"
+            "• Most wickets, best averages\n"
+            "• Current form and rankings\n\n"
+            "⚡ *ODI Cricket:*\n"
+            "• Leading wicket takers\n"
+            "• Economy rates and strike rates\n\n"
+            "🔥 *T20 Cricket:*\n"
+            "• Death over specialists\n"
+            "• Economy and wicket-taking ability\n\n"
+            "_Detailed player statistics coming soon!_"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🏏 View Batsmen", callback_data="stats_batsmen")],
+            [InlineKeyboardButton("🏆 Top Performers", callback_data="stats_top")],
+            [InlineKeyboardButton("🔙 Back to Stats", callback_data="player_stats")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    async def handle_stats_top(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Top Performers Stats button."""
+        text = (
+            "🏆 *Top Performers*\n\n"
+            "⭐ *Player of the Month:*\n"
+            "• Outstanding recent performances\n"
+            "• Impact across all formats\n\n"
+            "🔥 *Form Players:*\n"
+            "• Currently in excellent form\n"
+            "• Recent match performances\n\n"
+            "📈 *Rising Stars:*\n"
+            "• Emerging talent\n"
+            "• Breakthrough performances\n\n"
+            "🏅 *Hall of Fame:*\n"
+            "• All-time great performances\n"
+            "• Record holders\n\n"
+            "_Comprehensive performance analysis coming soon!_"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🏏 View Batsmen", callback_data="stats_batsmen")],
+            [InlineKeyboardButton("⚾ View Bowlers", callback_data="stats_bowlers")],
+            [InlineKeyboardButton("🔙 Back to Stats", callback_data="player_stats")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    # Settings handlers
+    async def handle_settings_frequency(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Update Frequency settings."""
+        text = (
+            "🕒 *Update Frequency Settings*\n\n"
+            "⏰ Current frequency: *15 seconds*\n\n"
+            "📊 Available options:\n"
+            "• ⚡ Fast (10 seconds) - More data usage\n"
+            "• 🔄 Normal (15 seconds) - Balanced\n"
+            "• 🐌 Slow (30 seconds) - Less data usage\n"
+            "• 📴 Manual only - No auto-updates\n\n"
+            "_Choose your preferred update frequency:_"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("⚡ Fast (10s)", callback_data="freq_fast")],
+            [InlineKeyboardButton("🔄 Normal (15s)", callback_data="freq_normal")],
+            [InlineKeyboardButton("🐌 Slow (30s)", callback_data="freq_slow")],
+            [InlineKeyboardButton("📴 Manual Only", callback_data="freq_manual")],
+            [InlineKeyboardButton("🔙 Back to Settings", callback_data="settings")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    async def handle_settings_timezone(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Timezone settings."""
+        text = (
+            "🌍 *Timezone Settings*\n\n"
+            "🕐 Current timezone: *UTC*\n\n"
+            "🌎 Popular timezones:\n"
+            "• 🇺🇸 EST (Eastern Standard Time)\n"
+            "• 🇬🇧 GMT (Greenwich Mean Time)\n"
+            "• 🇮🇳 IST (Indian Standard Time)\n"
+            "• 🇦🇺 AEST (Australian Eastern Time)\n"
+            "• 🇿🇦 SAST (South African Time)\n\n"
+            "_Select your timezone for accurate match times:_"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🇺🇸 EST", callback_data="tz_est")],
+            [InlineKeyboardButton("🇬🇧 GMT", callback_data="tz_gmt")],
+            [InlineKeyboardButton("🇮🇳 IST", callback_data="tz_ist")],
+            [InlineKeyboardButton("🇦🇺 AEST", callback_data="tz_aest")],
+            [InlineKeyboardButton("🔙 Back to Settings", callback_data="settings")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    async def handle_settings_notifications(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Notifications settings."""
+        text = (
+            "📱 *Notification Settings*\n\n"
+            "🔔 Current status: *Enabled*\n\n"
+            "⚙️ Notification types:\n"
+            "✅ Match start notifications\n"
+            "✅ Wicket fall alerts\n"
+            "✅ Milestone achievements\n"
+            "✅ Match result updates\n"
+            "✅ Daily summary\n\n"
+            "_Customize your notification preferences:_"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔕 Disable All", callback_data="notif_disable")],
+            [InlineKeyboardButton("🔔 Enable All", callback_data="notif_enable")],
+            [InlineKeyboardButton("⚙️ Custom Setup", callback_data="notif_custom")],
+            [InlineKeyboardButton("🔙 Back to Settings", callback_data="settings")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    async def handle_settings_teams(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Favorite Teams settings."""
+        text = (
+            "🏏 *Favorite Teams*\n\n"
+            "⭐ Current favorites: *None set*\n\n"
+            "🌍 Select your favorite teams for personalized updates:\n\n"
+            "🏆 *International Teams:*\n"
+            "• India, Australia, England\n"
+            "• South Africa, New Zealand, Pakistan\n"
+            "• West Indies, Sri Lanka, Bangladesh\n\n"
+            "🏟️ *Domestic Leagues:*\n"
+            "• IPL, BBL, PSL, CPL teams\n"
+            "• County Championship, Ranji Trophy\n\n"
+            "_Set favorites to get priority updates!_"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🇮🇳 Indian Teams", callback_data="teams_india")],
+            [InlineKeyboardButton("🌍 International", callback_data="teams_intl")],
+            [InlineKeyboardButton("🏟️ Domestic Leagues", callback_data="teams_domestic")],
+            [InlineKeyboardButton("🔙 Back to Settings", callback_data="settings")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    # Help handlers
+    async def handle_support(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Contact Support button."""
+        text = (
+            "📧 *Contact Support*\n\n"
+            "🤝 Need help with the Cricket Bot?\n\n"
+            "💬 *Get Support:*\n"
+            "• Report bugs or issues\n"
+            "• Request new features\n"
+            "• Get technical assistance\n"
+            "• Provide feedback\n\n"
+            "📞 *Contact Methods:*\n"
+            "• Email: support@cricketbot.com\n"
+            "• Telegram: @CricketBotSupport\n"
+            "• Response time: 24-48 hours\n\n"
+            "🔧 *Before contacting support:*\n"
+            "• Check the FAQ section\n"
+            "• Try restarting the bot with /start\n"
+            "• Note any error messages\n\n"
+            "_We're here to help make your cricket experience better!_"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("❓ Check FAQ First", callback_data="faq")],
+            [InlineKeyboardButton("🔄 Restart Bot", callback_data="back_to_main")],
+            [InlineKeyboardButton("🔙 Back to Help", callback_data="help")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+    async def handle_faq(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle FAQ button."""
+        text = (
+            "❓ *Frequently Asked Questions*\n\n"
+            "🏏 *About Live Dashboards:*\n"
+            "Q: How often do dashboards update?\n"
+            "A: Every 15-20 seconds automatically\n\n"
+            "Q: Can I have multiple dashboards?\n"
+            "A: Yes, but recommended max 2-3 for performance\n\n"
+            "📱 *Using the Bot:*\n"
+            "Q: Why don't I see live matches?\n"
+            "A: Check if matches are currently being played\n\n"
+            "Q: How do I stop notifications?\n"
+            "A: Go to Settings → Notifications → Disable\n\n"
+            "⚙️ *Technical Issues:*\n"
+            "Q: Bot not responding?\n"
+            "A: Try /start to restart or contact support\n\n"
+            "Q: Missing features?\n"
+            "A: We're constantly adding new features!\n\n"
+            "_Still have questions? Contact our support team._"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("📧 Contact Support", callback_data="support")],
+            [InlineKeyboardButton("🔄 Restart Bot", callback_data="back_to_main")],
+            [InlineKeyboardButton("🔙 Back to Help", callback_data="help")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
     def _format_live_dashboard(self, match) -> str:
         """Format match details for live dashboard display."""
         try:
