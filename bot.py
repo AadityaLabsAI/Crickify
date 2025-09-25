@@ -7,8 +7,11 @@ A sophisticated Telegram bot providing Cricbuzz-like experience with zero-typing
 import logging
 import os
 import asyncio
+import threading
+import atexit
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
+from pathlib import Path
 from cricket_scraper import get_live_matches, get_match_details, get_match_commentary, get_match_schedule, MatchStatus
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, Message
@@ -35,6 +38,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Global lock file to prevent multiple instances
+LOCK_FILE = Path('/tmp/cricket_bot.lock')
+
+# Global singleton instance
+_bot_instance: Optional['CricketBot'] = None
+_lock = threading.Lock()
+
 
 class CricketBot:
     """Main Cricket Bot class with all handlers and functionality."""
@@ -43,6 +53,8 @@ class CricketBot:
         """Initialize the bot with token."""
         self.token = token
         self.application: Optional[Application] = None
+        self._running = False
+        self._shutdown_event = asyncio.Event()
         
         # Initialize scheduler for auto-updates
         self.scheduler = AsyncIOScheduler()
@@ -52,6 +64,12 @@ class CricketBot:
         
         # Track update frequency (15-20 seconds)
         self.update_interval = 17  # seconds
+        
+        # Set process ID for lock file
+        self.process_id = os.getpid()
+        
+        # Register cleanup on exit
+        atexit.register(self._cleanup_on_exit)
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle the /start command - Main Menu with inline keyboard."""
@@ -1123,9 +1141,27 @@ class CricketBot:
         )
         await update.message.reply_text(text)
 
+    async def _polling_error_callback(self, error: Exception) -> None:
+        """Handle polling errors, especially conflicts."""
+        error_str = str(error)
+        
+        if "Conflict" in error_str and "getUpdates" in error_str:
+            logger.error("Detected bot polling conflict! Attempting recovery...")
+            
+            # Set shutdown event to stop current polling
+            self._shutdown_event.set()
+        else:
+            logger.error(f"Polling error: {error}")
+    
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle errors."""
         logger.error(f"Exception while handling an update: {context.error}")
+        
+        # Check for conflict errors
+        if context.error and "Conflict" in str(context.error):
+            logger.error("Conflict error detected in handler, initiating shutdown...")
+            self._shutdown_event.set()
+            return
         
         # Try to inform user about the error
         if update and isinstance(update, Update) and update.effective_message:
@@ -1156,10 +1192,133 @@ class CricketBot:
         # Error handler
         self.application.add_error_handler(self.error_handler)
 
+    def _cleanup_on_exit(self) -> None:
+        """Cleanup function called on exit."""
+        try:
+            if LOCK_FILE.exists():
+                LOCK_FILE.unlink()
+                logger.info("Lock file removed on exit")
+        except Exception as e:
+            logger.error(f"Error cleaning up lock file: {e}")
+    
+    async def _cleanup_webhooks(self) -> None:
+        """Clear any existing webhooks before starting polling."""
+        try:
+            if self.application and self.application.bot:
+                logger.info("Starting webhook cleanup...")
+                
+                # Wait to ensure any previous polling has fully stopped
+                await asyncio.sleep(5)
+                
+                # Delete webhook and drop pending updates
+                await self.application.bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Cleared existing webhooks and pending updates")
+                
+                # Wait a bit more
+                await asyncio.sleep(3)
+                
+                # Try to consume any remaining updates (this will help clear conflicts)
+                for attempt in range(3):
+                    try:
+                        updates = await self.application.bot.get_updates(
+                            timeout=2, 
+                            limit=100,
+                            offset=-1  # Get only the latest update
+                        )
+                        if updates:
+                            logger.info(f"Cleared {len(updates)} remaining updates")
+                        else:
+                            logger.info("No pending updates found")
+                        break
+                    except Exception as cleanup_e:
+                        if "Conflict" in str(cleanup_e):
+                            logger.warning(f"Conflict during cleanup attempt {attempt + 1}, waiting...")
+                            await asyncio.sleep(5)
+                        else:
+                            logger.debug(f"Expected error during cleanup: {cleanup_e}")
+                            break
+                    
+        except Exception as e:
+            logger.warning(f"Error clearing webhooks: {e}")
+    
+    def _acquire_lock(self) -> bool:
+        """Acquire a lock to ensure only one instance runs."""
+        try:
+            if LOCK_FILE.exists():
+                # Check if the process is still running
+                try:
+                    with open(LOCK_FILE, 'r') as f:
+                        old_pid = int(f.read().strip())
+                    
+                    # Check if process exists
+                    import psutil
+                    if psutil.pid_exists(old_pid):
+                        logger.error(f"Another bot instance is already running (PID: {old_pid})")
+                        return False
+                    else:
+                        logger.info(f"Removing stale lock file (PID {old_pid} no longer exists)")
+                        LOCK_FILE.unlink()
+                except (ValueError, FileNotFoundError, ImportError):
+                    # If we can't check the PID or psutil not available, remove stale lock
+                    logger.warning("Removing potentially stale lock file")
+                    LOCK_FILE.unlink()
+            
+            # Create new lock file with current PID
+            with open(LOCK_FILE, 'w') as f:
+                f.write(str(os.getpid()))
+            
+            logger.info(f"Acquired bot instance lock (PID: {os.getpid()})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error acquiring lock: {e}")
+            return False
+    
+    def _release_lock(self) -> None:
+        """Release the instance lock."""
+        try:
+            if LOCK_FILE.exists():
+                LOCK_FILE.unlink()
+                logger.info("Released bot instance lock")
+        except Exception as e:
+            logger.error(f"Error releasing lock: {e}")
+    
+    async def _shutdown_cleanup(self) -> None:
+        """Perform comprehensive cleanup during shutdown."""
+        logger.info("Performing shutdown cleanup...")
+        
+        try:
+            # Stop scheduler
+            if self.scheduler.running:
+                self.scheduler.shutdown(wait=False)
+                logger.info("Scheduler stopped")
+        except Exception as e:
+            logger.error(f"Error stopping scheduler: {e}")
+        
+        try:
+            # Clear active dashboards
+            self.active_dashboards.clear()
+            logger.info("Cleared active dashboards")
+        except Exception as e:
+            logger.error(f"Error clearing dashboards: {e}")
+        
+        try:
+            # Release lock
+            self._release_lock()
+        except Exception as e:
+            logger.error(f"Error releasing lock: {e}")
+
     async def initialize(self) -> None:
         """Initialize the bot application."""
+        # Check if another instance is already running
+        if not self._acquire_lock():
+            raise RuntimeError("Another bot instance is already running. Only one instance is allowed.")
+        
         # Create application
         self.application = Application.builder().token(self.token).build()
+        
+        # Clear any existing webhooks first
+        await self._cleanup_webhooks()
         
         # Setup handlers
         self.setup_handlers()
@@ -1168,77 +1327,134 @@ class CricketBot:
 
     async def run(self) -> None:
         """Run the bot (initialize and start polling)."""
-        await self.initialize()
+        # Set running flag
+        self._running = True
         
-        if not self.application:
-            logger.error("Failed to initialize application")
-            return
-            
-        logger.info("Starting Cricket Bot...")
-        # Type checker satisfaction: application is guaranteed to be non-None here
-        application = self.application  # Create local variable to help type checker
-        if application is None:
-            logger.error("Application is unexpectedly None")
-            return
-            
-        # Manual application lifecycle management to avoid event loop conflicts
         try:
-            # Initialize the application
-            await application.initialize()
+            await self.initialize()
             
-            # Start the application
-            await application.start()
-            
-            # Start polling for updates
-            if application.updater is None:
-                logger.error("Application updater is None")
+            if not self.application:
+                logger.error("Failed to initialize application")
                 return
-            await application.updater.start_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True
-            )
-            
-            logger.info("Cricket Bot is now running... Press Ctrl+C to stop.")
-            
-            # Keep the bot running - this will run indefinitely until interrupted
-            import signal
-            import asyncio
-            
-            # Handle shutdown gracefully
-            def signal_handler():
-                logger.info("Received interrupt signal, shutting down...")
                 
-            # Create a future that we can wait on
-            shutdown_event = asyncio.Event()
-            
-            # Set up signal handler for graceful shutdown
-            if hasattr(signal, 'SIGINT'):
-                loop = asyncio.get_running_loop()
-                loop.add_signal_handler(signal.SIGINT, shutdown_event.set)
-                loop.add_signal_handler(signal.SIGTERM, shutdown_event.set)
-            
-            # Wait for shutdown signal
-            await shutdown_event.wait()
-            
-        except KeyboardInterrupt:
-            logger.info("Received keyboard interrupt")
-        except Exception as e:
-            logger.error(f"Error during bot execution: {e}")
-        finally:
-            # Clean shutdown
-            logger.info("Shutting down bot...")
+            logger.info("Starting Cricket Bot...")
+            # Type checker satisfaction: application is guaranteed to be non-None here
+            application = self.application  # Create local variable to help type checker
+            if application is None:
+                logger.error("Application is unexpectedly None")
+                return
+                
+            # Manual application lifecycle management to avoid event loop conflicts
             try:
-                # Stop polling
-                if application.updater is not None:
-                    await application.updater.stop()
-                # Stop the application
-                await application.stop()  
-                # Shutdown the application
-                await application.shutdown()
-                logger.info("Bot shutdown complete")
+                # Initialize the application
+                await application.initialize()
+                
+                # Start the application
+                await application.start()
+                
+                # Start polling for updates
+                if application.updater is None:
+                    logger.error("Application updater is None")
+                    return
+                    
+                # Start polling with conflict prevention
+                max_retries = 3
+                for retry in range(max_retries):
+                    try:
+                        await application.updater.start_polling(
+                            allowed_updates=Update.ALL_TYPES,
+                            drop_pending_updates=True,
+                            timeout=10,
+                            bootstrap_retries=1,
+                        )
+                        logger.info("Polling started successfully")
+                        break
+                    except Exception as polling_error:
+                        if "Conflict" in str(polling_error):
+                            logger.warning(f"Polling conflict detected (attempt {retry + 1}/{max_retries}). Waiting before retry...")
+                            if retry < max_retries - 1:
+                                # Wait with exponential backoff
+                                wait_time = (retry + 1) * 5
+                                logger.info(f"Waiting {wait_time} seconds before retry...")
+                                await asyncio.sleep(wait_time)
+                                # Try to clear any remaining webhook/polling
+                                try:
+                                    await application.bot.delete_webhook(drop_pending_updates=True)
+                                    await asyncio.sleep(2)
+                                except:
+                                    pass
+                            else:
+                                logger.error("Failed to start polling after all retries")
+                                raise
+                        else:
+                            logger.error(f"Non-conflict error during polling start: {polling_error}")
+                            raise
+                
+                logger.info("Cricket Bot is now running... Press Ctrl+C to stop.")
+                
+                # Keep the bot running - this will run indefinitely until interrupted
+                import signal
+                
+                # Handle shutdown gracefully
+                def signal_handler():
+                    logger.info("Received interrupt signal, shutting down...")
+                    self._shutdown_event.set()
+                    
+                # Set up signal handler for graceful shutdown
+                if hasattr(signal, 'SIGINT'):
+                    loop = asyncio.get_running_loop()
+                    loop.add_signal_handler(signal.SIGINT, signal_handler)
+                    loop.add_signal_handler(signal.SIGTERM, signal_handler)
+                
+                # Wait for shutdown signal
+                await self._shutdown_event.wait()
+                
+            except KeyboardInterrupt:
+                logger.info("Received keyboard interrupt")
             except Exception as e:
-                logger.error(f"Error during shutdown: {e}")
+                logger.error(f"Error during bot execution: {e}")
+                raise
+            finally:
+                # Clean shutdown
+                logger.info("Shutting down bot...")
+                try:
+                    # Stop polling first
+                    if application.updater is not None:
+                        await application.updater.stop()
+                        logger.info("Updater stopped")
+                    # Stop the application
+                    await application.stop()  
+                    # Shutdown the application
+                    await application.shutdown()
+                    logger.info("Application shutdown complete")
+                except Exception as e:
+                    logger.error(f"Error during application shutdown: {e}")
+                
+                # Perform additional cleanup
+                await self._shutdown_cleanup()
+                
+        except Exception as e:
+            logger.error(f"Critical error in bot run: {e}")
+            # Ensure cleanup even on critical errors
+            await self._shutdown_cleanup()
+            raise
+        finally:
+            self._running = False
 
+
+def get_bot_instance(token: str) -> CricketBot:
+    """Get or create singleton bot instance."""
+    global _bot_instance
+    
+    with _lock:
+        if _bot_instance is None:
+            _bot_instance = CricketBot(token)
+            logger.info("Created new bot singleton instance")
+        elif _bot_instance.token != token:
+            logger.warning("Token changed, creating new bot instance")
+            _bot_instance = CricketBot(token)
+        
+        return _bot_instance
 
 async def main_async():
     """Async main function to run the bot."""
@@ -1250,22 +1466,52 @@ async def main_async():
         print("💡 You can set it using: export TELEGRAM_BOT_TOKEN='your_bot_token_here'")
         return
     
-    # Create and run bot
-    bot = CricketBot(token)
-    
     try:
+        # Get singleton bot instance
+        bot = get_bot_instance(token)
+        
+        # Check if bot is already running
+        if bot._running:
+            logger.warning("Bot instance is already running")
+            return
+        
         # Run the bot
         await bot.run()
+    except RuntimeError as e:
+        if "already running" in str(e):
+            logger.error(f"Bot instance conflict: {e}")
+            print(f"❌ {e}")
+        else:
+            logger.error(f"Runtime error: {e}")
+            print(f"❌ Error: {e}")
     except KeyboardInterrupt:
         print("\n👋 Cricket Bot stopped!")
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Bot error: {e}")
         print(f"❌ Error: {e}")
+    finally:
+        # Reset global instance on exit
+        global _bot_instance
+        with _lock:
+            _bot_instance = None
 
 
 def main():
     """Main function to run the bot."""
+    # First, ensure no other bot instances are running
+    try:
+        import subprocess
+        # Kill any existing bot processes (more aggressive approach)
+        subprocess.run(["pkill", "-f", "python.*bot.py"], capture_output=True)
+        subprocess.run(["rm", "-f", "/tmp/cricket_bot.lock"], capture_output=True)
+        logger.info("Cleaned up any existing bot processes and lock files")
+        # Wait a moment for cleanup
+        import time
+        time.sleep(2)
+    except Exception as cleanup_e:
+        logger.warning(f"Error during cleanup: {cleanup_e}")
+    
     try:
         # Try using asyncio.run() first (works if no event loop is running)
         asyncio.run(main_async())
