@@ -9,6 +9,10 @@ import os
 import asyncio
 import threading
 import atexit
+import subprocess
+import time
+import signal
+import psutil
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1142,25 +1146,62 @@ class CricketBot:
         await update.message.reply_text(text)
 
     async def _polling_error_callback(self, error: Exception) -> None:
-        """Handle polling errors, especially conflicts."""
+        """Handle polling errors, especially conflicts with automatic recovery."""
         error_str = str(error)
         
         if "Conflict" in error_str and "getUpdates" in error_str:
-            logger.error("Detected bot polling conflict! Attempting recovery...")
+            logger.error("Detected bot polling conflict! Attempting automatic recovery...")
             
-            # Set shutdown event to stop current polling
-            self._shutdown_event.set()
+            try:
+                # Stop current polling immediately
+                if self.application and self.application.updater and self.application.updater.running:
+                    logger.info("Stopping current polling...")
+                    await self.application.updater.stop()
+                    await asyncio.sleep(3)
+                
+                # Perform comprehensive cleanup
+                await self._cleanup_webhooks_and_polling()
+                
+                # Try to restart polling after cleanup
+                logger.info("Attempting to restart polling after conflict...")
+                await asyncio.sleep(5)
+                
+                if self.application and self.application.updater:
+                    await self.application.updater.start_polling(
+                        allowed_updates=Update.ALL_TYPES,
+                        drop_pending_updates=True,
+                        timeout=15,
+                        bootstrap_retries=0,
+                    )
+                    logger.info("Successfully restarted polling after conflict recovery")
+                
+            except Exception as recovery_error:
+                logger.error(f"Failed to recover from conflict: {recovery_error}")
+                # If recovery fails, set shutdown event
+                self._shutdown_event.set()
         else:
             logger.error(f"Polling error: {error}")
     
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle errors."""
+        """Handle errors with improved conflict resolution."""
         logger.error(f"Exception while handling an update: {context.error}")
         
         # Check for conflict errors
         if context.error and "Conflict" in str(context.error):
-            logger.error("Conflict error detected in handler, initiating shutdown...")
-            self._shutdown_event.set()
+            logger.error("Conflict error detected in handler, attempting recovery...")
+            
+            # Try automatic recovery instead of immediate shutdown
+            try:
+                await self._polling_error_callback(context.error)
+            except Exception as recovery_e:
+                logger.error(f"Error during conflict recovery: {recovery_e}")
+                self._shutdown_event.set()
+            return
+        
+        # Handle network errors more gracefully
+        if context.error and any(keyword in str(context.error).lower() for keyword in ['network', 'timeout', 'connection']):
+            logger.warning(f"Network error detected: {context.error}")
+            # Don't shut down for network errors, just log them
             return
         
         # Try to inform user about the error
@@ -1191,6 +1232,10 @@ class CricketBot:
         
         # Error handler
         self.application.add_error_handler(self.error_handler)
+        
+        # Add polling error callback
+        if self.application.updater:
+            self.application.updater.add_error_handler(self._polling_error_callback)
 
     def _cleanup_on_exit(self) -> None:
         """Cleanup function called on exit."""
@@ -1201,49 +1246,110 @@ class CricketBot:
         except Exception as e:
             logger.error(f"Error cleaning up lock file: {e}")
     
-    async def _cleanup_webhooks(self) -> None:
-        """Clear any existing webhooks before starting polling."""
+    async def _cleanup_webhooks_and_polling(self) -> None:
+        """Aggressively clear any existing webhooks and polling conflicts."""
         try:
             if self.application and self.application.bot:
-                logger.info("Starting webhook cleanup...")
+                logger.info("Starting comprehensive webhook and polling cleanup...")
                 
-                # Wait to ensure any previous polling has fully stopped
-                await asyncio.sleep(5)
+                # First, check if there's a webhook set
+                try:
+                    webhook_info = await self.application.bot.get_webhook_info()
+                    if webhook_info.url:
+                        logger.info(f"Found active webhook: {webhook_info.url}")
+                        await self.application.bot.delete_webhook(drop_pending_updates=True)
+                        logger.info("Deleted active webhook")
+                        await asyncio.sleep(3)
+                except Exception as e:
+                    logger.warning(f"Error checking webhook info: {e}")
                 
-                # Delete webhook and drop pending updates
-                await self.application.bot.delete_webhook(drop_pending_updates=True)
-                logger.info("Cleared existing webhooks and pending updates")
+                # Wait longer to ensure any previous polling has fully stopped
+                logger.info("Waiting for previous polling instances to stop...")
+                await asyncio.sleep(10)
                 
-                # Wait a bit more
-                await asyncio.sleep(3)
-                
-                # Try to consume any remaining updates (this will help clear conflicts)
+                # Delete webhook multiple times to be sure
                 for attempt in range(3):
                     try:
+                        await self.application.bot.delete_webhook(drop_pending_updates=True)
+                        logger.info(f"Webhook deletion attempt {attempt + 1} completed")
+                        await asyncio.sleep(2)
+                    except Exception as e:
+                        logger.debug(f"Webhook deletion attempt {attempt + 1} error: {e}")
+                
+                # Aggressively consume any remaining updates
+                logger.info("Consuming remaining updates to prevent conflicts...")
+                for attempt in range(5):
+                    try:
+                        # Get all pending updates with aggressive parameters
                         updates = await self.application.bot.get_updates(
-                            timeout=2, 
-                            limit=100,
-                            offset=-1  # Get only the latest update
+                            timeout=1,  # Short timeout
+                            limit=100,  # Get up to 100 updates
+                            offset=None  # Get all pending updates
                         )
                         if updates:
-                            logger.info(f"Cleared {len(updates)} remaining updates")
+                            # Get the offset of the last update + 1 to confirm all updates
+                            last_update_id = updates[-1].update_id
+                            await self.application.bot.get_updates(
+                                timeout=1,
+                                limit=1,
+                                offset=last_update_id + 1
+                            )
+                            logger.info(f"Consumed {len(updates)} pending updates (attempt {attempt + 1})")
                         else:
-                            logger.info("No pending updates found")
-                        break
+                            logger.info(f"No pending updates found (attempt {attempt + 1})")
+                            break
                     except Exception as cleanup_e:
                         if "Conflict" in str(cleanup_e):
-                            logger.warning(f"Conflict during cleanup attempt {attempt + 1}, waiting...")
-                            await asyncio.sleep(5)
+                            logger.warning(f"Conflict during update consumption attempt {attempt + 1}, waiting...")
+                            await asyncio.sleep(3)
                         else:
-                            logger.debug(f"Expected error during cleanup: {cleanup_e}")
-                            break
+                            logger.debug(f"Error during update consumption: {cleanup_e}")
+                            if attempt == 0:  # Only break on first attempt for non-conflict errors
+                                break
+                
+                # Final wait to ensure Telegram API is ready
+                logger.info("Final cleanup wait...")
+                await asyncio.sleep(5)
                     
         except Exception as e:
-            logger.warning(f"Error clearing webhooks: {e}")
+            logger.warning(f"Error during comprehensive cleanup: {e}")
+    
+    def _kill_existing_processes(self) -> None:
+        """Aggressively kill any existing bot processes."""
+        try:
+            current_pid = os.getpid()
+            killed_count = 0
+            
+            # Find all python processes running bot.py
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    if proc.info['name'] and 'python' in proc.info['name'].lower():
+                        cmdline = proc.info['cmdline']
+                        if cmdline and any('bot.py' in str(arg) for arg in cmdline):
+                            pid = proc.info['pid']
+                            if pid != current_pid:  # Don't kill ourselves
+                                logger.warning(f"Killing existing bot process PID: {pid}")
+                                proc.kill()
+                                proc.wait(timeout=5)
+                                killed_count += 1
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                    pass
+            
+            if killed_count > 0:
+                logger.info(f"Killed {killed_count} existing bot processes")
+                time.sleep(3)  # Wait for processes to fully terminate
+            else:
+                logger.info("No existing bot processes found to kill")
+                
+        except Exception as e:
+            logger.warning(f"Error killing existing processes: {e}")
     
     def _acquire_lock(self) -> bool:
         """Acquire a lock to ensure only one instance runs."""
         try:
+            # Kill any existing processes first
+            self._kill_existing_processes()
+            
             if LOCK_FILE.exists():
                 # Check if the process is still running
                 try:
@@ -1251,15 +1357,26 @@ class CricketBot:
                         old_pid = int(f.read().strip())
                     
                     # Check if process exists
-                    import psutil
                     if psutil.pid_exists(old_pid):
-                        logger.error(f"Another bot instance is already running (PID: {old_pid})")
-                        return False
+                        # Try to kill the old process
+                        try:
+                            old_proc = psutil.Process(old_pid)
+                            if any('bot.py' in str(arg) for arg in old_proc.cmdline()):
+                                logger.warning(f"Killing existing bot process PID: {old_pid}")
+                                old_proc.kill()
+                                old_proc.wait(timeout=5)
+                                logger.info(f"Successfully killed old bot process PID: {old_pid}")
+                            else:
+                                logger.info(f"PID {old_pid} is not a bot process, removing lock")
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                            logger.info(f"Could not kill PID {old_pid}, removing lock")
+                        
+                        LOCK_FILE.unlink()
                     else:
                         logger.info(f"Removing stale lock file (PID {old_pid} no longer exists)")
                         LOCK_FILE.unlink()
-                except (ValueError, FileNotFoundError, ImportError):
-                    # If we can't check the PID or psutil not available, remove stale lock
+                except (ValueError, FileNotFoundError):
+                    # If we can't check the PID, remove stale lock
                     logger.warning("Removing potentially stale lock file")
                     LOCK_FILE.unlink()
             
@@ -1317,8 +1434,8 @@ class CricketBot:
         # Create application
         self.application = Application.builder().token(self.token).build()
         
-        # Clear any existing webhooks first
-        await self._cleanup_webhooks()
+        # Clear any existing webhooks and polling conflicts first
+        await self._cleanup_webhooks_and_polling()
         
         # Setup handlers
         self.setup_handlers()
@@ -1357,32 +1474,50 @@ class CricketBot:
                     logger.error("Application updater is None")
                     return
                     
-                # Start polling with conflict prevention
-                max_retries = 3
+                # Start polling with aggressive conflict prevention
+                max_retries = 5
                 for retry in range(max_retries):
                     try:
+                        # Extra cleanup before each attempt
+                        if retry > 0:
+                            logger.info(f"Performing additional cleanup before retry {retry + 1}...")
+                            await self._cleanup_webhooks_and_polling()
+                        
                         await application.updater.start_polling(
                             allowed_updates=Update.ALL_TYPES,
                             drop_pending_updates=True,
-                            timeout=10,
-                            bootstrap_retries=1,
+                            timeout=15,  # Longer timeout
+                            bootstrap_retries=0,  # No internal retries
+                            read_timeout=10,
+                            write_timeout=10,
+                            connect_timeout=10,
+                            pool_timeout=10,
                         )
                         logger.info("Polling started successfully")
+                        
+                        # Verify polling is working by waiting and checking for conflicts
+                        await asyncio.sleep(5)
+                        logger.info("Polling verification period completed successfully")
                         break
+                        
                     except Exception as polling_error:
                         if "Conflict" in str(polling_error):
-                            logger.warning(f"Polling conflict detected (attempt {retry + 1}/{max_retries}). Waiting before retry...")
+                            logger.warning(f"Polling conflict detected (attempt {retry + 1}/{max_retries}): {polling_error}")
                             if retry < max_retries - 1:
                                 # Wait with exponential backoff
-                                wait_time = (retry + 1) * 5
+                                wait_time = (retry + 1) * 10
                                 logger.info(f"Waiting {wait_time} seconds before retry...")
-                                await asyncio.sleep(wait_time)
-                                # Try to clear any remaining webhook/polling
+                                
+                                # Stop the current updater if it exists
                                 try:
-                                    await application.bot.delete_webhook(drop_pending_updates=True)
-                                    await asyncio.sleep(2)
+                                    if application.updater and application.updater.running:
+                                        await application.updater.stop()
+                                        logger.info("Stopped existing updater")
                                 except:
                                     pass
+                                
+                                await asyncio.sleep(wait_time)
+                                
                             else:
                                 logger.error("Failed to start polling after all retries")
                                 raise
@@ -1497,20 +1632,83 @@ async def main_async():
             _bot_instance = None
 
 
+def aggressive_cleanup():
+    """Perform aggressive cleanup of any existing bot instances."""
+    try:
+        logger.info("Starting aggressive cleanup of existing bot instances...")
+        
+        # Kill processes by name patterns
+        kill_commands = [
+            ["pkill", "-f", "python.*bot.py"],
+            ["pkill", "-f", "bot.py"],
+            ["pkill", "-9", "-f", "python.*bot.py"],  # Force kill
+        ]
+        
+        for cmd in kill_commands:
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    logger.info(f"Successfully ran: {' '.join(cmd)}")
+                else:
+                    logger.debug(f"Command {' '.join(cmd)} returned {result.returncode}")
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Command {' '.join(cmd)} timed out")
+            except Exception as e:
+                logger.debug(f"Error running {' '.join(cmd)}: {e}")
+        
+        # Remove lock files
+        lock_files = ["/tmp/cricket_bot.lock", "/tmp/telegram_bot.lock"]
+        for lock_file in lock_files:
+            try:
+                subprocess.run(["rm", "-f", lock_file], capture_output=True, timeout=5)
+                logger.info(f"Removed lock file: {lock_file}")
+            except Exception as e:
+                logger.debug(f"Error removing {lock_file}: {e}")
+        
+        # Wait for processes to fully terminate
+        logger.info("Waiting for cleanup to complete...")
+        time.sleep(5)
+        
+        # Verify no bot processes are running
+        try:
+            current_pid = os.getpid()
+            bot_processes = []
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    if proc.info['name'] and 'python' in proc.info['name'].lower():
+                        cmdline = proc.info['cmdline']
+                        if cmdline and any('bot.py' in str(arg) for arg in cmdline):
+                            if proc.info['pid'] != current_pid:
+                                bot_processes.append(proc.info['pid'])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            
+            if bot_processes:
+                logger.warning(f"Found remaining bot processes: {bot_processes}")
+                # Try to kill them individually
+                for pid in bot_processes:
+                    try:
+                        proc = psutil.Process(pid)
+                        proc.kill()
+                        proc.wait(timeout=3)
+                        logger.info(f"Force killed remaining process PID: {pid}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                        pass
+            else:
+                logger.info("No remaining bot processes found")
+                
+        except Exception as e:
+            logger.warning(f"Error verifying process cleanup: {e}")
+        
+        logger.info("Aggressive cleanup completed")
+        
+    except Exception as cleanup_e:
+        logger.warning(f"Error during aggressive cleanup: {cleanup_e}")
+
 def main():
     """Main function to run the bot."""
-    # First, ensure no other bot instances are running
-    try:
-        import subprocess
-        # Kill any existing bot processes (more aggressive approach)
-        subprocess.run(["pkill", "-f", "python.*bot.py"], capture_output=True)
-        subprocess.run(["rm", "-f", "/tmp/cricket_bot.lock"], capture_output=True)
-        logger.info("Cleaned up any existing bot processes and lock files")
-        # Wait a moment for cleanup
-        import time
-        time.sleep(2)
-    except Exception as cleanup_e:
-        logger.warning(f"Error during cleanup: {cleanup_e}")
+    # Perform aggressive cleanup first
+    aggressive_cleanup()
     
     try:
         # Try using asyncio.run() first (works if no event loop is running)

@@ -627,3 +627,5 @@ trafilatura
 psutil
 python-telegram-bot
 python-telegram-bot
+python-dateutil
+psutil
