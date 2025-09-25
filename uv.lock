@@ -775,6 +775,7 @@ dependencies = [
     { name = "nest-asyncio" },
     { name = "python-telegram-bot" },
     { name = "requests" },
+    { name = "telegram" },
     { name = "trafilatura" },
 ]
 
@@ -787,6 +788,7 @@ requires-dist = [
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "python-telegram-bot", specifier = ">=22.4" },
     { name = "requests", specifier = ">=2.32.5" },
+    { name = "telegram", specifier = ">=0.0.1" },
     { name = "trafilatura", specifier = ">=2.0.0" },
 ]
 
@@ -831,6 +833,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/6d/e6/21ccce3262dd4889a
 wheels = [
     { url = "https://files.pythonhosted.org/packages/14/a0/bb38d3b76b8cae341dad93a2dd83ab7462e6dbcdd84d43f54ee60a8dc167/soupsieve-2.8-py3-none-any.whl", hash = "sha256:0cc76456a30e20f5d7f2e14a98a4ae2ee4e5abdc7c5ea0aafe795f344bc7984c", size = 36679 },
 ]
+
+[[package]]
+name = "telegram"
+version = "0.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/ca/8bdf2deb93b9f6971dabf2ddc827c2a98ce23e13582a15b37e9bc169f226/telegram-0.0.1.tar.gz", hash = "sha256:d405a0af4c868a8dbeae6d03e297e21c7ee6269e11e2ed3810e15544aba02591", size = 879 }
 
 [[package]]
 name = "tld"
