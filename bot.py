@@ -1123,7 +1123,7 @@ class CricketBot:
         )
         await update.message.reply_text(text)
 
-    async def error_handler(self, update: Optional[Update], context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle errors."""
         logger.error(f"Exception while handling an update: {context.error}")
         
