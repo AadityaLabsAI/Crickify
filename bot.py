@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from cricket_scraper import get_live_matches, get_match_details, get_match_commentary, get_match_schedule, MatchStatus
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, Message
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -427,7 +427,6 @@ class CricketBot:
             return
             
         # Check if message is accessible - need proper Message type
-        from telegram import Message
         if not isinstance(query.message, Message):
             logger.error("Message is not accessible or not a proper Message object")
             return
@@ -544,7 +543,6 @@ class CricketBot:
             return
             
         # Check if message is accessible - need proper Message type
-        from telegram import Message
         if not isinstance(query.message, Message):
             logger.error("Message is not accessible or not a proper Message object")
             return
@@ -1125,12 +1123,12 @@ class CricketBot:
         )
         await update.message.reply_text(text)
 
-    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def error_handler(self, update: Optional[Update], context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle errors."""
         logger.error(f"Exception while handling an update: {context.error}")
         
         # Try to inform user about the error
-        if isinstance(update, Update) and update.effective_message:
+        if update and isinstance(update, Update) and update.effective_message:
             try:
                 await update.effective_message.reply_text(
                     "🚫 An error occurred. Please try again or use /start to return to the main menu."
