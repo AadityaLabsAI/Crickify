@@ -625,7 +625,7 @@ beautifulsoup4
 requests
 trafilatura
 psutil
-python-telegram-bot
-python-telegram-bot
 python-dateutil
 psutil
+python-telegram-bot
+telegram
