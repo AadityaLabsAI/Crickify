@@ -1233,9 +1233,8 @@ class CricketBot:
         # Error handler
         self.application.add_error_handler(self.error_handler)
         
-        # Add polling error callback
-        if self.application.updater:
-            self.application.updater.add_error_handler(self._polling_error_callback)
+        # Note: In python-telegram-bot v22.4+, updater error handlers are not needed
+        # Error handling is done through application.add_error_handler() above
 
     def _cleanup_on_exit(self) -> None:
         """Cleanup function called on exit."""
@@ -1486,12 +1485,8 @@ class CricketBot:
                         await application.updater.start_polling(
                             allowed_updates=Update.ALL_TYPES,
                             drop_pending_updates=True,
-                            timeout=15,  # Longer timeout
+                            poll_interval=1.0,  # Polling interval
                             bootstrap_retries=0,  # No internal retries
-                            read_timeout=10,
-                            write_timeout=10,
-                            connect_timeout=10,
-                            pool_timeout=10,
                         )
                         logger.info("Polling started successfully")
                         
@@ -1637,24 +1632,30 @@ def aggressive_cleanup():
     try:
         logger.info("Starting aggressive cleanup of existing bot instances...")
         
-        # Kill processes by name patterns
-        kill_commands = [
-            ["pkill", "-f", "python.*bot.py"],
-            ["pkill", "-f", "bot.py"],
-            ["pkill", "-9", "-f", "python.*bot.py"],  # Force kill
-        ]
+        # Use safer process cleanup instead of pkill (which can kill current process)
+        current_pid = os.getpid()
+        killed_processes = []
         
-        for cmd in kill_commands:
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    logger.info(f"Successfully ran: {' '.join(cmd)}")
-                else:
-                    logger.debug(f"Command {' '.join(cmd)} returned {result.returncode}")
-            except subprocess.TimeoutExpired:
-                logger.warning(f"Command {' '.join(cmd)} timed out")
-            except Exception as e:
-                logger.debug(f"Error running {' '.join(cmd)}: {e}")
+        try:
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    if proc.info['name'] and 'python' in proc.info['name'].lower():
+                        cmdline = proc.info['cmdline']
+                        if cmdline and any('bot.py' in str(arg) for arg in cmdline):
+                            pid = proc.info['pid']
+                            if pid != current_pid:  # Never kill current process
+                                logger.info(f"Found existing bot process PID: {pid}, terminating...")
+                                proc.terminate()  # Use terminate instead of kill first
+                                killed_processes.append(pid)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        except Exception as e:
+            logger.debug(f"Error during process enumeration: {e}")
+        
+        # Wait for graceful termination
+        if killed_processes:
+            logger.info(f"Waiting for {len(killed_processes)} processes to terminate...")
+            time.sleep(2)
         
         # Remove lock files
         lock_files = ["/tmp/cricket_bot.lock", "/tmp/telegram_bot.lock"]
