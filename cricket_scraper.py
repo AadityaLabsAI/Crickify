@@ -14,11 +14,12 @@ import re
 import time
 import random
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from dataclasses import dataclass, field
 from enum import Enum
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
+from bs4.element import NavigableString, PageElement
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -654,23 +655,32 @@ class SimpleCricketScraper:
             
             for card in match_cards[:3]:  # Process max 3 matches
                 try:
+                    if not isinstance(card, Tag):
+                        continue
                     # Extract match title
                     title_elem = card.find(['h2', 'h3', 'div'], class_=re.compile(r'.*(?:title|header).*', re.I))
-                    if not title_elem:
+                    if not title_elem or not isinstance(title_elem, Tag):
                         continue
                     
                     title = title_elem.get_text(strip=True)
                     
                     # Check if it's a live match
-                    live_indicator = card.find(text=re.compile(r'.*(?:live|batting|bowling).*', re.I))
+                    live_indicator = card.find(string=re.compile(r'.*(?:live|batting|bowling).*', re.I))
                     if not live_indicator:
                         continue
                     
-                    # Extract team information
-                    team_elements = card.find_all(['div', 'span'], text=re.compile(r'.*(\d+/\d+).*', re.I))
+                    # Extract team information  
+                    team_elements = card.find_all(['div', 'span'])
+                    # Filter elements that contain score patterns
+                    score_elements = []
+                    for elem in team_elements:
+                        if isinstance(elem, Tag):
+                            text = elem.get_text(strip=True)
+                            if re.search(r'.*(\d+/\d+).*', text, re.I):
+                                score_elements.append(elem)
                     
                     teams_data = []
-                    for elem in team_elements[:2]:  # Max 2 teams
+                    for elem in score_elements[:2]:  # Max 2 teams
                         text = elem.get_text(strip=True)
                         # Extract team name, score, wickets
                         score_match = re.search(r'(\w+).*?(\d+)/(\d+)', text)

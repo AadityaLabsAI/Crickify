@@ -11,7 +11,7 @@ import sys
 import asyncio
 import time
 import random
-from typing import Optional, Dict, Set
+from typing import Optional, Dict, Set, Any, Union
 from datetime import datetime
 from cricket_scraper import get_live_matches, get_match_schedule, get_match_details
 
@@ -21,6 +21,8 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
+    ExtBot,
+    JobQueue,
 )
 
 # Configure logging
@@ -32,6 +34,11 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+# Prevent token exposure in logs by setting sensitive loggers to WARNING level
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('telegram.request').setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 class SimpleCricketBot:
@@ -40,9 +47,9 @@ class SimpleCricketBot:
     def __init__(self, token: str):
         """Initialize the bot with token."""
         self.token = token
-        self.live_users: Dict[int, Dict[str, any]] = {}  # user_id -> {chat_id, message_id, last_update}
-        self.application = None
-        self.bot_instance = None
+        self.live_users: Dict[int, Dict[str, Any]] = {}  # user_id -> {chat_id, message_id, last_update}
+        self.application: Optional[Application] = None
+        self.bot_instance: Optional[ExtBot] = None
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle the /start command - Main Menu."""
@@ -393,11 +400,14 @@ def main():
         application.add_handler(CallbackQueryHandler(bot.button_callback))
         
         # Set up automatic live updates using the application's job_queue
-        application.job_queue.run_repeating(
-            bot.update_all_live_users,
-            interval=3,  # 3 second interval
-            first=5  # Start after 5 seconds to allow bot to fully initialize
-        )
+        if application.job_queue:
+            application.job_queue.run_repeating(
+                bot.update_all_live_users,
+                interval=3,  # 3 second interval
+                first=5  # Start after 5 seconds to allow bot to fully initialize
+            )
+        else:
+            logger.warning("⚠️ Job queue not available, automatic updates disabled")
         logger.info("🔄 Started automatic live updates using job_queue (3 second interval)")
         
         logger.info("✅ Handlers added and scheduler started, beginning polling...")
@@ -416,10 +426,12 @@ def main():
         logger.error(f"❌ Bot error: {e}")
         # Try to clean up on error
         try:
-            if 'bot' in locals():
+            # Use locals() to safely check if bot variable exists and is initialized
+            bot_local = locals().get('bot')
+            if bot_local is not None:
                 logger.info("🧹 Cleaning up after error...")
                 # No need to stop scheduler - job_queue handles cleanup automatically
-                bot.live_users.clear()
+                bot_local.live_users.clear()
             asyncio.run(cleanup_bot_state(token))
         except Exception as cleanup_error:
             logger.error(f"❌ Error during cleanup: {cleanup_error}")
