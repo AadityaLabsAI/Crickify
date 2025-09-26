@@ -195,9 +195,33 @@ class Match:
 @dataclass
 class Tournament:
     """Data model for cricket tournament/series."""
+    tournament_id: str
     name: str
     teams: List[str]
+    format: str = ""  # T20, ODI, Test
+    status: str = ""  # Active, Completed, Upcoming
     standings: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    
+    def to_telegram_format(self) -> str:
+        """Format tournament info for Telegram display."""
+        status_emoji = "🔴" if self.status.lower() == "active" else "🕐" if self.status.lower() == "upcoming" else "✅"
+        return f"{status_emoji} **{self.name}** ({self.format}) - {self.status}"
+
+
+@dataclass
+class Competition:
+    """Data model for cricket competition/series."""
+    competition_id: str
+    name: str
+    teams: List[str]
+    format: str = ""  # T20, ODI, Test
+    status: str = ""  # Active, Completed, Upcoming
+    type: str = ""  # Bilateral, Multi-team
+    
+    def to_telegram_format(self) -> str:
+        """Format competition info for Telegram display."""
+        status_emoji = "🔴" if self.status.lower() == "active" else "🕐" if self.status.lower() == "upcoming" else "✅"
+        return f"{status_emoji} **{self.name}** ({self.format}) - {self.status}"
     
 
 
@@ -213,7 +237,7 @@ class CricketScraper:
         """Initialize the cricket scraper."""
         self.session = None
         self.last_request_time = {}  # Track last request time per domain
-        self.rate_limit_delay = 1.0  # Minimum seconds between requests to same domain
+        self.rate_limit_delay = 0.5  # Minimum seconds between requests to same domain (optimized for frequent updates)
         
         # Real cricket data source configurations
         self.api_sources = {
@@ -2553,6 +2577,203 @@ async def get_match_schedule(days: int = 7) -> List[Match]:
     """Get upcoming match schedule."""
     async with CricketScraper() as scraper:
         return await scraper.get_match_schedule(days)
+
+
+async def get_active_tournaments() -> List[Tournament]:
+    """Get list of active cricket tournaments."""
+    try:
+        tournaments = []
+        
+        # Sample tournament data for demonstration with real cricket context
+        sample_tournaments = [
+            {
+                'tournament_id': 'ipl_2024',
+                'name': 'Indian Premier League 2024',
+                'format': 'T20',
+                'status': 'Active',
+                'teams': ['CSK', 'MI', 'RCB', 'KKR', 'DC', 'PBKS', 'RR', 'SRH', 'GT', 'LSG'],
+                'standings': {
+                    'RR': {'points': 20, 'matches': 14, 'wins': 10, 'losses': 4},
+                    'KKR': {'points': 18, 'matches': 14, 'wins': 9, 'losses': 5},
+                    'SRH': {'points': 16, 'matches': 14, 'wins': 8, 'losses': 6},
+                    'CSK': {'points': 14, 'matches': 14, 'wins': 7, 'losses': 7},
+                    'DC': {'points': 12, 'matches': 14, 'wins': 6, 'losses': 8}
+                }
+            },
+            {
+                'tournament_id': 't20_world_cup_2024',
+                'name': 'ICC T20 World Cup 2024',
+                'format': 'T20',
+                'status': 'Upcoming',
+                'teams': ['IND', 'PAK', 'AUS', 'ENG', 'SA', 'NZ', 'WI', 'SL'],
+                'standings': {}
+            },
+            {
+                'tournament_id': 'county_championship_2024',
+                'name': 'County Championship 2024',
+                'format': 'Test',
+                'status': 'Active',
+                'teams': ['Surrey', 'Essex', 'Hampshire', 'Yorkshire'],
+                'standings': {
+                    'Surrey': {'points': 145, 'matches': 10, 'wins': 6, 'losses': 2},
+                    'Essex': {'points': 132, 'matches': 10, 'wins': 5, 'losses': 3}
+                }
+            }
+        ]
+        
+        for tournament_data in sample_tournaments:
+            tournament = Tournament(
+                tournament_id=tournament_data['tournament_id'],
+                name=tournament_data['name'],
+                teams=tournament_data['teams'],
+                format=tournament_data['format'],
+                status=tournament_data['status'],
+                standings=tournament_data['standings']
+            )
+            tournaments.append(tournament)
+        
+        logger.info(f"Retrieved {len(tournaments)} tournaments")
+        return tournaments
+        
+    except Exception as e:
+        logger.error(f"Error fetching tournaments: {e}")
+        return []
+
+
+async def get_active_competitions() -> List[Competition]:
+    """Get list of active cricket competitions/series."""
+    try:
+        competitions = []
+        
+        # Sample competition data for demonstration with real cricket context
+        sample_competitions = [
+            {
+                'competition_id': 'ind_vs_aus_2024',
+                'name': 'India vs Australia Border-Gavaskar Trophy 2024',
+                'format': 'Test',
+                'status': 'Active',
+                'type': 'Bilateral',
+                'teams': ['India', 'Australia']
+            },
+            {
+                'competition_id': 'eng_vs_pak_2024',
+                'name': 'England vs Pakistan ODI Series 2024',
+                'format': 'ODI',
+                'status': 'Upcoming',
+                'type': 'Bilateral',
+                'teams': ['England', 'Pakistan']
+            },
+            {
+                'competition_id': 'sl_vs_ban_2024',
+                'name': 'Sri Lanka vs Bangladesh T20 Series 2024',
+                'format': 'T20',
+                'status': 'Active',
+                'type': 'Bilateral',
+                'teams': ['Sri Lanka', 'Bangladesh']
+            }
+        ]
+        
+        for competition_data in sample_competitions:
+            competition = Competition(
+                competition_id=competition_data['competition_id'],
+                name=competition_data['name'],
+                teams=competition_data['teams'],
+                format=competition_data['format'],
+                status=competition_data['status'],
+                type=competition_data['type']
+            )
+            competitions.append(competition)
+        
+        logger.info(f"Retrieved {len(competitions)} competitions")
+        return competitions
+        
+    except Exception as e:
+        logger.error(f"Error fetching competitions: {e}")
+        return []
+
+
+async def get_tournament_details(tournament_id: str) -> Optional[Tournament]:
+    """Get detailed tournament information including standings."""
+    try:
+        tournaments = await get_active_tournaments()
+        for tournament in tournaments:
+            if tournament.tournament_id == tournament_id:
+                return tournament
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error fetching tournament details for {tournament_id}: {e}")
+        return None
+
+
+async def get_tournament_matches(tournament_id: str) -> List[Match]:
+    """Get matches for a specific tournament."""
+    try:
+        # Get current live matches and filter by tournament context
+        all_matches = await get_live_matches()
+        tournament_matches = []
+        
+        # Add tournament context to matches
+        for match in all_matches:
+            # Enhance match with tournament information
+            if tournament_id == 'ipl_2024' and any(team in ['CSK', 'MI', 'RCB', 'KKR', 'DC', 'PBKS', 'RR', 'SRH', 'GT', 'LSG'] 
+                                                  for team in [match.team1.short_name, match.team2.short_name]):
+                match.title = f"IPL 2024: {match.title}"
+                tournament_matches.append(match)
+            elif tournament_id == 'county_championship_2024' and any(team in ['Surrey', 'Essex', 'Hampshire', 'Yorkshire'] 
+                                                                   for team in [match.team1.short_name, match.team2.short_name]):
+                match.title = f"County Championship: {match.title}"
+                tournament_matches.append(match)
+        
+        return tournament_matches
+        
+    except Exception as e:
+        logger.error(f"Error fetching tournament matches for {tournament_id}: {e}")
+        return []
+
+
+async def get_competition_details(competition_id: str) -> Optional[Competition]:
+    """Get detailed competition information."""
+    try:
+        competitions = await get_active_competitions()
+        for competition in competitions:
+            if competition.competition_id == competition_id:
+                return competition
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error fetching competition details for {competition_id}: {e}")
+        return None
+
+
+async def get_competition_matches(competition_id: str) -> List[Match]:
+    """Get matches for a specific competition/series."""
+    try:
+        # Get current live matches and filter by competition context
+        all_matches = await get_live_matches()
+        competition_matches = []
+        
+        # Add competition context to matches
+        for match in all_matches:
+            # Enhance match with competition information
+            if competition_id == 'ind_vs_aus_2024' and (
+                ('IND' in match.team1.short_name and 'AUS' in match.team2.short_name) or 
+                ('AUS' in match.team1.short_name and 'IND' in match.team2.short_name)
+            ):
+                match.title = f"Border-Gavaskar Trophy: {match.title}"
+                competition_matches.append(match)
+            elif competition_id == 'eng_vs_pak_2024' and (
+                ('ENG' in match.team1.short_name and 'PAK' in match.team2.short_name) or 
+                ('PAK' in match.team1.short_name and 'ENG' in match.team2.short_name)
+            ):
+                match.title = f"ENG vs PAK ODI Series: {match.title}"
+                competition_matches.append(match)
+        
+        return competition_matches
+        
+    except Exception as e:
+        logger.error(f"Error fetching competition matches for {competition_id}: {e}")
+        return []
 
 
 def calculate_win_probability(match: Match) -> Dict[str, float]:

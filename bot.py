@@ -59,6 +59,7 @@ class CricketBot:
         self.application: Optional[Application] = None
         self._running = False
         self._shutdown_event = asyncio.Event()
+        self._polling_active = False  # Track polling state to prevent conflicts
         
         # Initialize scheduler for auto-updates
         self.scheduler = AsyncIOScheduler()
@@ -66,8 +67,18 @@ class CricketBot:
         # Track active live dashboards {chat_id: {message_id: match_id}}
         self.active_dashboards: Dict[int, Dict[int, str]] = {}
         
-        # Track update frequency (15-20 seconds)
-        self.update_interval = 17  # seconds
+        # Track update frequency (2-5 seconds for live updates)
+        self.update_interval = 3  # seconds
+        
+        # Memory management and performance settings
+        self.max_concurrent_dashboards = 10  # Limit concurrent dashboards to prevent memory issues
+        self.api_failure_count = {}  # Track API failures per match to prevent spam
+        self.max_api_failures = 3  # Max failures before temporary disable
+        
+        # Connection management and 409 conflict prevention
+        self._connection_retry_count = 0
+        self.max_connection_retries = 3
+        self._last_polling_cleanup = 0
         
         # Set process ID for lock file
         self.process_id = os.getpid()
@@ -94,11 +105,15 @@ class CricketBot:
             f"Choose an option below to get started:"
         )
         
-        # Simplified main menu - only essential live cricket features
+        # Enhanced main menu with competition features
         keyboard = [
             [
                 InlineKeyboardButton("🏏 Live Matches", callback_data="live_matches"),
                 InlineKeyboardButton("📅 Schedule", callback_data="schedule")
+            ],
+            [
+                InlineKeyboardButton("🏆 Tournaments", callback_data="tournaments"),
+                InlineKeyboardButton("🏅 Competitions", callback_data="competitions")
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -123,7 +138,7 @@ class CricketBot:
         username = user.username or "Unknown"
         logger.info(f"User {user.id} ({username}) pressed button: {callback_data}")
         
-        # Handle different button callbacks - simplified to essential features only
+        # Handle different button callbacks - enhanced with competition features
         if callback_data == "live_matches" or callback_data == "refresh_live":
             await self.handle_live_matches(query, context)
         elif callback_data.startswith("match_"):
@@ -136,6 +151,16 @@ class CricketBot:
             await self.stop_live_dashboard(query, context, match_id)
         elif callback_data == "schedule":
             await self.handle_schedule(query, context)
+        elif callback_data == "tournaments":
+            await self.handle_tournaments(query, context)
+        elif callback_data == "competitions":
+            await self.handle_competitions(query, context)
+        elif callback_data.startswith("tournament_"):
+            tournament_id = callback_data.replace("tournament_", "")
+            await self.handle_tournament_details(query, context, tournament_id)
+        elif callback_data.startswith("competition_"):
+            competition_id = callback_data.replace("competition_", "")
+            await self.handle_competition_details(query, context, competition_id)
         elif callback_data == "back_to_main":
             await self.handle_back_to_main(query, context)
         else:
@@ -168,8 +193,20 @@ class CricketBot:
                                 button_text += f" ({match.team1.score}/{match.team1.wickets} vs {match.team2.score}/{match.team2.wickets})"
                             else:
                                 button_text += f" ({match.team1.score}/{match.team1.wickets})"
+                        
+                        # Add competition context if available
+                        if "IPL" in match.title:
+                            button_text = f"🏆 IPL: {match.team1.short_name} vs {match.team2.short_name}"
+                        elif "Border-Gavaskar" in match.title:
+                            button_text = f"🏏 BGT: {match.team1.short_name} vs {match.team2.short_name}"
+                        elif "County" in match.title:
+                            button_text = f"🏏 CC: {match.team1.short_name} vs {match.team2.short_name}"
                     else:
                         button_text = f"🕐 {match.team1.short_name} vs {match.team2.short_name}"
+                        
+                        # Add competition context for upcoming matches
+                        if "IPL" in match.title:
+                            button_text = f"🏆 IPL: {match.team1.short_name} vs {match.team2.short_name}"
                     
                     keyboard.append([InlineKeyboardButton(
                         button_text, 
@@ -178,7 +215,7 @@ class CricketBot:
                 
                 # Add summary text
                 text += f"📊 *{len(live_matches)} live matches available*\n\n"
-                text += "_Each dashboard updates automatically every 15-20 seconds_"
+                text += "_Each dashboard updates automatically every 3 seconds_"
                 
             else:
                 text = (
@@ -262,6 +299,277 @@ class CricketBot:
             reply_markup=reply_markup
         )
 
+    async def handle_tournaments(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Tournaments button - show current tournaments."""
+        loading_text = "🏆 *Tournaments*\n\n🔄 Loading tournament information..."
+        await query.edit_message_text(loading_text, parse_mode='Markdown')
+        
+        try:
+            # Import tournament functions from cricket_scraper
+            from cricket_scraper import get_active_tournaments
+            
+            # Fetch active tournaments
+            tournaments = await get_active_tournaments()
+            
+            if tournaments:
+                text = "🏆 *Active Cricket Tournaments*\n\n"
+                text += "📋 Select a tournament to view details:\n\n"
+                
+                # Create buttons for each tournament
+                keyboard = []
+                
+                for tournament in tournaments[:8]:  # Show max 8 tournaments
+                    # Create tournament button
+                    button_text = f"🏆 {tournament.name}"
+                    if hasattr(tournament, 'status') and tournament.status:
+                        button_text += f" ({tournament.status})"
+                    
+                    keyboard.append([InlineKeyboardButton(
+                        button_text, 
+                        callback_data=f"tournament_{tournament.tournament_id}"
+                    )])
+                
+                text += f"📊 *{len(tournaments)} tournaments active*\n\n"
+                text += "_Click on any tournament to view standings and matches_"
+                
+            else:
+                text = (
+                    "🏆 *Tournaments*\n\n"
+                    "🔍 No active tournaments found right now.\n\n"
+                    "_Check back later for updates._"
+                )
+                keyboard = []
+        
+        except Exception as e:
+            logger.error(f"Error fetching tournaments: {e}")
+            text = (
+                "🏆 *Tournaments*\n\n"
+                "⚠️ Unable to fetch tournament information at the moment.\n\n"
+                "_Please try again in a few seconds._"
+            )
+            keyboard = []
+        
+        # Add control buttons
+        keyboard.extend([
+            [InlineKeyboardButton("🔄 Refresh", callback_data="tournaments")],
+            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main")]
+        ])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+
+    async def handle_competitions(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle Competitions button - show current competitions/series."""
+        loading_text = "🏅 *Competitions*\n\n🔄 Loading competition information..."
+        await query.edit_message_text(loading_text, parse_mode='Markdown')
+        
+        try:
+            # Import competition functions from cricket_scraper
+            from cricket_scraper import get_active_competitions
+            
+            # Fetch active competitions
+            competitions = await get_active_competitions()
+            
+            if competitions:
+                text = "🏅 *Active Cricket Competitions*\n\n"
+                text += "🎯 Select a competition to view details:\n\n"
+                
+                # Create buttons for each competition
+                keyboard = []
+                
+                for competition in competitions[:8]:  # Show max 8 competitions
+                    # Create competition button
+                    button_text = f"🏅 {competition.name}"
+                    if hasattr(competition, 'format') and competition.format:
+                        button_text += f" ({competition.format})"
+                    
+                    keyboard.append([InlineKeyboardButton(
+                        button_text, 
+                        callback_data=f"competition_{competition.competition_id}"
+                    )])
+                
+                text += f"📊 *{len(competitions)} competitions active*\n\n"
+                text += "_View series standings and upcoming matches_"
+                
+            else:
+                text = (
+                    "🏅 *Competitions*\n\n"
+                    "🔍 No active competitions found right now.\n\n"
+                    "_Check back later for updates._"
+                )
+                keyboard = []
+        
+        except Exception as e:
+            logger.error(f"Error fetching competitions: {e}")
+            text = (
+                "🏅 *Competitions*\n\n"
+                "⚠️ Unable to fetch competition information at the moment.\n\n"
+                "_Please try again in a few seconds._"
+            )
+            keyboard = []
+        
+        # Add control buttons
+        keyboard.extend([
+            [InlineKeyboardButton("🔄 Refresh", callback_data="competitions")],
+            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main")]
+        ])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+
+    async def handle_tournament_details(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, tournament_id: str) -> None:
+        """Handle tournament details view with standings and matches."""
+        loading_text = "🏆 *Tournament Details*\n\n🔄 Loading tournament information..."
+        await query.edit_message_text(loading_text, parse_mode='Markdown')
+        
+        try:
+            # Import tournament functions
+            from cricket_scraper import get_tournament_details, get_tournament_matches
+            
+            # Fetch tournament details and matches
+            tournament_details = await get_tournament_details(tournament_id)
+            tournament_matches = await get_tournament_matches(tournament_id)
+            
+            if tournament_details:
+                text = f"🏆 *{tournament_details.name}*\n\n"
+                
+                # Add tournament info
+                if hasattr(tournament_details, 'format') and tournament_details.format:
+                    text += f"📋 Format: {tournament_details.format}\n"
+                if hasattr(tournament_details, 'status') and tournament_details.status:
+                    text += f"📊 Status: {tournament_details.status}\n"
+                
+                # Add standings if available
+                if hasattr(tournament_details, 'standings') and tournament_details.standings:
+                    text += "\n🏆 **Current Standings:**\n"
+                    for i, (team, stats) in enumerate(tournament_details.standings.items()[:5]):
+                        points = stats.get('points', 0)
+                        matches = stats.get('matches', 0)
+                        text += f"{i+1}. {team}: {points} pts ({matches} matches)\n"
+                
+                # Add recent/upcoming matches
+                if tournament_matches:
+                    text += "\n📅 **Recent/Upcoming Matches:**\n"
+                    for match in tournament_matches[:3]:
+                        text += f"• {match.team1.short_name} vs {match.team2.short_name}"
+                        if match.status.value == "live":
+                            text += " 🔴 LIVE\n"
+                        elif match.status.value == "upcoming":
+                            text += f" ({match.date})\n"
+                        else:
+                            text += f" - {match.status.value.title()}\n"
+                
+                text += f"\n_Tournament: {tournament_details.name}_"
+                
+            else:
+                text = (
+                    "🏆 *Tournament Details*\n\n"
+                    "⚠️ Unable to load tournament details.\n\n"
+                    "_The tournament may be inactive or ID is invalid._"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error fetching tournament details for {tournament_id}: {e}")
+            text = (
+                "🏆 *Tournament Details*\n\n"
+                "⚠️ Unable to fetch tournament details.\n\n"
+                "_Please try again in a few moments._"
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data=f"tournament_{tournament_id}")],
+            [InlineKeyboardButton("🔙 Back to Tournaments", callback_data="tournaments")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+
+    async def handle_competition_details(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, competition_id: str) -> None:
+        """Handle competition details view with series info."""
+        loading_text = "🏅 *Competition Details*\n\n🔄 Loading competition information..."
+        await query.edit_message_text(loading_text, parse_mode='Markdown')
+        
+        try:
+            # Import competition functions
+            from cricket_scraper import get_competition_details, get_competition_matches
+            
+            # Fetch competition details and matches
+            competition_details = await get_competition_details(competition_id)
+            competition_matches = await get_competition_matches(competition_id)
+            
+            if competition_details:
+                text = f"🏅 *{competition_details.name}*\n\n"
+                
+                # Add competition info
+                if hasattr(competition_details, 'format') and competition_details.format:
+                    text += f"📋 Format: {competition_details.format}\n"
+                if hasattr(competition_details, 'teams') and len(competition_details.teams) > 0:
+                    text += f"👥 Teams: {', '.join(competition_details.teams[:4])}"
+                    if len(competition_details.teams) > 4:
+                        text += f" (+{len(competition_details.teams)-4} more)"
+                    text += "\n"
+                
+                # Add series progress
+                if competition_matches:
+                    text += "\n📅 **Series Progress:**\n"
+                    live_count = sum(1 for m in competition_matches if m.status.value == "live")
+                    upcoming_count = sum(1 for m in competition_matches if m.status.value == "upcoming")
+                    completed_count = sum(1 for m in competition_matches if m.status.value == "completed")
+                    
+                    text += f"🔴 Live: {live_count} | 🕐 Upcoming: {upcoming_count} | ✅ Completed: {completed_count}\n"
+                    
+                    # Show recent matches
+                    recent_matches = [m for m in competition_matches if m.status.value in ["live", "upcoming"]][:3]
+                    if recent_matches:
+                        text += "\n📋 **Current/Next Matches:**\n"
+                        for i, match in enumerate(recent_matches):
+                            match_num = f"Match {i+1}: " if len(recent_matches) > 1 else ""
+                            text += f"• {match_num}{match.team1.short_name} vs {match.team2.short_name}"
+                            if match.status.value == "live":
+                                text += " 🔴 LIVE\n"
+                            else:
+                                text += f" ({match.date})\n"
+                
+                text += f"\n_Competition: {competition_details.name}_"
+                
+            else:
+                text = (
+                    "🏅 *Competition Details*\n\n"
+                    "⚠️ Unable to load competition details.\n\n"
+                    "_The competition may be inactive or ID is invalid._"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error fetching competition details for {competition_id}: {e}")
+            text = (
+                "🏅 *Competition Details*\n\n"
+                "⚠️ Unable to fetch competition details.\n\n"
+                "_Please try again in a few moments._"
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data=f"competition_{competition_id}")],
+            [InlineKeyboardButton("🔙 Back to Competitions", callback_data="competitions")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
 
     async def handle_back_to_main(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle back to main menu button."""
@@ -272,11 +580,15 @@ class CricketBot:
             f"Welcome back! Choose an option below:"
         )
         
-        # Simplified main menu - only essential live cricket features
+        # Enhanced main menu with competition features
         keyboard = [
             [
                 InlineKeyboardButton("🏏 Live Matches", callback_data="live_matches"),
                 InlineKeyboardButton("📅 Schedule", callback_data="schedule")
+            ],
+            [
+                InlineKeyboardButton("🏆 Tournaments", callback_data="tournaments"),
+                InlineKeyboardButton("🏅 Competitions", callback_data="competitions")
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -348,6 +660,21 @@ class CricketBot:
                 parse_mode='Markdown',
                 reply_markup=reply_markup
             )
+            
+            # Check dashboard limit for memory management
+            total_dashboards = sum(len(dashboards) for dashboards in self.active_dashboards.values())
+            if total_dashboards >= self.max_concurrent_dashboards:
+                error_text = (
+                    "🏏 *Live Match Dashboard*\n\n"
+                    "⚠️ Maximum number of live dashboards reached.\n\n"
+                    "_Please stop some existing dashboards first._"
+                )
+                keyboard = [
+                    [InlineKeyboardButton("🔙 Back to Live Matches", callback_data="live_matches")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(error_text, parse_mode='Markdown', reply_markup=reply_markup)
+                return
             
             # Track this dashboard
             if chat_id not in self.active_dashboards:
@@ -779,7 +1106,7 @@ class CricketBot:
             "❓ *Frequently Asked Questions*\n\n"
             "🏏 *About Live Dashboards:*\n"
             "Q: How often do dashboards update?\n"
-            "A: Every 15-20 seconds automatically\n\n"
+            "A: Every 3 seconds automatically\n\n"
             "Q: Can I have multiple dashboards?\n"
             "A: Yes, but recommended max 2-3 for performance\n\n"
             "📱 *Using the Bot:*\n"
@@ -810,7 +1137,7 @@ class CricketBot:
             # Use the match's built-in telegram formatting with commentary
             dashboard_text = "🏏 *Live Match Dashboard*\n\n"
             dashboard_text += match.to_telegram_format(include_commentary=True)
-            dashboard_text += "\n\n🔄 _Auto-updates every 15-20 seconds_"
+            dashboard_text += "\n\n🔄 _Auto-updates every 3 seconds_"
             dashboard_text += f"\n⏰ Last updated: {datetime.now().strftime('%H:%M:%S')}"
             
             return dashboard_text
@@ -830,12 +1157,23 @@ class CricketBot:
                 logger.info(f"Dashboard {chat_id}/{message_id} no longer active, stopping updates")
                 return
             
+            # Circuit breaker: Check if too many API failures for this match
+            if match_id in self.api_failure_count and self.api_failure_count[match_id] >= self.max_api_failures:
+                logger.warning(f"Too many API failures for match {match_id}, skipping update")
+                return
+            
             # Get fresh match data
             match_details = await get_match_details(match_id)
             
             if not match_details:
                 logger.warning(f"Could not get match details for {match_id}, skipping update")
+                # Track API failure for circuit breaker
+                self.api_failure_count[match_id] = self.api_failure_count.get(match_id, 0) + 1
                 return
+            
+            # Reset failure count on successful API call
+            if match_id in self.api_failure_count:
+                del self.api_failure_count[match_id]
             
             # Check if match is still live
             if match_details.status != MatchStatus.LIVE:
@@ -925,18 +1263,9 @@ class CricketBot:
                 # Perform comprehensive cleanup
                 await self._cleanup_webhooks_and_polling()
                 
-                # Try to restart polling after cleanup
-                logger.info("Attempting to restart polling after conflict...")
+                # Don't restart polling here to avoid conflicts - let main polling handle it
+                logger.info("Conflict detected - cleanup completed, main polling will handle restart")
                 await asyncio.sleep(5)
-                
-                if self.application and self.application.updater:
-                    await self.application.updater.start_polling(
-                        allowed_updates=Update.ALL_TYPES,
-                        drop_pending_updates=True,
-                        timeout=15,
-                        bootstrap_retries=0,
-                    )
-                    logger.info("Successfully restarted polling after conflict recovery")
                 
             except Exception as recovery_error:
                 logger.error(f"Failed to recover from conflict: {recovery_error}")
@@ -1236,14 +1565,12 @@ class CricketBot:
                     logger.error("Application updater is None")
                     return
                     
-                # Start polling with aggressive conflict prevention
-                max_retries = 5
-                for retry in range(max_retries):
+                # Start polling with single-instance protection
+                if not self._polling_active:
                     try:
-                        # Extra cleanup before each attempt
-                        if retry > 0:
-                            logger.info(f"Performing additional cleanup before retry {retry + 1}...")
-                            await self._cleanup_webhooks_and_polling()
+                        # Mark polling as active to prevent concurrent sessions
+                        self._polling_active = True
+                        logger.info("Starting single-instance polling...")
                         
                         await application.updater.start_polling(
                             allowed_updates=Update.ALL_TYPES,
@@ -1256,29 +1583,23 @@ class CricketBot:
                         # Verify polling is working by waiting and checking for conflicts
                         await asyncio.sleep(5)
                         logger.info("Polling verification period completed successfully")
-                        break
                         
                     except Exception as polling_error:
                         if "Conflict" in str(polling_error):
-                            logger.warning(f"Polling conflict detected (attempt {retry + 1}/{max_retries}): {polling_error}")
-                            if retry < max_retries - 1:
-                                # Wait with exponential backoff
-                                wait_time = (retry + 1) * 10
-                                logger.info(f"Waiting {wait_time} seconds before retry...")
-                                
-                                # Stop the current updater if it exists
-                                try:
-                                    if application.updater and application.updater.running:
-                                        await application.updater.stop()
-                                        logger.info("Stopped existing updater")
-                                except:
-                                    pass
-                                
-                                await asyncio.sleep(wait_time)
-                                
-                            else:
-                                logger.error("Failed to start polling after all retries")
-                                raise
+                            logger.warning(f"Polling conflict detected: {polling_error}")
+                            # Stop the current updater if it exists
+                            try:
+                                if application.updater and application.updater.running:
+                                    await application.updater.stop()
+                                    logger.info("Stopped existing updater")
+                            except:
+                                pass
+                            
+                            # Wait and set shutdown event
+                            logger.info("Waiting 10 seconds before shutdown due to conflict...")
+                            await asyncio.sleep(10)
+                            logger.error("Failed to start polling due to persistent conflicts")
+                            raise
                         else:
                             logger.error(f"Non-conflict error during polling start: {polling_error}")
                             raise
