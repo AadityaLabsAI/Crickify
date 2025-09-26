@@ -450,7 +450,7 @@ class CricketBot:
                 # Add standings if available
                 if hasattr(tournament_details, 'standings') and tournament_details.standings:
                     text += "\n🏆 **Current Standings:**\n"
-                    for i, (team, stats) in enumerate(tournament_details.standings.items()[:5]):
+                    for i, (team, stats) in enumerate(list(tournament_details.standings.items())[:5]):
                         points = stats.get('points', 0)
                         matches = stats.get('matches', 0)
                         text += f"{i+1}. {team}: {points} pts ({matches} matches)\n"
