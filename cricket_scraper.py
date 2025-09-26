@@ -125,13 +125,22 @@ class Match:
         return result
 
 class SimpleCricketScraper:
-    """Simplified Cricket Data Scraper Class."""
+    """Enhanced Cricket Data Scraper with Real API Integration."""
     
     def __init__(self):
         """Initialize the cricket scraper."""
         self.session = None
         self.last_request_time = {}
         self.rate_limit_delay = 1.0  # 1 second between requests
+        
+        # EntitySport API configuration - FIXED URL
+        # TODO: Add proper API token via environment variables or integration
+        self.entitysport_token = None  # Remove hard-coded token for security
+        self.entitysport_base_url = "https://rest.entitysport.com/v2"
+        
+        # Cricket Data API configuration (backup) - FIXED URL
+        self.cricketdata_base_url = "https://api.cricapi.com/v1"
+        self.cricketdata_api_key = None  # TODO: Add proper API key via environment variables
         
         # Headers for web requests
         self.headers = {
@@ -141,6 +150,10 @@ class SimpleCricketScraper:
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
         }
+        
+        # Retry configuration
+        self.max_retries = 3
+        self.retry_delay = 2  # seconds
     
     async def __aenter__(self):
         """Async context manager entry."""
@@ -185,69 +198,42 @@ class SimpleCricketScraper:
             logger.error(f"Error fetching {url}: {e}")
             return None
     
-    def _create_sample_matches(self) -> List[Match]:
-        """Create dynamic sample live matches that simulate score progression."""
-        sample_matches = []
+    def _create_minimal_sample_matches(self) -> List[Match]:
+        """Create minimal sample data only when absolutely no real data is available."""
+        logger.warning("🚫 FALLBACK TO SAMPLE DATA: All real cricket APIs failed - API URLs may be incorrect")
+        logger.warning("🔧 Check: EntitySport URL should be https://rest.entitysport.com/v2/")
+        logger.warning("🔧 Check: Cricket Data URL should be https://api.cricapi.com/v1/currentMatches?apikey=")
+        
+        # Only create 1-2 minimal sample matches as absolute fallback
+        minimal_matches = []
+        
+        # Single live match with minimal dynamic changes
         current_time = int(time.time())
+        score_variation = (current_time % 30)  # Changes every 30 seconds
         
-        # Use time-based progression to simulate live cricket updates
-        progress_factor = (current_time % 1200) / 1200  # 20 minute cycle
+        team1 = Team("Sample Team A", "STA", 145 + score_variation, 4, "18.2", 8.1)
+        team2 = Team("Sample Team B", "STB", 0, 0, "0.0", 0.0)
         
-        # Sample Match 1: Live IPL T20 match with dynamic scores
-        base_score1 = 145
-        base_score2 = 78
-        
-        # Simulate score progression
-        team1_score = base_score1 + int(progress_factor * 40) + random.randint(0, 5)
-        team1_wickets = min(4 + int(progress_factor * 3), 9)
-        team1_overs = f"{min(15 + int(progress_factor * 4), 19)}.{random.randint(0, 5)}"
-        
-        team2_score = base_score2 + int(progress_factor * 60) + random.randint(0, 8)
-        team2_wickets = min(2 + int(progress_factor * 4), 8)
-        team2_overs = f"{min(12 + int(progress_factor * 6), 18)}.{random.randint(0, 5)}"
-        
-        team1 = Team("Mumbai Indians", "MI", team1_score, team1_wickets, team1_overs, round(team1_score/float(team1_overs.split('.')[0] or 1), 2))
-        team2 = Team("Chennai Super Kings", "CSK", team2_score, team2_wickets, team2_overs, round(team2_score/float(team2_overs.split('.')[0] or 1), 2))
-        
-        # Dynamic commentary based on current time
-        recent_runs = random.choice([0, 1, 2, 4, 6])
-        commentary_descriptions = [
-            "Pushed to mid-wicket for a single",
-            "Dot ball, good length delivery",
-            "FOUR! Driven through covers",
-            "SIX! Massive hit over long-on!",
-            "Two runs to deep square leg",
-            "LBW appeal, not out says umpire"
-        ]
-        
-        current_over = team1_overs.split('.')[0]
-        current_ball = str(random.randint(1, 6))
-        
-        commentary = [
-            Commentary(current_over, current_ball, recent_runs, random.choice(commentary_descriptions), 
-                      datetime.now().isoformat(), recent_runs == 0, recent_runs >= 4),
-            Commentary(str(int(current_over) - 1), "6", random.choice([4, 6]), "Boundary to finish the over!", 
-                      (datetime.now() - timedelta(minutes=2)).isoformat(), False, True),
-        ]
-        
-        partnership_runs = 25 + int(progress_factor * 30)
-        partnership_balls = 18 + int(progress_factor * 25)
-        
-        match1 = Match(
-            match_id="ipl_2024_mi_vs_csk",
-            title="Mumbai Indians vs Chennai Super Kings",
+        sample_match = Match(
+            match_id="minimal_sample_1",
+            title="Sample Cricket Match (No Live Data Available)",
             team1=team1,
             team2=team2,
             status=MatchStatus.LIVE,
-            venue="Wankhede Stadium, Mumbai",
+            venue="Sample Stadium - No Real Data",
             date=datetime.now().strftime("%d %b %Y, %I:%M %p"),
-            format="T20",
-            toss="MI won the toss and elected to bat first",
-            current_partnership=f"{partnership_runs} runs ({partnership_balls} balls)",
-            recent_overs=[str(random.randint(4, 15)) for _ in range(5)],
-            commentary=commentary
+            format="Sample T20",
+            toss="Sample Team A won toss, elected to bat",
+            current_partnership="Sample partnership - Real data unavailable",
+            recent_overs=["6", "4", "1", "2", "8"],
+            commentary=[]
         )
-        sample_matches.append(match1)
+        
+        minimal_matches.append(sample_match)
+        
+        logger.error("❌ CRITICAL: Real cricket data not available - users seeing FAKE data!")
+        logger.error("❌ ACTION REQUIRED: Fix API URLs and authentication to get real cricket matches")
+        return minimal_matches
         
         # Sample Match 2: Live Test match with slower progression
         test_progress = (current_time % 3600) / 3600  # 1 hour cycle for test match
@@ -320,57 +306,431 @@ class SimpleCricketScraper:
         return sample_matches
     
     async def get_live_matches(self) -> List[Match]:
-        """Get current live cricket matches."""
+        """Get current live cricket matches from multiple real sources."""
+        logger.info("🔍 Starting cricket data fetch from multiple sources...")
+        all_matches = []
+        
+        # Try EntitySport API first (most reliable)
+        logger.info("📡 Attempting EntitySport API...")
         try:
-            # Try to fetch real data from cricket websites
-            matches = await self._fetch_real_live_matches()
-            
-            if matches:
-                logger.info(f"Found {len(matches)} live matches")
-                return matches
+            entitysport_matches = await self._fetch_entitysport_matches()
+            if entitysport_matches:
+                all_matches.extend(entitysport_matches)
+                logger.info(f"✅ EntitySport API: Found {len(entitysport_matches)} live matches")
             else:
-                logger.info("No real live matches found, using sample data")
-                return self._create_sample_matches()
-                
+                logger.warning("⚠️ EntitySport API: No matches returned")
         except Exception as e:
-            logger.error(f"Error getting live matches: {e}")
-            return self._create_sample_matches()
+            logger.warning(f"❌ EntitySport API failed: {e}")
+        
+        # Try Cricket Data API as backup
+        logger.info("🏏 Attempting Cricket Data API...")
+        try:
+            cricketdata_matches = await self._fetch_cricketdata_matches()
+            if cricketdata_matches:
+                # Add matches that aren't already in the list
+                for match in cricketdata_matches:
+                    if not any(existing.title.lower() == match.title.lower() for existing in all_matches):
+                        all_matches.append(match)
+                logger.info(f"✅ Cricket Data API: Found {len(cricketdata_matches)} additional matches")
+            else:
+                logger.warning("⚠️ Cricket Data API: No matches returned")
+        except Exception as e:
+            logger.warning(f"❌ Cricket Data API failed: {e}")
+        
+        # Try enhanced web scraping as final backup
+        logger.info("🌐 Attempting web scraping...")
+        try:
+            scraped_matches = await self._fetch_real_live_matches()
+            if scraped_matches:
+                # Add scraped matches that aren't already in the list
+                for match in scraped_matches:
+                    if not any(existing.title.lower() == match.title.lower() for existing in all_matches):
+                        all_matches.append(match)
+                logger.info(f"✅ Web scraping: Found {len(scraped_matches)} additional matches")
+            else:
+                logger.warning("⚠️ Web scraping: No matches found")
+        except Exception as e:
+            logger.warning(f"❌ Web scraping failed: {e}")
+        
+        # If we have real matches, return them
+        if all_matches:
+            logger.info(f"✅ REAL DATA SUCCESS: Returning {len(all_matches)} REAL live cricket matches")
+            logger.info(f"🎯 DATA SOURCE VERIFICATION: Users will see REAL cricket data (not sample data)")
+            for i, match in enumerate(all_matches[:5]):
+                logger.info(f"   Real Match {i+1}: {match.title} - {match.venue}")
+            return all_matches[:5]  # Return max 5 matches
+        
+        # Only fallback to sample data if absolutely no real data is available
+        logger.warning("🚫 FALLBACK: No real cricket data available from any source, using minimal sample data")
+        return self._create_minimal_sample_matches()
     
-    async def _fetch_real_live_matches(self) -> List[Match]:
-        """Attempt to fetch real live matches from cricket websites."""
+    async def _fetch_entitysport_matches(self) -> List[Match]:
+        """Fetch live matches from EntitySport API."""
         matches = []
         
-        # Try BBC Sport Cricket
         try:
-            url = "https://www.bbc.com/sport/cricket/scores-fixtures"
+            # Get live matches from EntitySport
+            url = f"{self.entitysport_base_url}/matches"
+            params = {
+                'token': self.entitysport_token,
+                'status': '2',  # 2 = Live matches
+                'limit': '10'
+            }
+            
+            if not self.session:
+                return matches
+                
+            async with self.session.get(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    
+                    if data.get('status') == 'ok' and 'response' in data:
+                        items = data['response'].get('items', [])
+                        
+                        for match_data in items[:5]:  # Process max 5 matches
+                            match = self._parse_entitysport_match(match_data)
+                            if match:
+                                matches.append(match)
+                                
+                    logger.info(f"✅ EntitySport API SUCCESS: Retrieved {len(matches)} REAL live matches")
+                    if matches:
+                        logger.info(f"🎯 REAL DATA CONFIRMED: EntitySport API working with corrected URL")
+                else:
+                    logger.warning(f"❌ EntitySport API HTTP {response.status} - Check if URL https://rest.entitysport.com/v2/ is correct")
+                    
+        except Exception as e:
+            logger.error(f"Error fetching from EntitySport: {e}")
+            
+        return matches
+    
+    async def _fetch_cricketdata_matches(self) -> List[Match]:
+        """Fetch live matches from Cricket Data API."""
+        matches = []
+        
+        try:
+            # Cricket Data API endpoint for current matches - FIXED URL
+            url = f"{self.cricketdata_base_url}/currentMatches"
+            params = {}
+            if self.cricketdata_api_key:
+                params['apikey'] = self.cricketdata_api_key
+            
+            if not self.session:
+                return matches
+                
+            async with self.session.get(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    
+                    # Parse Cricket Data API response
+                    if data.get('stat') == 'ok' and 'data' in data:
+                        matches_data = data.get('data', [])
+                        
+                        for match_data in matches_data[:5]:  # Process max 5 matches
+                            if match_data.get('matchStarted', False):  # Only live matches
+                                match = self._parse_cricketdata_match(match_data)
+                                if match:
+                                    matches.append(match)
+                                    
+                    logger.info(f"✅ Cricket Data API SUCCESS: Retrieved {len(matches)} REAL live matches")
+                    if matches:
+                        logger.info(f"🎯 REAL DATA CONFIRMED: Cricket Data API working with corrected URL")
+                else:
+                    logger.warning(f"❌ Cricket Data API HTTP {response.status} - Check if URL https://api.cricapi.com/v1/ is correct")
+                    
+        except Exception as e:
+            logger.error(f"Error fetching from Cricket Data API: {e}")
+            
+        return matches
+    
+    def _parse_cricketdata_match(self, match_data: Dict[str, Any]) -> Optional[Match]:
+        """Parse Cricket Data API match data into Match object."""
+        try:
+            if not match_data:
+                return None
+            
+            unique_id = match_data.get('unique_id', '')
+            match_id = f"cricketdata_{unique_id}"
+            
+            # Extract team names
+            team1_name = match_data.get('team-1', 'Team A')
+            team2_name = match_data.get('team-2', 'Team B')
+            
+            # Extract scores
+            score = match_data.get('score', '')
+            
+            # Try to parse score format like "Team1 120/4 (15.2 ov) vs Team2 45/2 (8.1 ov)"
+            team1_score, team1_wickets, team1_overs = 0, 0, "0.0"
+            team2_score, team2_wickets, team2_overs = 0, 0, "0.0"
+            
+            if score:
+                # Simple parsing - this would need refinement for production
+                parts = score.split(' vs ')
+                if len(parts) >= 2:
+                    # Parse team 1 score
+                    team1_match = re.search(r'(\d+)/?(\d*)', parts[0])
+                    if team1_match:
+                        team1_score = int(team1_match.group(1))
+                        if team1_match.group(2):
+                            team1_wickets = int(team1_match.group(2))
+                    
+                    # Parse team 2 score  
+                    team2_match = re.search(r'(\d+)/?(\d*)', parts[1])
+                    if team2_match:
+                        team2_score = int(team2_match.group(1))
+                        if team2_match.group(2):
+                            team2_wickets = int(team2_match.group(2))
+            
+            # Create team objects
+            team1 = Team(
+                name=team1_name,
+                short_name=team1_name[:3].upper(),
+                score=team1_score,
+                wickets=team1_wickets,
+                overs=team1_overs
+            )
+            
+            team2 = Team(
+                name=team2_name,
+                short_name=team2_name[:3].upper(),
+                score=team2_score,
+                wickets=team2_wickets,
+                overs=team2_overs
+            )
+            
+            # Create match
+            return Match(
+                match_id=match_id,
+                title=f"{team1_name} vs {team2_name}",
+                team1=team1,
+                team2=team2,
+                status=MatchStatus.LIVE,
+                venue="Live - Cricket Data API",
+                date=datetime.now().strftime("%d %b %Y, %I:%M %p"),
+                format="Live Match",
+                toss="",
+                current_partnership="",
+                recent_overs=[],
+                commentary=[]
+            )
+            
+        except Exception as e:
+            logger.error(f"Error parsing Cricket Data match: {e}")
+            return None
+    
+    async def _fetch_real_live_matches(self) -> List[Match]:
+        """Enhanced web scraping from multiple cricket websites."""
+        matches = []
+        
+        # Try Cricbuzz (most detailed cricket data)
+        try:
+            url = "https://www.cricbuzz.com/live-cricket-scores"
             html_content = await self._fetch_url(url)
             if html_content:
-                matches.extend(self._parse_bbc_cricket(html_content))
+                cricbuzz_matches = self._parse_cricbuzz(html_content)
+                matches.extend(cricbuzz_matches)
+                logger.info(f"Cricbuzz: Found {len(cricbuzz_matches)} matches")
         except Exception as e:
-            logger.warning(f"Failed to fetch from BBC: {e}")
+            logger.warning(f"Failed to fetch from Cricbuzz: {e}")
         
-        # Try ESPN Cricinfo
+        # Try ESPN Cricinfo (backup)
         try:
             url = "https://www.espncricinfo.com/live-cricket-score"
             html_content = await self._fetch_url(url)
             if html_content:
-                matches.extend(self._parse_cricinfo(html_content))
+                cricinfo_matches = self._parse_cricinfo(html_content)
+                matches.extend(cricinfo_matches)
+                logger.info(f"ESPN Cricinfo: Found {len(cricinfo_matches)} matches")
         except Exception as e:
             logger.warning(f"Failed to fetch from ESPN: {e}")
         
+        # Try BBC Sport Cricket (backup)
+        try:
+            url = "https://www.bbc.com/sport/cricket/scores-fixtures"
+            html_content = await self._fetch_url(url)
+            if html_content:
+                bbc_matches = self._parse_bbc_cricket(html_content)
+                matches.extend(bbc_matches)
+                logger.info(f"BBC: Found {len(bbc_matches)} matches")
+        except Exception as e:
+            logger.warning(f"Failed to fetch from BBC: {e}")
+        
         return matches[:5]  # Return max 5 matches
     
-    def _parse_bbc_cricket(self, html_content: str) -> List[Match]:
-        """Parse BBC Sport cricket page for live matches."""
+    def _parse_entitysport_match(self, match_data: Dict[str, Any]) -> Optional[Match]:
+        """Parse EntitySport API match data into Match object."""
+        try:
+            if not match_data:
+                return None
+            
+            # Extract basic match info
+            match_id = f"entitysport_{match_data.get('match_id', '')}"
+            title = match_data.get('title', 'Unknown Match')
+            
+            # Extract teams
+            teama = match_data.get('teama', {})
+            teamb = match_data.get('teamb', {})
+            
+            team1_name = teama.get('name', 'Team A')
+            team2_name = teamb.get('name', 'Team B')
+            
+            # Create team objects with scores if available
+            team1 = Team(
+                name=team1_name,
+                short_name=teama.get('short_name', team1_name[:3].upper()),
+                score=int(teama.get('scores', {}).get('1', {}).get('r', 0)),
+                wickets=int(teama.get('scores', {}).get('1', {}).get('w', 0)),
+                overs=teama.get('scores', {}).get('1', {}).get('o', '0.0'),
+                run_rate=float(teama.get('scores', {}).get('1', {}).get('rr', 0.0))
+            )
+            
+            team2 = Team(
+                name=team2_name,
+                short_name=teamb.get('short_name', team2_name[:3].upper()),
+                score=int(teamb.get('scores', {}).get('1', {}).get('r', 0)),
+                wickets=int(teamb.get('scores', {}).get('1', {}).get('w', 0)),
+                overs=teamb.get('scores', {}).get('1', {}).get('o', '0.0'),
+                run_rate=float(teamb.get('scores', {}).get('1', {}).get('rr', 0.0))
+            )
+            
+            # Determine match status
+            status_id = match_data.get('status', 1)
+            if status_id == 2:
+                status = MatchStatus.LIVE
+            elif status_id == 1:
+                status = MatchStatus.UPCOMING
+            else:
+                status = MatchStatus.COMPLETED
+            
+            # Extract venue and date
+            venue = match_data.get('venue', {}).get('name', 'TBC')
+            
+            # Format date
+            date_start = match_data.get('date_start', '')
+            try:
+                if date_start:
+                    date_obj = datetime.fromisoformat(date_start.replace('Z', '+00:00'))
+                    date = date_obj.strftime('%d %b %Y, %I:%M %p')
+                else:
+                    date = datetime.now().strftime('%d %b %Y, %I:%M %p')
+            except:
+                date = datetime.now().strftime('%d %b %Y, %I:%M %p')
+            
+            # Extract format
+            format_str = match_data.get('format_str', 'Unknown')
+            
+            # Extract toss info
+            toss_data = match_data.get('toss', {})
+            toss = ''
+            if toss_data.get('winner'):
+                toss = f"{toss_data.get('text', '')}"
+            
+            return Match(
+                match_id=match_id,
+                title=title,
+                team1=team1,
+                team2=team2,
+                status=status,
+                venue=venue,
+                date=date,
+                format=format_str,
+                toss=toss,
+                current_partnership='',
+                recent_overs=[],
+                commentary=[]
+            )
+            
+        except Exception as e:
+            logger.error(f"Error parsing EntitySport match data: {e}")
+            return None
+    
+    def _parse_cricbuzz(self, html_content: str) -> List[Match]:
+        """Parse Cricbuzz for live cricket matches."""
         matches = []
         try:
             soup = BeautifulSoup(html_content, 'html.parser')
             
-            # Look for match containers
+            # Look for live match cards - Cricbuzz specific selectors
+            match_cards = soup.find_all('div', class_=re.compile(r'.*(?:cb-mtch|match|live).*', re.I))
+            
+            for card in match_cards[:3]:  # Process max 3 matches
+                try:
+                    # Extract match title
+                    title_elem = card.find(['h2', 'h3', 'div'], class_=re.compile(r'.*(?:title|header).*', re.I))
+                    if not title_elem:
+                        continue
+                    
+                    title = title_elem.get_text(strip=True)
+                    
+                    # Check if it's a live match
+                    live_indicator = card.find(text=re.compile(r'.*(?:live|batting|bowling).*', re.I))
+                    if not live_indicator:
+                        continue
+                    
+                    # Extract team information
+                    team_elements = card.find_all(['div', 'span'], text=re.compile(r'.*(\d+/\d+).*', re.I))
+                    
+                    teams_data = []
+                    for elem in team_elements[:2]:  # Max 2 teams
+                        text = elem.get_text(strip=True)
+                        # Extract team name, score, wickets
+                        score_match = re.search(r'(\w+).*?(\d+)/(\d+)', text)
+                        if score_match:
+                            team_name = score_match.group(1)
+                            score = int(score_match.group(2))
+                            wickets = int(score_match.group(3))
+                            teams_data.append((team_name, score, wickets))
+                    
+                    if len(teams_data) >= 2:
+                        team1 = Team(
+                            name=teams_data[0][0],
+                            score=teams_data[0][1],
+                            wickets=teams_data[0][2]
+                        )
+                        
+                        team2 = Team(
+                            name=teams_data[1][0],
+                            score=teams_data[1][1],
+                            wickets=teams_data[1][2]
+                        )
+                        
+                        match = Match(
+                            match_id=f"cricbuzz_{hash(title) % 10000}",
+                            title=title,
+                            team1=team1,
+                            team2=team2,
+                            status=MatchStatus.LIVE,
+                            venue="Live - Cricbuzz",
+                            date=datetime.now().strftime("%d %b %Y, %I:%M %p"),
+                            format="Live Match"
+                        )
+                        
+                        matches.append(match)
+                        
+                except Exception as e:
+                    logger.warning(f"Error parsing individual Cricbuzz match: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error parsing Cricbuzz: {e}")
+        
+        return matches
+    
+    def _parse_bbc_cricket(self, html_content: str) -> List[Match]:
+        """Enhanced BBC Sport cricket page parser."""
+        matches = []
+        try:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Look for match containers with more specific patterns
             match_elements = soup.find_all(['div', 'article'], 
                 class_=re.compile(r'.*(?:fixture|match|score).*', re.I))
             
-            for element in match_elements[:3]:  # Max 3 matches
+            # Also look for elements containing live cricket indicators
+            live_elements = soup.find_all(text=re.compile(r'.*(?:live|cricket|vs).*', re.I))
+            
+            combined_elements = list(set([elem.parent for elem in live_elements if elem.parent] + match_elements))
+            
+            for element in combined_elements[:3]:  # Max 3 matches
                 match = self._extract_match_from_bbc(element)
                 if match:
                     matches.append(match)
@@ -493,7 +853,7 @@ class SimpleCricketScraper:
         try:
             # For sample matches, return enhanced details
             if "sample" in match_id or "ipl" in match_id or "test" in match_id or "odi" in match_id:
-                matches = self._create_sample_matches()
+                matches = self._create_minimal_sample_matches()
                 for match in matches:
                     if match.match_id == match_id:
                         # Add some dynamic updates for live matches
