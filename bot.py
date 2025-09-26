@@ -15,7 +15,7 @@ import fcntl
 import atexit
 import subprocess
 import psutil
-from typing import Optional, Dict, Set, Any, Union
+from typing import Optional, Dict, Set, Any, Union, List
 from datetime import datetime
 from cricket_scraper import get_live_matches, get_match_schedule, get_match_details
 
@@ -140,6 +140,10 @@ class SimpleCricketBot:
             await self.handle_live_matches(query)
         elif callback_data == "schedule":
             await self.handle_schedule(query)
+        elif callback_data.startswith("schedule_"):
+            await self.handle_schedule_with_options(query, callback_data)
+        elif callback_data.startswith("filter_"):
+            await self.handle_schedule_filter(query, callback_data)
         elif callback_data == "back_to_main":
             await self.handle_back_to_main(query)
         else:
@@ -173,49 +177,53 @@ class SimpleCricketBot:
             logger.info(f"👥 Added user {user_id} to live updates tracking ({len(self.live_users)} active users)")
 
     async def handle_schedule(self, query) -> None:
-        """Show upcoming matches schedule."""
-        await query.edit_message_text("📅 *Schedule*\n\n🔄 Loading...", parse_mode='Markdown')
+        """Show enhanced schedule menu with date range and filter options."""
+        welcome_text = (
+            "📅 *Cricket Schedule Centre* 📅\n\n"
+            "Choose your preferred time range and options:\n\n"
+            "🕐 **Quick Access:**\n"
+            "• Next 3 Days (Default)\n"
+            "• Next Week (7 Days)\n"
+            "• Next 2 Weeks (14 Days)\n"
+            "• Current Month\n\n"
+            "🎛️ **Advanced Filters:**\n"
+            "• Filter by Format (T20, ODI, Test)\n"
+            "• Filter by Teams\n"
+            "• Filter by Tournaments"
+        )
         
-        try:
-            upcoming_matches = await get_match_schedule(3)  # Next 3 days
-            
-            if upcoming_matches:
-                text = "📅 *Upcoming Cricket Matches*\n\n"
-                
-                for i, match in enumerate(upcoming_matches[:8]):  # Show max 8 matches
-                    text += f"🆚 **{match.team1.short_name} vs {match.team2.short_name}**\n"
-                    text += f"📍 {match.venue}\n"
-                    text += f"📅 {match.date}\n"
-                    text += f"🏏 {match.format}\n"
-                    
-                    if i < len(upcoming_matches[:8]) - 1:
-                        text += "\n" + "─" * 25 + "\n\n"
-                
-                if len(upcoming_matches) > 8:
-                    text += f"\n\n📊 *{len(upcoming_matches) - 8} more matches coming up*"
-                
-            else:
-                text = (
-                    "📅 *Schedule*\n\n"
-                    "🔍 No upcoming matches found.\n\n"
-                    "_Check back later!_"
-                )
-        
-        except Exception as e:
-            logger.error(f"Error fetching schedule: {e}")
-            text = (
-                "📅 *Schedule*\n\n"
-                "⚠️ Unable to fetch schedule.\n\n"
-                "_Please try again in a moment._"
-            )
-        
+        # Create enhanced keyboard with date range options
         keyboard = [
-            [InlineKeyboardButton("🔄 Refresh", callback_data="schedule")],
-            [InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")]
+            # First row: Quick date ranges
+            [
+                InlineKeyboardButton("📅 3 Days", callback_data="schedule_3_all_all_all"),
+                InlineKeyboardButton("📅 7 Days", callback_data="schedule_7_all_all_all")
+            ],
+            [
+                InlineKeyboardButton("📅 14 Days", callback_data="schedule_14_all_all_all"),
+                InlineKeyboardButton("📅 Month", callback_data="schedule_month_all_all_all")
+            ],
+            # Second row: Format filters (with 3 days default)
+            [
+                InlineKeyboardButton("🏏 T20 Only", callback_data="schedule_3_t20_all_all"),
+                InlineKeyboardButton("🏏 ODI Only", callback_data="schedule_3_odi_all_all")
+            ],
+            [
+                InlineKeyboardButton("🏏 Test Only", callback_data="schedule_3_test_all_all"),
+                InlineKeyboardButton("🎯 All Formats", callback_data="schedule_3_all_all_all")
+            ],
+            # Third row: Navigation
+            [
+                InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")
+            ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.edit_message_text(
+            welcome_text,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
 
     async def handle_back_to_main(self, query) -> None:
         """Return to main menu."""
@@ -242,6 +250,189 @@ class SimpleCricketBot:
             reply_markup=reply_markup
         )
     
+    
+    async def handle_schedule_with_options(self, query, callback_data: str) -> None:
+        """Handle schedule requests with specific options."""
+        # Parse callback data: schedule_days_format_team_tournament
+        parts = callback_data.split('_')
+        if len(parts) < 5:
+            await self.handle_schedule(query)
+            return
+        
+        days = parts[1]
+        match_format = parts[2] if parts[2] != 'all' else None
+        team_filter = parts[3] if parts[3] != 'all' else None
+        tournament_filter = parts[4] if parts[4] != 'all' else None
+        
+        # Show loading message
+        loading_text = f"📅 *Cricket Schedule*\n\n🔄 Loading {days} days schedule..."
+        if match_format:
+            loading_text += f"\n🏏 Format: {match_format.upper()}"
+        if team_filter:
+            loading_text += f"\n🏆 Team: {team_filter}"
+        if tournament_filter:
+            loading_text += f"\n🎯 Tournament: {tournament_filter}"
+        
+        await query.edit_message_text(loading_text, parse_mode='Markdown')
+        
+        try:
+            # Get matches with enhanced filtering
+            upcoming_matches = await get_match_schedule(
+                days=days,
+                match_format=match_format,
+                team_filter=team_filter,
+                tournament_filter=tournament_filter
+            )
+            
+            if upcoming_matches:
+                text = await self._format_enhanced_schedule(upcoming_matches, days, match_format, team_filter, tournament_filter)
+            else:
+                filter_desc = self._get_filter_description(days, match_format, team_filter, tournament_filter)
+                text = (
+                    f"📅 *Cricket Schedule ({filter_desc})*\n\n"
+                    "🔍 No matches found for your criteria.\n\n"
+                    "_Try adjusting your filters or check back later!_"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error fetching enhanced schedule: {e}")
+            text = (
+                "📅 *Cricket Schedule*\n\n"
+                "⚠️ Unable to fetch schedule.\n\n"
+                "_Please try again in a moment._"
+            )
+        
+        # Create enhanced navigation keyboard
+        keyboard = self._create_schedule_navigation_keyboard(days, match_format, team_filter, tournament_filter)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+    
+    async def handle_schedule_filter(self, query, callback_data: str) -> None:
+        """Handle schedule filter changes."""
+        # This can be extended for more complex filtering UI
+        await self.handle_schedule(query)
+    
+    async def _format_enhanced_schedule(self, matches: List, days: str, match_format: Optional[str] = None, team_filter: Optional[str] = None, tournament_filter: Optional[str] = None) -> str:
+        """Format matches with enhanced display including series context and detailed information."""
+        filter_desc = self._get_filter_description(days, match_format, team_filter, tournament_filter)
+        text = f"📅 *Cricket Schedule ({filter_desc})*\n\n"
+        
+        # Group matches by series/tournament for better organization
+        series_groups = {}
+        for match in matches:
+            series_key = match.series_name or match.tournament_name or "Other Matches"
+            if series_key not in series_groups:
+                series_groups[series_key] = []
+            series_groups[series_key].append(match)
+        
+        match_count = 0
+        for series_name, series_matches in series_groups.items():
+            if match_count >= 12:  # Limit total matches displayed
+                remaining = len(matches) - match_count
+                text += f"\n📊 *...and {remaining} more matches*\n"
+                break
+            
+            # Add series header if there are multiple series
+            if len(series_groups) > 1 and series_name != "Other Matches":
+                text += f"🏆 **{series_name}**\n"
+                text += "─" * (len(series_name) + 4) + "\n\n"
+            
+            for i, match in enumerate(series_matches[:4]):  # Max 4 matches per series
+                match_count += 1
+                
+                # Use enhanced formatting with detailed information
+                match_text = match.to_telegram_format(include_enhanced_details=True)
+                
+                # Add match number if available
+                if match.match_number:
+                    text += f"#{match_count} {match_text}"
+                else:
+                    text += f"#{match_count} {match_text}"
+                
+                # Add separator between matches (but not after last match in series)
+                if i < len(series_matches[:4]) - 1:
+                    text += "\n" + "─" * 35 + "\n\n"
+                elif len(series_groups) > 1:  # Add separator between series
+                    text += "\n" + "═" * 40 + "\n\n"
+                else:
+                    text += "\n"
+        
+        # Add summary information
+        total_matches = len(matches)
+        text += f"\n📊 **Summary:** {total_matches} matches found"
+        if match_format:
+            format_count = len([m for m in matches if match_format.lower() in m.format.lower()])
+            text += f" | {format_count} {match_format.upper()} matches"
+        
+        text += "\n🔄 _Data cached for 5 minutes_"
+        
+        return text
+    
+    def _get_filter_description(self, days: str, match_format: Optional[str] = None, team_filter: Optional[str] = None, tournament_filter: Optional[str] = None) -> str:
+        """Generate a human-readable description of current filters."""
+        desc_parts = []
+        
+        # Date range
+        if days == 'month':
+            desc_parts.append("Next Month")
+        else:
+            desc_parts.append(f"Next {days} Days")
+        
+        # Filters
+        if match_format:
+            desc_parts.append(f"{match_format.upper()}")
+        if team_filter:
+            desc_parts.append(f"Team: {team_filter}")
+        if tournament_filter:
+            desc_parts.append(f"Tournament: {tournament_filter}")
+        
+        return " | ".join(desc_parts)
+    
+    def _create_schedule_navigation_keyboard(self, current_days: str, current_format: Optional[str] = None, current_team: Optional[str] = None, current_tournament: Optional[str] = None) -> List[List]:
+        """Create navigation keyboard for schedule with quick filter options."""
+        keyboard = []
+        
+        # Date range row (show different options than current)
+        date_row = []
+        if current_days != '3':
+            date_row.append(InlineKeyboardButton("📅 3D", callback_data="schedule_3_all_all_all"))
+        if current_days != '7':
+            date_row.append(InlineKeyboardButton("📅 7D", callback_data="schedule_7_all_all_all"))
+        if current_days != '14':
+            date_row.append(InlineKeyboardButton("📅 14D", callback_data="schedule_14_all_all_all"))
+        if current_days != 'month':
+            date_row.append(InlineKeyboardButton("📅 Month", callback_data="schedule_month_all_all_all"))
+        
+        if date_row:
+            keyboard.append(date_row)
+        
+        # Format filter row
+        format_row = []
+        format_base = f"schedule_{current_days}_"
+        if current_format != 't20':
+            format_row.append(InlineKeyboardButton("🏏 T20", callback_data=f"{format_base}t20_all_all"))
+        if current_format != 'odi':
+            format_row.append(InlineKeyboardButton("🏏 ODI", callback_data=f"{format_base}odi_all_all"))
+        if current_format != 'test':
+            format_row.append(InlineKeyboardButton("🏏 Test", callback_data=f"{format_base}test_all_all"))
+        if current_format is not None:
+            format_row.append(InlineKeyboardButton("🎯 All", callback_data=f"{format_base}all_all_all"))
+        
+        if format_row:
+            keyboard.append(format_row)
+        
+        # Action buttons
+        keyboard.append([
+            InlineKeyboardButton("🔄 Refresh", callback_data=f"schedule_{current_days}_{current_format or 'all'}_{current_team or 'all'}_{current_tournament or 'all'}"),
+            InlineKeyboardButton("📅 Schedule Menu", callback_data="schedule")
+        ])
+        
+        keyboard.append([
+            InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")
+        ])
+        
+        return keyboard
     
     async def format_live_matches_text(self) -> str:
         """Format the live matches text for display with enhanced formatting."""
@@ -350,6 +541,16 @@ class SimpleCricketBot:
             logger.error(f"💥 CONFLICT: {context.error} - Bot will self-terminate")
             # Just log and let the process exit naturally - no cascading stop calls
             os._exit(1)
+        elif isinstance(context.error, (NetworkError, TelegramError)):
+            logger.warning(f"⚠️ Network/Telegram error: {context.error}")
+        else:
+            logger.error(f"❌ Unexpected error: {context.error}")
+    
+    async def simplified_error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Simplified error handler that doesn't terminate on conflicts."""
+        if isinstance(context.error, Conflict):
+            logger.warning(f"⚠️ CONFLICT: {context.error} - Ignoring and continuing")
+            # Don't terminate - let the retry logic handle it
         elif isinstance(context.error, (NetworkError, TelegramError)):
             logger.warning(f"⚠️ Network/Telegram error: {context.error}")
         else:
@@ -631,12 +832,27 @@ async def async_main():
         process_lock.release()
         logger.info("🔒 Process lock released")
 
+async def simple_start_bot(token: str) -> bool:
+    """Simple bot startup with minimal conflict resolution."""
+    try:
+        # Simple webhook cleanup
+        bot = Bot(token=token)
+        await bot.initialize()
+        
+        # Just delete webhook and drop pending updates
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("🧹 Deleted webhook and dropped pending updates")
+        
+        await bot.shutdown()
+        await asyncio.sleep(2)  # Brief wait for Telegram state to update
+        
+        return True
+    except Exception as e:
+        logger.warning(f"⚠️ Simple cleanup failed: {e}")
+        return False
+
 def main():
-    """Main function to run the bot with aggressive conflict prevention and webhook fallback."""
-    # Set up signal handlers for graceful shutdown
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-    
+    """Simplified main function with minimal conflict resolution."""
     # Get token from environment
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     if not token:
@@ -651,85 +867,89 @@ def main():
     # Register cleanup function to run on exit
     atexit.register(process_lock.release)
     
-    try:
-        logger.info("🚀 Starting Enhanced Cricket Bot with maximum conflict prevention...")
-        
-        # Kill any existing processes first with wider search
-        kill_existing_processes()
-        
-        # Wait after killing processes
-        logger.info("⏳ Waiting 10 seconds after process termination...")
-        time.sleep(10)
-        
-        # Aggressive cleanup to prevent conflicts
-        logger.info("🔄 Running ultra-aggressive cleanup with extended waits...")
-        cleanup_success = asyncio.run(aggressive_cleanup_bot_state(token, max_retries=5))
-        if not cleanup_success:
-            logger.error("❌ Cleanup failed, waiting 20 seconds before continuing...")
-            time.sleep(20)
-        
-        # Create bot instance
-        bot = SimpleCricketBot(token)
-        
-        # Build application with enhanced settings
-        application = (
-            Application.builder()
-            .token(token)
-            .concurrent_updates(True)
-            .build()
-        )
-        
-        # Store references for cross-access
-        bot.application = application
-        bot.bot_instance = application.bot
-        
-        # Add handlers
-        application.add_handler(CommandHandler("start", bot.start_command))
-        application.add_handler(CallbackQueryHandler(bot.button_callback))
-        
-        # Add simple error handler (no cascading failures)
-        application.add_error_handler(bot.simple_error_handler)
-        logger.info("🛡️ Added simple error handler")
-        
-        # Set up automatic live updates
-        if application.job_queue:
-            application.job_queue.run_repeating(
-                bot.update_all_live_users,
-                interval=10,
-                first=8
-            )
-            logger.info("🔄 Started automatic live updates (10 second interval)")
-        else:
-            logger.warning("⚠️ Job queue not available, automatic updates disabled")
-        
-        # Since conflicts are resolved, use polling mode for full functionality
-        logger.info("🚀 Starting polling mode - conflicts have been resolved!")
-        logger.info("✅ Beginning stable polling with optimized settings...")
-        
-        # Start polling with optimized settings (conflicts are now resolved)
-        application.run_polling(
-            poll_interval=2.0,  # Smooth polling interval
-            timeout=20,  # Reasonable timeout
-            bootstrap_retries=3,  # Some retries for resilience
-            drop_pending_updates=True,  # Always drop pending updates
-            allowed_updates=None  # Accept all update types
-        )
-        
-        logger.info("✅ Bot started successfully and running stably!")
-            
-    except KeyboardInterrupt:
-        logger.info("🛑 Bot stopped by user")
-    except Exception as e:
-        logger.error(f"❌ Bot error: {e}")
-        # Try to clean up on error
+    max_retries = 3
+    retry_delay = 5
+    
+    for attempt in range(max_retries):
         try:
-            asyncio.run(aggressive_cleanup_bot_state(token))
-        except Exception as cleanup_error:
-            logger.error(f"❌ Error during cleanup: {cleanup_error}")
-    finally:
-        # Always release the process lock
-        process_lock.release()
-        logger.info("🔒 Process lock released on exit")
+            logger.info(f"🚀 Starting Cricket Bot (attempt {attempt + 1}/{max_retries})...")
+            
+            # Simple cleanup on first attempt only
+            if attempt == 0:
+                asyncio.run(simple_start_bot(token))
+            
+            # Create bot instance
+            bot = SimpleCricketBot(token)
+            
+            # Build application with simple settings
+            application = (
+                Application.builder()
+                .token(token)
+                .build()
+            )
+            
+            # Store references for cross-access
+            bot.application = application
+            bot.bot_instance = application.bot
+            
+            # Add handlers
+            application.add_handler(CommandHandler("start", bot.start_command))
+            application.add_handler(CallbackQueryHandler(bot.button_callback))
+            
+            # Add simplified error handler that doesn't self-terminate
+            application.add_error_handler(bot.simplified_error_handler)
+            logger.info("🛡️ Added simplified error handler")
+            
+            # Set up automatic live updates
+            if application.job_queue:
+                application.job_queue.run_repeating(
+                    bot.update_all_live_users,
+                    interval=10,
+                    first=8
+                )
+                logger.info("🔄 Started automatic live updates (10 second interval)")
+            
+            # Start polling with conflict-resistant settings
+            logger.info("🚀 Starting polling with conflict resolution...")
+            
+            application.run_polling(
+                poll_interval=1.0,  # Faster polling
+                timeout=10,  # Shorter timeout to reduce conflicts
+                bootstrap_retries=1,  # Minimal retries
+                drop_pending_updates=True,  # Always drop pending updates
+                allowed_updates=None,  # Accept all update types
+                stop_signals=None  # Handle our own signals
+            )
+            
+            logger.info("✅ Bot started successfully and running!")
+            break  # Success - exit retry loop
+            
+        except Conflict as e:
+            logger.warning(f"⚠️ Conflict on attempt {attempt + 1}: {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"⏳ Waiting {retry_delay} seconds before retry...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                logger.error("❌ All retry attempts failed with conflicts")
+                break
+                
+        except KeyboardInterrupt:
+            logger.info("🛑 Bot stopped by user")
+            break
+            
+        except Exception as e:
+            logger.error(f"❌ Bot error on attempt {attempt + 1}: {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"⏳ Waiting {retry_delay} seconds before retry...")
+                time.sleep(retry_delay)
+            else:
+                logger.error("❌ All retry attempts failed")
+                break
+    
+    # Always release the process lock
+    process_lock.release()
+    logger.info("🔒 Process lock released on exit")
 
 if __name__ == '__main__':
     main()

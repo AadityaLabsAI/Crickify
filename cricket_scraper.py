@@ -79,8 +79,18 @@ class Match:
     current_partnership: str = ""
     recent_overs: List[str] = field(default_factory=list)
     commentary: List[Commentary] = field(default_factory=list)
+    # Enhanced fields for schedule
+    series_name: str = ""
+    tournament_name: str = ""
+    match_number: str = ""
+    weather: str = ""
+    timezone: str = ""
+    match_type: str = ""  # International, Domestic, League, etc.
+    start_time: str = ""
+    broadcasters: List[str] = field(default_factory=list)
+    match_status_detail: str = ""  # More detailed status
     
-    def to_telegram_format(self, include_commentary: bool = False) -> str:
+    def to_telegram_format(self, include_commentary: bool = False, include_enhanced_details: bool = False) -> str:
         """Format match info for Telegram display."""
         status_emoji = {
             MatchStatus.LIVE: "🔴",
@@ -89,8 +99,34 @@ class Match:
         }.get(self.status, "📊")
         
         result = f"{status_emoji} **{self.title}**\n"
-        result += f"📍 {self.venue} | 📅 {self.date}\n"
-        result += f"🏏 Format: {self.format}\n\n"
+        
+        # Add series/tournament info if available
+        if include_enhanced_details and (self.series_name or self.tournament_name):
+            if self.series_name:
+                result += f"🏆 Series: {self.series_name}\n"
+            if self.tournament_name:
+                result += f"🎯 Tournament: {self.tournament_name}\n"
+            if self.match_number:
+                result += f"#️⃣ Match: {self.match_number}\n"
+        
+        result += f"📍 {self.venue}"
+        if include_enhanced_details and self.timezone:
+            result += f" ({self.timezone})"
+        result += f" | 📅 {self.date}\n"
+        
+        if include_enhanced_details and self.start_time:
+            result += f"🕐 Start Time: {self.start_time}\n"
+        
+        result += f"🏏 Format: {self.format}"
+        if include_enhanced_details and self.match_type:
+            result += f" ({self.match_type})"
+        result += "\n"
+        
+        # Add weather info if available
+        if include_enhanced_details and self.weather:
+            result += f"🌤️ Weather: {self.weather}\n"
+        
+        result += "\n"
         
         if self.status == MatchStatus.LIVE:
             result += f"{self.team1.to_telegram_format()}\n"
@@ -108,6 +144,8 @@ class Match:
         
         elif self.status == MatchStatus.UPCOMING:
             result += f"🆚 {self.team1.short_name} vs {self.team2.short_name}\n"
+            if self.match_status_detail:
+                result += f"ℹ️ Status: {self.match_status_detail}\n"
             if self.toss:
                 result += f"🪙 Toss: {self.toss}\n"
         
@@ -115,6 +153,12 @@ class Match:
             result += f"{self.team1.to_telegram_format()}\n"
             result += f"{self.team2.to_telegram_format()}\n"
             result += f"🏆 Match Completed\n"
+            if self.match_status_detail:
+                result += f"ℹ️ Result: {self.match_status_detail}\n"
+        
+        # Add broadcasters info if available
+        if include_enhanced_details and self.broadcasters:
+            result += f"📺 TV: {', '.join(self.broadcasters[:3])}\n"
         
         # Add recent commentary if requested
         if include_commentary and self.commentary:
@@ -134,6 +178,8 @@ class RealCricketScraper:
         self.rate_limit_delay = 2.0  # 2 seconds between requests for respectful scraping
         self.match_details_cache = {}  # Cache for detailed match information
         self.cache_duration = 12  # Cache duration in seconds - used for detail page throttling
+        self.schedule_cache = {}  # Cache for schedule data
+        self.schedule_cache_duration = 300  # 5 minutes for schedule cache
         
         # Free cricket data sources - no API keys needed
         self.cricbuzz_base_url = "https://www.cricbuzz.com"
@@ -603,6 +649,23 @@ class RealCricketScraper:
             'timestamp': time.time()
         }
     
+    def _get_cached_schedule(self, cache_key: str) -> Optional[List[Match]]:
+        """Get schedule from cache if valid."""
+        if cache_key not in self.schedule_cache:
+            return None
+        
+        cache_time = self.schedule_cache[cache_key].get('timestamp', 0)
+        if (time.time() - cache_time) < self.schedule_cache_duration:
+            return self.schedule_cache[cache_key]['matches']
+        return None
+    
+    def _cache_schedule(self, cache_key: str, matches: List[Match]) -> None:
+        """Cache schedule data."""
+        self.schedule_cache[cache_key] = {
+            'matches': matches,
+            'timestamp': time.time()
+        }
+    
     async def get_live_matches(self) -> List[Match]:
         """Get current live cricket matches with detailed enrichment from multiple sources."""
         logger.info("🔍 Starting real cricket data fetch with detail enrichment...")
@@ -690,15 +753,38 @@ class RealCricketScraper:
         
         return [fallback_match]
 
-    async def get_match_schedule(self, days: int = 3) -> List[Match]:
-        """Get upcoming cricket matches for the next few days."""
+    async def get_match_schedule(self, days: Union[int, str] = 3, match_format: Optional[str] = None, team_filter: Optional[str] = None, tournament_filter: Optional[str] = None) -> List[Match]:
+        """Get upcoming cricket matches with enhanced filtering and caching.
+        
+        Args:
+            days: Number of days to fetch (3, 7, 14, or 'month' for current month)
+            match_format: Filter by format (T20, ODI, Test, etc.)
+            team_filter: Filter by team name
+            tournament_filter: Filter by tournament/series name
+        """
+        cache_key = f"schedule_{days}_{match_format}_{team_filter}_{tournament_filter}"
+        
+        # Check cache first
+        cached_matches = self._get_cached_schedule(cache_key)
+        if cached_matches:
+            logger.info(f"🗄️ Returning cached schedule data ({len(cached_matches)} matches)")
+            return cached_matches
+        
         logger.info(f"📅 Fetching cricket schedule for next {days} days...")
         all_matches = []
         
-        # Try multiple Cricbuzz schedule URLs
+        # Determine date range
+        if days == 'month':
+            target_days = 30  # Current month approximation
+        else:
+            target_days = int(days)
+        
+        # Try multiple Cricbuzz schedule URLs with enhanced parsing
         schedule_urls = [
             f"{self.cricbuzz_base_url}/cricket-schedule/upcomingmatches",
             f"{self.cricbuzz_base_url}/cricket-schedule",
+            f"{self.cricbuzz_base_url}/cricket-schedule/international",
+            f"{self.cricbuzz_base_url}/cricket-schedule/domestic",
             f"{self.cricbuzz_base_url}/cricket-match/live-scores"  # Fallback to live scores
         ]
         
@@ -706,7 +792,7 @@ class RealCricketScraper:
             try:
                 html = await self._fetch_url(schedule_url)
                 if html:
-                    scheduled_matches = self._parse_cricbuzz_schedule(html, days)
+                    scheduled_matches = self._parse_cricbuzz_schedule_enhanced(html, target_days)
                     if scheduled_matches:
                         all_matches.extend(scheduled_matches)
                         logger.info(f"✅ Found {len(scheduled_matches)} scheduled matches from {schedule_url}")
@@ -719,66 +805,287 @@ class RealCricketScraper:
                 logger.warning(f"❌ Schedule scraping failed for {schedule_url}: {e}")
                 continue
         
-        return all_matches[:10]  # Return max 10 upcoming matches
+        # Apply filters
+        filtered_matches = self._apply_schedule_filters(all_matches, match_format, team_filter, tournament_filter)
+        
+        # Cache the results
+        self._cache_schedule(cache_key, filtered_matches)
+        
+        return filtered_matches[:20]  # Return max 20 upcoming matches
     
-    def _parse_cricbuzz_schedule(self, html: str, days: int) -> List[Match]:
-        """Parse upcoming matches from Cricbuzz schedule."""
+    def _parse_cricbuzz_schedule_enhanced(self, html: str, days: int) -> List[Match]:
+        """Parse upcoming matches from Cricbuzz schedule with enhanced data extraction."""
         matches = []
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Look for schedule match elements
-            schedule_items = soup.find_all('div', attrs={'class': ['cb-mtch-lst', 'cb-schedule-list-item']})
+            # Look for schedule match elements with broader selectors
+            schedule_selectors = [
+                'div.cb-mtch-lst',
+                'div.cb-schedule-list-item', 
+                'div.cb-schdl',
+                'div.cb-series-lst',
+                'div.cb-match-card'
+            ]
             
-            for item in schedule_items[:10]:  # Limit to 10 matches
+            schedule_items = []
+            for selector in schedule_selectors:
+                items = soup.select(selector)
+                if items:
+                    schedule_items.extend(items)
+                    break
+            
+            for i, item in enumerate(schedule_items[:15]):  # Limit to 15 matches for better data
                 try:
-                    # Extract match details
-                    title_elem = None
-                    if isinstance(item, Tag):
-                        for tag_name in ['h3', 'a', 'span']:
-                            title_elem = item.find(tag_name)
-                            if title_elem:
-                                break
-                    match_title = self._safe_text(title_elem) if title_elem else ""
+                    # Extract match title with multiple strategies
+                    match_title = self._extract_match_title(item)
                     
-                    # Extract team names
-                    team_elements = item.find_all('div', attrs={'class': ['cb-ovr-flo', 'team-name']}) if isinstance(item, Tag) else []
-                    teams_data = []
-                    
-                    for team_elem in team_elements[:2]:
-                        team_name = self._safe_text(team_elem)
-                        if team_name and len(team_name) > 1:
-                            team = Team(name=team_name, short_name=team_name[:3].upper())
-                            teams_data.append(team)
+                    # Extract team names with enhanced parsing
+                    teams_data = self._extract_teams_enhanced(item)
                     
                     if len(teams_data) >= 2 and match_title:
-                        # Extract date and venue
-                        date_elem = item.find('div', attrs={'class': 'cb-date'}) if isinstance(item, Tag) else None
-                        venue_elem = item.find('div', attrs={'class': 'cb-venue'}) if isinstance(item, Tag) else None
+                        # Extract enhanced match details
+                        match_details = self._extract_enhanced_match_details(item)
                         
-                        match_date = self._safe_text(date_elem) if date_elem else "TBD"
-                        venue = self._safe_text(venue_elem) if venue_elem else "Venue TBD"
+                        # Extract format with better detection
+                        match_format = self._extract_match_format(item, match_title)
+                        
+                        # Extract series/tournament information
+                        series_info = self._extract_series_tournament_info(item, html)
                         
                         match = Match(
-                            match_id=f"schedule_{len(matches) + 1}",
+                            match_id=f"schedule_{i + 1}_{int(time.time())}",
                             title=match_title,
                             team1=teams_data[0],
                             team2=teams_data[1],
                             status=MatchStatus.UPCOMING,
-                            venue=venue,
-                            date=match_date,
-                            format="Scheduled Match"
+                            venue=match_details.get('venue', 'Venue TBD'),
+                            date=match_details.get('date', 'TBD'),
+                            format=match_format,
+                            series_name=series_info.get('series', ''),
+                            tournament_name=series_info.get('tournament', ''),
+                            match_number=match_details.get('match_number', ''),
+                            start_time=match_details.get('start_time', ''),
+                            timezone=match_details.get('timezone', 'Local Time'),
+                            match_type=match_details.get('match_type', ''),
+                            weather=match_details.get('weather', ''),
+                            match_status_detail=match_details.get('status_detail', '')
                         )
                         matches.append(match)
                         
                 except Exception as e:
-                    logger.warning(f"⚠️ Error parsing schedule item: {e}")
+                    logger.warning(f"⚠️ Error parsing schedule item {i}: {e}")
                     continue
             
         except Exception as e:
             logger.error(f"❌ Error parsing schedule HTML: {e}")
         
         return matches
+    
+    def _extract_match_title(self, item) -> str:
+        """Extract match title with multiple strategies."""
+        if not isinstance(item, Tag):
+            return ""
+        
+        # Try multiple selectors for match title
+        title_selectors = [
+            'h3', 'h2', 'h4',
+            '.cb-series-name',
+            '.cb-mtch-hdr',
+            '.cb-lv-scrs-mtch-hdr',
+            'a[href*="live-cricket"]',
+            '.match-title'
+        ]
+        
+        for selector in title_selectors:
+            title_elem = item.select_one(selector)
+            if title_elem:
+                title = self._safe_text(title_elem)
+                if title and len(title) > 3:
+                    return title
+        
+        return "Cricket Match"
+    
+    def _extract_teams_enhanced(self, item) -> List[Team]:
+        """Extract team information with enhanced parsing."""
+        teams_data = []
+        if not isinstance(item, Tag):
+            return teams_data
+        
+        # Try multiple selectors for team names
+        team_selectors = [
+            '.cb-ovr-flo',
+            '.team-name',
+            '.cb-team-name',
+            '.cb-hmscg-tm-nm'
+        ]
+        
+        for selector in team_selectors:
+            team_elements = item.select(selector)
+            if len(team_elements) >= 2:
+                for team_elem in team_elements[:2]:
+                    team_name = self._safe_text(team_elem)
+                    if team_name and len(team_name) > 1:
+                        # Clean team name
+                        team_name = re.sub(r'[^a-zA-Z\s]', '', team_name).strip()
+                        if team_name:
+                            team = Team(
+                                name=team_name,
+                                short_name=self._generate_short_name(team_name)
+                            )
+                            teams_data.append(team)
+                break
+        
+        return teams_data
+    
+    def _generate_short_name(self, team_name: str) -> str:
+        """Generate a better short name for teams."""
+        # Special cases for known teams
+        team_short_names = {
+            'india': 'IND', 'australia': 'AUS', 'england': 'ENG',
+            'pakistan': 'PAK', 'south africa': 'SA', 'new zealand': 'NZ',
+            'west indies': 'WI', 'sri lanka': 'SL', 'bangladesh': 'BAN',
+            'afghanistan': 'AFG', 'ireland': 'IRE', 'zimbabwe': 'ZIM',
+            'netherlands': 'NED', 'scotland': 'SCO'
+        }
+        
+        name_lower = team_name.lower()
+        for full_name, short in team_short_names.items():
+            if full_name in name_lower:
+                return short
+        
+        # Fallback to first 3 characters
+        return team_name[:3].upper()
+    
+    def _extract_enhanced_match_details(self, item) -> Dict[str, str]:
+        """Extract detailed match information."""
+        details = {}
+        if not isinstance(item, Tag):
+            return details
+        
+        # Extract venue
+        venue_selectors = ['.cb-venue', '.venue', '.cb-mtch-info-itm']
+        for selector in venue_selectors:
+            venue_elem = item.select_one(selector)
+            if venue_elem:
+                details['venue'] = self._safe_text(venue_elem)
+                break
+        
+        # Extract date and time
+        date_selectors = ['.cb-date', '.date', '.cb-mtch-tm']
+        for selector in date_selectors:
+            date_elem = item.select_one(selector)
+            if date_elem:
+                date_text = self._safe_text(date_elem)
+                if date_text:
+                    details['date'] = date_text
+                    # Try to extract time from date text
+                    time_match = re.search(r'(\d{1,2}:\d{2})', date_text)
+                    if time_match:
+                        details['start_time'] = time_match.group(1)
+                break
+        
+        # Extract match number if available
+        match_num_pattern = re.search(r'(\d+)(st|nd|rd|th)\s*(T20|ODI|Test|Match)', item.get_text(), re.I)
+        if match_num_pattern:
+            details['match_number'] = f"{match_num_pattern.group(1)}{match_num_pattern.group(2)} {match_num_pattern.group(3)}"
+        
+        return details
+    
+    def _extract_match_format(self, item, title: str) -> str:
+        """Extract match format with better detection."""
+        text_content = item.get_text() if isinstance(item, Tag) else ""
+        combined_text = f"{title} {text_content}".lower()
+        
+        # Format detection patterns
+        format_patterns = [
+            (r't20i?\b', 'T20I'),
+            (r'twenty20', 'T20'),
+            (r'\bodi\b', 'ODI'),
+            (r'one.?day', 'ODI'),
+            (r'\btest\b', 'Test'),
+            (r't10\b', 'T10'),
+            (r'hundred', 'The Hundred'),
+            (r'ipl', 'IPL T20'),
+            (r'bbl', 'BBL T20'),
+            (r'psl', 'PSL T20'),
+            (r'cpl', 'CPL T20')
+        ]
+        
+        for pattern, format_name in format_patterns:
+            if re.search(pattern, combined_text):
+                return format_name
+        
+        return "Cricket Match"
+    
+    def _extract_series_tournament_info(self, item, full_html: str) -> Dict[str, str]:
+        """Extract series and tournament information."""
+        info = {}
+        
+        # Look for series info in the item
+        if isinstance(item, Tag):
+            series_selectors = ['.cb-series-name', '.series-name', '.tournament-name']
+            for selector in series_selectors:
+                series_elem = item.select_one(selector)
+                if series_elem:
+                    series_text = self._safe_text(series_elem)
+                    if series_text:
+                        info['series'] = series_text
+                        break
+        
+        # Try to extract from surrounding context in full HTML
+        item_text = item.get_text() if isinstance(item, Tag) else ""
+        
+        # Common tournament patterns
+        tournament_patterns = [
+            r'(\b\w+\s+World\s+Cup\b)',
+            r'(\b\w+\s+Trophy\b)',
+            r'(\b\w+\s+Series\b)',
+            r'(\b\w+\s+Premier\s+League\b)',
+            r'(\bIPL\b)',
+            r'(\bBBL\b)',
+            r'(\bPSL\b)',
+            r'(\bCPL\b)'
+        ]
+        
+        for pattern in tournament_patterns:
+            match = re.search(pattern, item_text, re.I)
+            if match:
+                info['tournament'] = match.group(1)
+                break
+        
+        return info
+    
+    def _apply_schedule_filters(self, matches: List[Match], match_format: Optional[str] = None, team_filter: Optional[str] = None, tournament_filter: Optional[str] = None) -> List[Match]:
+        """Apply filters to the schedule matches."""
+        filtered_matches = matches
+        
+        # Filter by format
+        if match_format and match_format.lower() != 'all':
+            filtered_matches = [
+                match for match in filtered_matches 
+                if match_format.lower() in match.format.lower()
+            ]
+        
+        # Filter by team
+        if team_filter and team_filter.lower() != 'all':
+            filtered_matches = [
+                match for match in filtered_matches 
+                if (team_filter.lower() in match.team1.name.lower() or 
+                    team_filter.lower() in match.team2.name.lower() or
+                    team_filter.lower() in match.team1.short_name.lower() or
+                    team_filter.lower() in match.team2.short_name.lower())
+            ]
+        
+        # Filter by tournament
+        if tournament_filter and tournament_filter.lower() != 'all':
+            filtered_matches = [
+                match for match in filtered_matches 
+                if (tournament_filter.lower() in match.series_name.lower() or
+                    tournament_filter.lower() in match.tournament_name.lower())
+            ]
+        
+        return filtered_matches
 
 # Global scraper instance
 _scraper_instance = None
@@ -796,11 +1103,11 @@ async def get_live_matches() -> List[Match]:
         # Return empty list on error
         return []
 
-async def get_match_schedule(days: int = 3) -> List[Match]:
+async def get_match_schedule(days: Union[int, str] = 3, match_format: Optional[str] = None, team_filter: Optional[str] = None, tournament_filter: Optional[str] = None) -> List[Match]:
     """Public function to get cricket match schedule."""
     try:
         async with RealCricketScraper() as scraper:
-            matches = await scraper.get_match_schedule(days)
+            matches = await scraper.get_match_schedule(days, match_format, team_filter, tournament_filter)
             return matches
     except Exception as e:
         logger.error(f"❌ Error in get_match_schedule: {e}")
