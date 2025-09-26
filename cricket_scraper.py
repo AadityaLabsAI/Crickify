@@ -132,6 +132,8 @@ class RealCricketScraper:
         self.session = None
         self.last_request_time = {}
         self.rate_limit_delay = 2.0  # 2 seconds between requests for respectful scraping
+        self.match_details_cache = {}  # Cache for detailed match information
+        self.cache_duration = 12  # Cache duration in seconds - used for detail page throttling
         
         # Free cricket data sources - no API keys needed
         self.cricbuzz_base_url = "https://www.cricbuzz.com"
@@ -248,15 +250,21 @@ class RealCricketScraper:
                         venue_elem = card.find('div', attrs={'class': 'cb-mtch-info-itm'}) if isinstance(card, Tag) else None
                         venue = self._safe_text(venue_elem) if venue_elem else "Unknown Venue"
                         
+                        # Extract match format if available
+                        format_text = "Cricket Match"
+                        format_indicators = card.find_all(text=re.compile(r'T20|ODI|Test|T10', re.I)) if isinstance(card, Tag) else []
+                        if format_indicators:
+                            format_text = str(format_indicators[0]).strip()
+                        
                         match = Match(
-                            match_id=f"cb_{len(matches) + 1}",
+                            match_id=f"cb_{len(matches) + 1}_{int(time.time())}",  # Unique ID with timestamp
                             title=match_title,
                             team1=teams_data[0],
                             team2=teams_data[1],
                             status=status,
                             venue=venue,
                             date=datetime.now().strftime("%d %b %Y, %I:%M %p"),
-                            format="Cricket Match"
+                            format=format_text
                         )
                         matches.append(match)
                         
@@ -381,9 +389,223 @@ class RealCricketScraper:
         
         return score, wickets, overs
     
+    async def get_match_details(self, match_id: str) -> Optional[Match]:
+        """Get detailed match information with enrichment from Cricbuzz detail pages."""
+        try:
+            # Check cache first
+            cached_match = self._get_cached_match(match_id)
+            if cached_match:
+                logger.debug(f"🗄️ Returning cached enriched details for match {match_id}")
+                return cached_match
+            
+            # If not in cache, fetch from live matches and enrich
+            live_matches = await self.get_live_matches()
+            for match in live_matches:
+                if match.match_id == match_id:
+                    # Enrich with detail page data
+                    enriched_match = await self._enrich_match_with_details(match)
+                    if enriched_match:
+                        # Cache the enriched match
+                        self._cache_match(match_id, enriched_match)
+                        return enriched_match
+                    return match
+            
+            logger.warning(f"⚠️ Match details not found for {match_id}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting match details for {match_id}: {e}")
+            return None
+    
+    async def _enrich_match_with_details(self, match: Match) -> Optional[Match]:
+        """Enrich a match with detailed information from Cricbuzz detail page."""
+        try:
+            logger.info(f"🔍 Enriching match {match.match_id} with Cricbuzz detail page data...")
+            
+            # Construct Cricbuzz detail page URL based on match title/teams
+            detail_urls = self._generate_detail_page_urls(match)
+            
+            for detail_url in detail_urls:
+                try:
+                    html = await self._fetch_url(detail_url)
+                    if html:
+                        enriched_data = self._parse_cricbuzz_match_details(html)
+                        if enriched_data:
+                            # Update match with enriched data
+                            match.toss = enriched_data.get('toss', match.toss)
+                            match.current_partnership = enriched_data.get('partnership', match.current_partnership)
+                            match.recent_overs = enriched_data.get('recent_overs', match.recent_overs)
+                            match.commentary = enriched_data.get('commentary', match.commentary)
+                            
+                            # Update team run rates if available
+                            if enriched_data.get('team1_rr'):
+                                match.team1.run_rate = enriched_data['team1_rr']
+                            if enriched_data.get('team2_rr'):
+                                match.team2.run_rate = enriched_data['team2_rr']
+                            
+                            logger.info(f"✅ Successfully enriched match {match.match_id} with detail page data")
+                            return match
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to enrich from {detail_url}: {e}")
+                    continue
+            
+            logger.info(f"ℹ️ No additional detail page data found for match {match.match_id}")
+            return match
+            
+        except Exception as e:
+            logger.error(f"❌ Error enriching match details: {e}")
+            return match
+    
+    def _generate_detail_page_urls(self, match: Match) -> List[str]:
+        """Generate possible Cricbuzz detail page URLs for a match."""
+        urls = []
+        
+        try:
+            # Generate URLs based on team names and match format
+            team1_clean = re.sub(r'[^a-zA-Z0-9]', '-', match.team1.short_name.lower())
+            team2_clean = re.sub(r'[^a-zA-Z0-9]', '-', match.team2.short_name.lower())
+            
+            # Common Cricbuzz URL patterns for live matches
+            base_patterns = [
+                f"{self.cricbuzz_base_url}/live-cricket-scores/{team1_clean}-vs-{team2_clean}",
+                f"{self.cricbuzz_base_url}/cricket-match/live-scores/{team1_clean}-vs-{team2_clean}",
+                f"{self.cricbuzz_base_url}/live-cricket-scorecard/{team1_clean}-vs-{team2_clean}"
+            ]
+            
+            urls.extend(base_patterns)
+            
+            # Also try the general live scores page which often has detailed info
+            urls.append(f"{self.cricbuzz_base_url}/cricket-match/live-scores")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error generating detail URLs: {e}")
+        
+        return urls[:3]  # Limit to 3 URLs to avoid excessive requests
+    
+    def _parse_cricbuzz_match_details(self, html: str) -> Dict[str, Any]:
+        """Parse detailed match information from Cricbuzz detail page HTML."""
+        details = {}
+        
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Extract toss information
+            toss_elements = soup.find_all(text=re.compile(r'toss', re.I))
+            for toss_text in toss_elements:
+                if isinstance(toss_text, str) and len(toss_text) < 200:
+                    toss_container = toss_text.parent if hasattr(toss_text, 'parent') else None
+                    if toss_container:
+                        full_toss = self._safe_text(toss_container)
+                        if full_toss and ('won' in full_toss.lower() or 'elected' in full_toss.lower()):
+                            details['toss'] = full_toss[:100]  # Limit length
+                            break
+            
+            # Extract current partnership information
+            partnership_keywords = ['partnership', 'stand', 'batting', 'current batsmen']
+            for keyword in partnership_keywords:
+                partnership_elements = soup.find_all(text=re.compile(keyword, re.I))
+                for p_text in partnership_elements:
+                    if isinstance(p_text, str):
+                        p_container = p_text.parent if hasattr(p_text, 'parent') else None
+                        if p_container:
+                            partnership_info = self._safe_text(p_container)
+                            if partnership_info and len(partnership_info) < 150:
+                                # Look for partnership patterns like "45 runs in 23 balls"
+                                if re.search(r'\d+.*runs.*\d+.*balls?', partnership_info.lower()):
+                                    details['partnership'] = partnership_info
+                                    break
+            
+            # Extract recent overs information
+            recent_overs = []
+            over_patterns = [r'(\d+\.\d+)\s*[\-:]?\s*(\d+)', r'Over\s*(\d+).*?(\d+\s*runs?)', r'(\d+)\s*runs?.*over']
+            
+            for pattern in over_patterns:
+                over_matches = re.finditer(pattern, html, re.I)
+                for match in list(over_matches)[:4]:  # Last 4 overs
+                    over_info = match.group(0)
+                    if len(over_info) < 50:
+                        recent_overs.append(over_info.strip())
+            
+            if recent_overs:
+                details['recent_overs'] = recent_overs[-4:]  # Keep last 4
+            
+            # Extract recent commentary
+            commentary_list = []
+            
+            # Look for commentary sections
+            commentary_containers = soup.find_all('div', attrs={'class': re.compile(r'commentary|ball.*by.*ball|live.*update', re.I)})
+            
+            for container in commentary_containers[:1]:  # Just first container to avoid too much data
+                commentary_items = container.find_all('div') if isinstance(container, Tag) else []
+                
+                for item in commentary_items[:5]:  # Max 5 recent commentaries
+                    comment_text = self._safe_text(item)
+                    if comment_text and 20 < len(comment_text) < 200:  # Reasonable length
+                        # Try to extract over and ball info
+                        over_match = re.search(r'(\d+)\.(\d+)', comment_text)
+                        if over_match:
+                            over_num = over_match.group(1)
+                            ball_num = over_match.group(2)
+                            
+                            # Determine if it's a wicket or boundary
+                            is_wicket = any(word in comment_text.lower() for word in ['out', 'wicket', 'caught', 'bowled', 'lbw'])
+                            is_boundary = any(word in comment_text.lower() for word in ['four', 'six', '4', '6', 'boundary'])
+                            
+                            commentary = Commentary(
+                                over=over_num,
+                                ball=ball_num,
+                                runs=0,  # Would need more parsing for exact runs
+                                description=comment_text[:150],
+                                timestamp=datetime.now().strftime("%H:%M"),
+                                is_wicket=is_wicket,
+                                is_boundary=is_boundary
+                            )
+                            commentary_list.append(commentary)
+            
+            if commentary_list:
+                details['commentary'] = commentary_list[-3:]  # Keep last 3
+            
+            # Extract run rates if available
+            rr_pattern = r'RR[:\s]*(\d+\.\d+)'
+            rr_matches = re.findall(rr_pattern, html, re.I)
+            if len(rr_matches) >= 2:
+                details['team1_rr'] = float(rr_matches[0])
+                details['team2_rr'] = float(rr_matches[1])
+            elif len(rr_matches) == 1:
+                details['team1_rr'] = float(rr_matches[0])
+            
+            logger.info(f"✅ Parsed detail page data: toss={bool(details.get('toss'))}, partnership={bool(details.get('partnership'))}, commentary={len(details.get('commentary', []))} items")
+            
+        except Exception as e:
+            logger.error(f"❌ Error parsing Cricbuzz detail page: {e}")
+        
+        return details
+    
+    def _is_cache_valid(self, cache_key: str) -> bool:
+        """Check if cached data is still valid."""
+        if cache_key not in self.match_details_cache:
+            return False
+        
+        cache_time = self.match_details_cache[cache_key].get('timestamp', 0)
+        return (time.time() - cache_time) < self.cache_duration
+    
+    def _get_cached_match(self, cache_key: str) -> Optional[Match]:
+        """Get match from cache if valid."""
+        if self._is_cache_valid(cache_key):
+            return self.match_details_cache[cache_key]['match']
+        return None
+    
+    def _cache_match(self, cache_key: str, match: Match) -> None:
+        """Cache match details."""
+        self.match_details_cache[cache_key] = {
+            'match': match,
+            'timestamp': time.time()
+        }
+    
     async def get_live_matches(self) -> List[Match]:
-        """Get current live cricket matches from multiple sources."""
-        logger.info("🔍 Starting real cricket data fetch from web scraping...")
+        """Get current live cricket matches with detailed enrichment from multiple sources."""
+        logger.info("🔍 Starting real cricket data fetch with detail enrichment...")
         all_matches = []
         
         # Try Cricbuzz first
@@ -394,8 +616,14 @@ class RealCricketScraper:
             if html:
                 cricbuzz_matches = self._parse_cricbuzz_live_matches(html)
                 if cricbuzz_matches:
-                    all_matches.extend(cricbuzz_matches)
-                    logger.info(f"✅ Cricbuzz: Found {len(cricbuzz_matches)} live matches")
+                    # Enrich matches with detail page data
+                    enriched_matches = []
+                    for match in cricbuzz_matches[:3]:  # Limit to 3 matches for detailed enrichment
+                        enriched_match = await self._enrich_match_with_details(match)
+                        enriched_matches.append(enriched_match if enriched_match else match)
+                    
+                    all_matches.extend(enriched_matches)
+                    logger.info(f"✅ Cricbuzz: Found and enriched {len(enriched_matches)} live matches")
                 else:
                     logger.warning("⚠️ Cricbuzz: No matches parsed from HTML")
             else:

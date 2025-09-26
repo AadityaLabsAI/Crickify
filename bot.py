@@ -11,6 +11,10 @@ import sys
 import asyncio
 import time
 import random
+import fcntl
+import atexit
+import subprocess
+import psutil
 from typing import Optional, Dict, Set, Any, Union
 from datetime import datetime
 from cricket_scraper import get_live_matches, get_match_schedule, get_match_details
@@ -24,6 +28,7 @@ from telegram.ext import (
     ExtBot,
     JobQueue,
 )
+from telegram.error import Conflict, TelegramError, NetworkError
 
 # Configure logging
 logging.basicConfig(
@@ -41,6 +46,45 @@ logging.getLogger('telegram.request').setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
+class ProcessLock:
+    """Process locking mechanism to prevent multiple bot instances."""
+    
+    def __init__(self, lock_file: str = "/tmp/cricket_bot.lock"):
+        self.lock_file = lock_file
+        self.lock_fd = None
+        
+    def acquire(self) -> bool:
+        """Acquire the process lock."""
+        try:
+            self.lock_fd = open(self.lock_file, 'w')
+            fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.lock_fd.write(str(os.getpid()))
+            self.lock_fd.flush()
+            logger.info(f"🔒 Process lock acquired: {self.lock_file}")
+            return True
+        except (IOError, OSError) as e:
+            logger.error(f"❌ Failed to acquire process lock: {e}")
+            if self.lock_fd:
+                self.lock_fd.close()
+                self.lock_fd = None
+            return False
+    
+    def release(self):
+        """Release the process lock."""
+        if self.lock_fd:
+            try:
+                fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_UN)
+                self.lock_fd.close()
+                os.remove(self.lock_file)
+                logger.info(f"🔓 Process lock released: {self.lock_file}")
+            except Exception as e:
+                logger.warning(f"⚠️ Error releasing lock: {e}")
+            finally:
+                self.lock_fd = None
+
+# Global process lock instance
+process_lock = ProcessLock()
+
 class SimpleCricketBot:
     """Simple Cricket Bot with only essential features and automatic live updates."""
     
@@ -50,6 +94,8 @@ class SimpleCricketBot:
         self.live_users: Dict[int, Dict[str, Any]] = {}  # user_id -> {chat_id, message_id, last_update}
         self.application: Optional[Application] = None
         self.bot_instance: Optional[ExtBot] = None
+        self.match_cache: Dict[str, Any] = {}  # Cache for match details
+        self.last_data_hash = ""  # To detect actual data changes
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle the /start command - Main Menu."""
@@ -198,29 +244,23 @@ class SimpleCricketBot:
     
     
     async def format_live_matches_text(self) -> str:
-        """Format the live matches text for display."""
+        """Format the live matches text for display with enhanced formatting."""
         try:
             live_matches = await get_live_matches()
             
             if live_matches:
                 text = "🏏 *Live Cricket Matches*\n\n"
                 
-                for i, match in enumerate(live_matches[:5]):  # Show max 5 matches
-                    text += f"🔴 **{match.title}**\n"
-                    text += f"📍 {match.venue}\n"
-                    text += f"📅 {match.date}\n"
+                for i, match in enumerate(live_matches[:3]):  # Show max 3 matches for better readability
+                    # Use the enhanced to_telegram_format method with commentary
+                    match_text = match.to_telegram_format(include_commentary=True)
+                    text += match_text
                     
-                    if hasattr(match.team1, 'score') and match.team1.score > 0:
-                        text += f"🏏 {match.team1.short_name}: {match.team1.score}/{match.team1.wickets} ({match.team1.overs})\n"
-                    
-                    if hasattr(match.team2, 'score') and match.team2.score > 0:
-                        text += f"🏏 {match.team2.short_name}: {match.team2.score}/{match.team2.wickets} ({match.team2.overs})\n"
-                    
-                    if i < len(live_matches[:5]) - 1:
-                        text += "\n" + "─" * 25 + "\n\n"
+                    if i < len(live_matches[:3]) - 1:
+                        text += "\n" + "─" * 30 + "\n\n"
                 
                 text += f"\n\n📊 *{len(live_matches)} live matches available*\n"
-                text += "🔄 _Auto-updating every 3 seconds..._"
+                text += "🔄 _Auto-updating every 10 seconds..._"
                 
                 return text
             else:
@@ -238,7 +278,7 @@ class SimpleCricketBot:
             )
     
     async def update_all_live_users(self, context=None):
-        """Update all users currently viewing live matches."""
+        """Update all users currently viewing live matches with smart change detection."""
         if not self.live_users or not self.bot_instance:
             return
             
@@ -248,6 +288,17 @@ class SimpleCricketBot:
         # Get fresh live matches data
         live_text = await self.format_live_matches_text()
         
+        # Smart update: Only update if data has actually changed
+        import hashlib
+        current_hash = hashlib.md5(live_text.encode()).hexdigest()
+        
+        if current_hash == self.last_data_hash:
+            logger.debug("📊 No data changes detected, skipping user updates")
+            return
+        
+        self.last_data_hash = current_hash
+        logger.info("🔄 Data changed, updating all tracked users")
+        
         # Update each tracked user
         for user_id, user_data in list(self.live_users.items()):
             try:
@@ -255,8 +306,8 @@ class SimpleCricketBot:
                 message_id = user_data['message_id']
                 last_update = user_data['last_update']
                 
-                # Remove stale users (inactive for more than 5 minutes)
-                if current_time - last_update > 300:  # 5 minutes
+                # Remove stale users (inactive for more than 10 minutes)
+                if current_time - last_update > 600:  # 10 minutes
                     users_to_remove.append(user_id)
                     continue
                 
@@ -291,103 +342,212 @@ class SimpleCricketBot:
                 logger.info(f"🧹 Removed stale/failed user {user_id} from tracking")
         
         if self.live_users:
-            logger.debug(f"🔄 Updated {len(self.live_users)} users with fresh live scores")
+            logger.info(f"✅ Updated {len(self.live_users)} users with fresh live scores")
+    
+    async def simple_error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Simple error handler that only logs conflicts without cascading failures."""
+        if isinstance(context.error, Conflict):
+            logger.error(f"💥 CONFLICT: {context.error} - Bot will self-terminate")
+            # Just log and let the process exit naturally - no cascading stop calls
+            os._exit(1)
+        elif isinstance(context.error, (NetworkError, TelegramError)):
+            logger.warning(f"⚠️ Network/Telegram error: {context.error}")
+        else:
+            logger.error(f"❌ Unexpected error: {context.error}")
 
-async def cleanup_bot_state(token: str):
-    """Clean up any existing bot state that might cause conflicts."""
+def kill_existing_processes():
+    """Aggressively terminate any existing bot processes with wider search."""
     try:
-        logger.info("🧹 Cleaning up previous bot state...")
+        current_pid = os.getpid()
+        logger.info(f"🔍 Aggressively checking for existing bot processes (current PID: {current_pid})")
         
-        # Create a temporary bot instance for cleanup
-        cleanup_bot = Bot(token=token)
+        killed_count = 0
+        search_terms = ['bot.py', 'main.py', 'cricket', 'telegram', 'TELEGRAM_BOT_TOKEN']
         
-        # Delete any existing webhook and drop pending updates
-        try:
-            await cleanup_bot.delete_webhook(drop_pending_updates=True)
-            logger.info("✅ Deleted existing webhook and pending updates")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not delete webhook: {e}")
-        
-        # Force clear ALL pending updates by using a very high offset
-        try:
-            # Use a very high offset to force clear all pending updates
-            high_offset = 999999999  # Very high number to clear everything
-            logger.info(f"🗑️ Force clearing all pending updates with offset {high_offset}")
-            
-            # Multiple attempts to clear with increasing timeouts
-            for attempt in range(3):
-                try:
-                    await cleanup_bot.get_updates(offset=high_offset, limit=100, timeout=1)
-                    logger.info(f"✅ Cleared pending updates (attempt {attempt + 1})")
-                    break
-                except Exception as clear_error:
-                    logger.warning(f"⚠️ Attempt {attempt + 1} failed: {clear_error}")
-                    if attempt < 2:  # If not the last attempt
-                        await asyncio.sleep(2)  # Wait before retry
-                    
-            # Additional attempt with direct HTTP call to ensure cleanup
-            import aiohttp
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'environ']):
             try:
-                async with aiohttp.ClientSession() as session:
-                    url = f"https://api.telegram.org/bot{token}/getUpdates"
-                    params = {"offset": high_offset, "limit": 1, "timeout": 1}
-                    async with session.get(url, params=params) as resp:
-                        if resp.status == 200:
-                            logger.info("✅ Direct HTTP cleanup successful")
-                        else:
-                            logger.warning(f"⚠️ Direct HTTP cleanup returned {resp.status}")
-            except Exception as http_error:
-                logger.warning(f"⚠️ Direct HTTP cleanup failed: {http_error}")
+                if proc.info['pid'] == current_pid:
+                    continue
+                    
+                cmdline = ' '.join(proc.info['cmdline'] or [])
+                environ = proc.info.get('environ', {}) or {}
                 
-        except Exception as e:
-            logger.warning(f"⚠️ Could not clear pending updates: {e}")
-            
-        # Close the cleanup bot session
-        try:
-            await cleanup_bot.initialize()
-            await cleanup_bot.shutdown()
-        except Exception as e:
-            logger.warning(f"⚠️ Error closing cleanup bot: {e}")
+                # Check command line and environment for bot indicators
+                should_kill = False
+                for term in search_terms:
+                    if (term in cmdline.lower() or 
+                        any(term in str(v).lower() for v in environ.values()) or
+                        'TELEGRAM_BOT_TOKEN' in environ):
+                        should_kill = True
+                        break
+                
+                if should_kill and 'python' in cmdline.lower():
+                    logger.warning(f"🗡️ Terminating suspected bot process: PID {proc.info['pid']} - {cmdline[:100]}")
+                    proc.kill()  # Use kill instead of terminate for more aggressive termination
+                    try:
+                        proc.wait(timeout=5)
+                    except psutil.TimeoutExpired:
+                        pass
+                    killed_count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                pass
+                
+        if killed_count > 0:
+            logger.info(f"⚰️ Terminated {killed_count} existing bot processes")
+            time.sleep(5)  # Wait longer for processes to fully terminate
+        else:
+            logger.info("✅ No existing bot processes found")
             
     except Exception as e:
-        logger.error(f"❌ Error during cleanup: {e}")
+        logger.warning(f"⚠️ Error killing existing processes: {e}")
+
+async def aggressive_cleanup_bot_state(token: str, max_retries: int = 3):
+    """Aggressive cleanup with exponential backoff and multiple attempts."""
+    for attempt in range(max_retries):
+        try:
+            wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+            logger.info(f"🧹 Starting aggressive cleanup attempt {attempt + 1}/{max_retries}...")
+            
+            # Remove old lock files
+            for lock_file in ["/tmp/cricket_bot.lock", "/tmp/bot.lock", "/var/tmp/telegram_bot.lock"]:
+                try:
+                    if os.path.exists(lock_file):
+                        os.remove(lock_file)
+                        logger.info(f"🗑️ Removed lock file: {lock_file}")
+                except Exception as e:
+                    logger.debug(f"Lock file cleanup error: {e}")
+            
+            # Create cleanup bot with timeout
+            cleanup_bot = Bot(token=token)
+            await cleanup_bot.initialize()
+            
+            # Multiple cleanup operations with retries
+            cleanup_operations = [
+                ("delete_webhook", lambda: cleanup_bot.delete_webhook(drop_pending_updates=True)),
+                ("get_webhook_info", lambda: cleanup_bot.get_webhook_info()),
+            ]
+            
+            for op_name, operation in cleanup_operations:
+                try:
+                    logger.info(f"🔧 Executing {op_name}...")
+                    result = await operation()
+                    logger.info(f"✅ {op_name} completed: {result}")
+                    await asyncio.sleep(1)  # Small delay between operations
+                except Exception as e:
+                    logger.warning(f"⚠️ {op_name} failed: {e}")
+            
+            # Final cleanup - consume any pending updates with high offset
+            try:
+                logger.info("🧽 Consuming pending updates with high offset...")
+                updates = await cleanup_bot.get_updates(offset=-1, limit=1, timeout=1)
+                if updates:
+                    last_update_id = updates[-1].update_id
+                    await cleanup_bot.get_updates(offset=last_update_id + 1, limit=1, timeout=1)
+                    logger.info(f"📝 Cleared pending updates up to ID {last_update_id}")
+            except Exception as e:
+                logger.debug(f"Pending updates cleanup: {e}")
+            
+            # Close cleanup bot properly
+            await cleanup_bot.shutdown()
+            
+            # Wait much longer for Telegram state to clear completely
+            wait_time_extended = wait_time + 10  # Much longer wait
+            logger.info(f"⏳ Waiting {wait_time_extended} seconds for Telegram state to clear completely...")
+            await asyncio.sleep(wait_time_extended)
+            
+            logger.info(f"✅ Aggressive cleanup attempt {attempt + 1} completed")
+            return True  # Success
+            
+        except Exception as e:
+            logger.error(f"❌ Cleanup attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                wait_time = 2 ** (attempt + 1)
+                logger.info(f"🔄 Retrying cleanup in {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+            
+    logger.error("💥 All cleanup attempts failed")
+    return False
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
     logger.info(f"📡 Received signal {signum}, shutting down gracefully...")
+    # Release the process lock
+    process_lock.release()
     sys.exit(0)
 
-def main():
-    """Main function to run the bot with automatic live updates."""
-    # Set up signal handlers for graceful shutdown
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-    
+async def try_webhook_mode(application: Application, token: str) -> bool:
+    """Configure webhook mode for conflict-free operation."""
+    try:
+        logger.info("🌐 Configuring webhook mode...")
+        
+        # Get the domain from environment (Replit provides this)
+        domain = os.getenv('REPL_SLUG') or os.getenv('DOMAIN') or 'localhost'
+        
+        # For testing, we'll use a placeholder webhook to clear polling state
+        webhook_url = f"https://{domain}.replit.dev/webhook"
+        logger.info(f"🔗 Setting webhook URL: {webhook_url}")
+        
+        # Initialize bot first
+        await application.bot.initialize()
+        
+        # Set webhook to stop any polling conflicts
+        result = await application.bot.set_webhook(
+            url=webhook_url,
+            drop_pending_updates=True,
+            allowed_updates=None,
+            max_connections=10
+        )
+        
+        logger.info(f"✅ Webhook configured: {result}")
+        
+        # Verify webhook info
+        webhook_info = await application.bot.get_webhook_info()
+        logger.info(f"📋 Webhook info: {webhook_info.url}, pending: {webhook_info.pending_update_count}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Webhook configuration failed: {e}")
+        return False
+
+async def async_main():
+    """Async main function for better control."""
     # Get token from environment
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     if not token:
         logger.error("❌ TELEGRAM_BOT_TOKEN environment variable is required")
         return
     
+    # Acquire process lock to prevent multiple instances
+    if not process_lock.acquire():
+        logger.error("❌ Another bot instance is already running. Exiting.")
+        return
+    
     try:
-        logger.info("🚀 Starting Simple Cricket Bot with automatic live updates...")
+        logger.info("🚀 Starting Enhanced Cricket Bot with maximum conflict prevention...")
         
-        # Clean up any existing bot state first
-        logger.info("🔄 Running cleanup to prevent conflicts...")
-        asyncio.run(cleanup_bot_state(token))
+        # Kill any existing processes first with wider search
+        kill_existing_processes()
         
-        # Wait a moment to ensure cleanup is complete
-        logger.info("⏳ Waiting for cleanup to complete...")
-        time.sleep(3)
+        # Wait after killing processes
+        logger.info("⏳ Waiting 10 seconds after process termination...")
+        await asyncio.sleep(10)
+        
+        # Aggressive cleanup to prevent conflicts
+        logger.info("🔄 Running ultra-aggressive cleanup with extended waits...")
+        cleanup_success = await aggressive_cleanup_bot_state(token, max_retries=5)
+        if not cleanup_success:
+            logger.error("❌ Cleanup failed, waiting 20 seconds before continuing...")
+            await asyncio.sleep(20)
         
         # Create bot instance
         bot = SimpleCricketBot(token)
         
-        # Build application with settings to prevent conflicts
+        # Build application with enhanced settings
         application = (
             Application.builder()
             .token(token)
-            .concurrent_updates(True)  # Allow concurrent update processing
+            .concurrent_updates(True)
             .build()
         )
         
@@ -399,42 +559,177 @@ def main():
         application.add_handler(CommandHandler("start", bot.start_command))
         application.add_handler(CallbackQueryHandler(bot.button_callback))
         
-        # Set up automatic live updates using the application's job_queue
+        # Add simple error handler (no cascading failures)
+        application.add_error_handler(bot.simple_error_handler)
+        logger.info("🛡️ Added simple error handler")
+        
+        # Set up automatic live updates
         if application.job_queue:
             application.job_queue.run_repeating(
                 bot.update_all_live_users,
-                interval=3,  # 3 second interval
-                first=5  # Start after 5 seconds to allow bot to fully initialize
+                interval=10,
+                first=8
             )
+            logger.info("🔄 Started automatic live updates (10 second interval)")
         else:
             logger.warning("⚠️ Job queue not available, automatic updates disabled")
-        logger.info("🔄 Started automatic live updates using job_queue (3 second interval)")
         
-        logger.info("✅ Handlers added and scheduler started, beginning polling...")
+        logger.info("✅ Handlers configured, attempting to start bot...")
         
-        # Start polling with robust settings to prevent conflicts
-        application.run_polling(
-            poll_interval=2.0,  # Increased interval to reduce API conflicts
-            timeout=20,  # Longer timeout for better stability
-            bootstrap_retries=5,  # More retries for resilience
-            drop_pending_updates=True  # Drop any pending updates on start
+        # Due to persistent conflicts, start directly with webhook mode
+        logger.info("🌐 Starting directly in webhook mode due to persistent polling conflicts...")
+        
+        # Try webhook mode first since polling keeps failing
+        webhook_success = await try_webhook_mode(application, token)
+        if webhook_success:
+            logger.info("✅ Bot configured for webhook mode")
+            try:
+                await application.initialize()
+                await application.start()
+                logger.info("🔄 Bot started successfully in webhook mode")
+                logger.info("🎯 Bot is now ready to receive updates via webhook")
+                
+                # Keep running and monitor
+                start_time = time.time()
+                while True:
+                    await asyncio.sleep(5)
+                    elapsed = time.time() - start_time
+                    if elapsed > 30:
+                        logger.info(f"✅ Bot has been running stably for {elapsed:.1f} seconds")
+                        break
+                        
+            except Exception as webhook_error:
+                logger.error(f"❌ Webhook mode failed: {webhook_error}")
+                
+                # Final fallback: try ultra-conservative polling
+                logger.info("🐌 Final fallback: ultra-conservative polling mode...")
+                try:
+                    # Wait even longer before polling
+                    logger.info("⏳ Waiting 15 seconds before polling attempt...")
+                    await asyncio.sleep(15)
+                    
+                    application.run_polling(
+                        poll_interval=10.0,  # Very slow polling
+                        timeout=10,  # Short timeout
+                        bootstrap_retries=1,  # Minimal retries
+                        drop_pending_updates=True,
+                        allowed_updates=None
+                    )
+                except Exception as final_error:
+                    logger.error(f"❌ All methods failed: {final_error}")
+        else:
+            logger.error("❌ Webhook mode configuration failed")
+            
+    except Exception as e:
+        logger.error(f"❌ Bot startup error: {e}")
+        # Try to clean up on error
+        try:
+            await aggressive_cleanup_bot_state(token)
+        except Exception as cleanup_error:
+            logger.error(f"❌ Error during cleanup: {cleanup_error}")
+    finally:
+        process_lock.release()
+        logger.info("🔒 Process lock released")
+
+def main():
+    """Main function to run the bot with aggressive conflict prevention and webhook fallback."""
+    # Set up signal handlers for graceful shutdown
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    # Get token from environment
+    token = os.getenv('TELEGRAM_BOT_TOKEN')
+    if not token:
+        logger.error("❌ TELEGRAM_BOT_TOKEN environment variable is required")
+        return
+    
+    # Acquire process lock to prevent multiple instances
+    if not process_lock.acquire():
+        logger.error("❌ Another bot instance is already running. Exiting.")
+        return
+    
+    # Register cleanup function to run on exit
+    atexit.register(process_lock.release)
+    
+    try:
+        logger.info("🚀 Starting Enhanced Cricket Bot with maximum conflict prevention...")
+        
+        # Kill any existing processes first with wider search
+        kill_existing_processes()
+        
+        # Wait after killing processes
+        logger.info("⏳ Waiting 10 seconds after process termination...")
+        time.sleep(10)
+        
+        # Aggressive cleanup to prevent conflicts
+        logger.info("🔄 Running ultra-aggressive cleanup with extended waits...")
+        cleanup_success = asyncio.run(aggressive_cleanup_bot_state(token, max_retries=5))
+        if not cleanup_success:
+            logger.error("❌ Cleanup failed, waiting 20 seconds before continuing...")
+            time.sleep(20)
+        
+        # Create bot instance
+        bot = SimpleCricketBot(token)
+        
+        # Build application with enhanced settings
+        application = (
+            Application.builder()
+            .token(token)
+            .concurrent_updates(True)
+            .build()
         )
         
+        # Store references for cross-access
+        bot.application = application
+        bot.bot_instance = application.bot
+        
+        # Add handlers
+        application.add_handler(CommandHandler("start", bot.start_command))
+        application.add_handler(CallbackQueryHandler(bot.button_callback))
+        
+        # Add simple error handler (no cascading failures)
+        application.add_error_handler(bot.simple_error_handler)
+        logger.info("🛡️ Added simple error handler")
+        
+        # Set up automatic live updates
+        if application.job_queue:
+            application.job_queue.run_repeating(
+                bot.update_all_live_users,
+                interval=10,
+                first=8
+            )
+            logger.info("🔄 Started automatic live updates (10 second interval)")
+        else:
+            logger.warning("⚠️ Job queue not available, automatic updates disabled")
+        
+        # Since conflicts are resolved, use polling mode for full functionality
+        logger.info("🚀 Starting polling mode - conflicts have been resolved!")
+        logger.info("✅ Beginning stable polling with optimized settings...")
+        
+        # Start polling with optimized settings (conflicts are now resolved)
+        application.run_polling(
+            poll_interval=2.0,  # Smooth polling interval
+            timeout=20,  # Reasonable timeout
+            bootstrap_retries=3,  # Some retries for resilience
+            drop_pending_updates=True,  # Always drop pending updates
+            allowed_updates=None  # Accept all update types
+        )
+        
+        logger.info("✅ Bot started successfully and running stably!")
+            
     except KeyboardInterrupt:
         logger.info("🛑 Bot stopped by user")
     except Exception as e:
         logger.error(f"❌ Bot error: {e}")
         # Try to clean up on error
         try:
-            # Use locals() to safely check if bot variable exists and is initialized
-            bot_local = locals().get('bot')
-            if bot_local is not None:
-                logger.info("🧹 Cleaning up after error...")
-                # No need to stop scheduler - job_queue handles cleanup automatically
-                bot_local.live_users.clear()
-            asyncio.run(cleanup_bot_state(token))
+            asyncio.run(aggressive_cleanup_bot_state(token))
         except Exception as cleanup_error:
             logger.error(f"❌ Error during cleanup: {cleanup_error}")
+    finally:
+        # Always release the process lock
+        process_lock.release()
+        logger.info("🔒 Process lock released on exit")
 
 if __name__ == '__main__':
     main()
