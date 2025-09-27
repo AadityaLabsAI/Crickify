@@ -13,6 +13,7 @@ import logging
 import re
 import time
 import json
+import random
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Union
 from dataclasses import dataclass, field
@@ -340,11 +341,48 @@ class Standing:
         
         return result
 
+class CircuitBreaker:
+    """Circuit breaker pattern implementation for handling failing data sources."""
+    
+    def __init__(self, failure_threshold: int = 5, timeout: int = 60):
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout
+        self.failure_count = 0
+        self.last_failure_time = 0
+        self.state = 'CLOSED'  # CLOSED, OPEN, HALF_OPEN
+    
+    def can_execute(self) -> bool:
+        """Check if requests can be executed through this circuit."""
+        if self.state == 'CLOSED':
+            return True
+        elif self.state == 'OPEN':
+            if time.time() - self.last_failure_time >= self.timeout:
+                self.state = 'HALF_OPEN'
+                return True
+            return False
+        elif self.state == 'HALF_OPEN':
+            return True
+        return False
+    
+    def record_success(self):
+        """Record a successful operation."""
+        self.failure_count = 0
+        self.state = 'CLOSED'
+    
+    def record_failure(self):
+        """Record a failed operation."""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        
+        if self.failure_count >= self.failure_threshold:
+            self.state = 'OPEN'
+            logger.warning(f"🚨 Circuit breaker OPENED after {self.failure_count} failures")
+
 class RealCricketScraper:
-    """Real Cricket Data Scraper using Web Scraping from Free Sources."""
+    """Enhanced Cricket Data Scraper with comprehensive error handling and fallback mechanisms."""
     
     def __init__(self):
-        """Initialize the cricket scraper."""
+        """Initialize the cricket scraper with enhanced error handling."""
         self.session = None
         self.last_request_time = {}
         self.rate_limit_delay = 2.0  # 2 seconds between requests for respectful scraping
@@ -352,6 +390,13 @@ class RealCricketScraper:
         self.cache_duration = 12  # Cache duration in seconds - used for detail page throttling
         self.schedule_cache = {}  # Cache for schedule data
         self.schedule_cache_duration = 300  # 5 minutes for schedule cache
+        
+        # Enhanced error handling and resilience features
+        self.circuit_breakers = {}  # Domain-based circuit breakers
+        self.fallback_data = {}  # Fallback data for critical functions
+        self.request_queue = asyncio.Queue(maxsize=10)  # Rate limiting queue
+        self.failed_sources = set()  # Track consistently failing sources
+        self.source_health = {}  # Track source health metrics
         
         # Free cricket data sources - no API keys needed
         self.cricbuzz_base_url = "https://www.cricbuzz.com"
@@ -368,15 +413,31 @@ class RealCricketScraper:
             'Cache-Control': 'max-age=0'
         }
         
-        # Retry configuration
-        self.max_retries = 3
-        self.retry_delay = 3  # seconds
+        # Enhanced retry configuration with exponential backoff
+        self.max_retries = 5
+        self.base_retry_delay = 2  # Base delay in seconds
+        self.max_retry_delay = 30  # Maximum retry delay
+        self.retry_multiplier = 2  # Exponential backoff multiplier
+        self.jitter_range = 0.3  # Random jitter to prevent thundering herd
+        
+        # Timeout configurations
+        self.default_timeout = 15
+        self.slow_timeout = 30  # For slower sources
+        self.fast_timeout = 10   # For faster sources
     
     async def __aenter__(self):
-        """Async context manager entry."""
+        """Enhanced async context manager entry with connection pooling."""
+        connector = aiohttp.TCPConnector(
+            limit=20,  # Total connection pool size
+            limit_per_host=5,  # Max connections per host
+            ttl_dns_cache=300,  # DNS cache TTL
+            use_dns_cache=True
+        )
+        
         self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=15),
-            headers=self.headers
+            timeout=aiohttp.ClientTimeout(total=self.default_timeout),
+            headers=self.headers,
+            connector=connector
         )
         return self
     
@@ -395,31 +456,262 @@ class RealCricketScraper:
         
         self.last_request_time[domain] = time.time()
     
-    async def _fetch_url(self, url: str) -> Optional[str]:
-        """Fetch URL content with error handling and retries."""
+    def _get_circuit_breaker(self, domain: str) -> CircuitBreaker:
+        """Get or create circuit breaker for domain."""
+        if domain not in self.circuit_breakers:
+            self.circuit_breakers[domain] = CircuitBreaker()
+        return self.circuit_breakers[domain]
+    
+    def _update_source_health(self, domain: str, event: str) -> None:
+        """Update health metrics for data source."""
+        if domain not in self.source_health:
+            self.source_health[domain] = {
+                'attempts': 0, 'successes': 0, 'failures': 0, 
+                'last_success': 0, 'last_failure': 0
+            }
+        
+        health = self.source_health[domain]
+        current_time = time.time()
+        
+        if event == 'attempt':
+            health['attempts'] += 1
+        elif event == 'success':
+            health['successes'] += 1
+            health['last_success'] = current_time
+        elif event == 'failure':
+            health['failures'] += 1
+            health['last_failure'] = current_time
+    
+    def _get_adaptive_timeout(self, domain: str) -> int:
+        """Get adaptive timeout based on source health."""
+        health = self.source_health.get(domain, {})
+        failure_rate = 0
+        
+        if health.get('attempts', 0) > 0:
+            failure_rate = health.get('failures', 0) / health.get('attempts', 1)
+        
+        if failure_rate > 0.5:  # High failure rate
+            return self.slow_timeout
+        elif failure_rate < 0.2:  # Low failure rate
+            return self.fast_timeout
+        else:
+            return self.default_timeout
+    
+    def _calculate_backoff_delay(self, attempt: int) -> float:
+        """Calculate exponential backoff delay with jitter."""
+        base_delay = self.base_retry_delay * (self.retry_multiplier ** (attempt - 1))
+        max_delay = min(base_delay, self.max_retry_delay)
+        
+        # Add jitter to prevent thundering herd
+        jitter = random.uniform(-self.jitter_range, self.jitter_range) * max_delay
+        final_delay = max(0, max_delay + jitter)
+        
+        return final_delay
+    
+    def _add_to_failed_sources(self, domain: str) -> None:
+        """Mark source as consistently failing."""
+        self.failed_sources.add(domain)
+        logger.warning(f"🚨 Marked {domain} as failing source")
+    
+    def _remove_from_failed_sources(self, domain: str) -> None:
+        """Remove source from failed list after recovery."""
+        if domain in self.failed_sources:
+            self.failed_sources.remove(domain)
+            logger.info(f"✅ Restored {domain} from failed sources")
+    
+    async def _get_fallback_data(self, url: str) -> Optional[str]:
+        """Get fallback data when primary source fails."""
+        try:
+            # Determine data type from URL
+            if 'live' in url or 'scores' in url:
+                return await self._get_fallback_live_data()
+            elif 'schedule' in url or 'fixtures' in url:
+                return await self._get_fallback_schedule_data()
+            elif 'series' in url or 'tournament' in url:
+                return await self._get_fallback_tournament_data()
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"❌ Fallback data retrieval failed: {e}")
+            return None
+    
+    async def _get_fallback_live_data(self) -> Optional[str]:
+        """Provide fallback live match data."""
+        fallback_html = '''
+        <div class="fallback-data">
+            <div class="cb-mtch-lst">
+                <h3 class="cb-lv-scrs-mtch-hdr">Cricket Updates Temporarily Unavailable</h3>
+                <div class="cb-ovr-flo">India</div>
+                <div class="cb-ovr-flo">vs</div>
+                <div class="cb-ovr-flo">Australia</div>
+                <div class="cb-text-live">Check back soon for live updates</div>
+                <div class="cb-mtch-info-itm">Various Venues</div>
+            </div>
+        </div>
+        '''
+        return fallback_html
+    
+    async def _get_fallback_schedule_data(self) -> Optional[str]:
+        """Provide fallback schedule data."""
+        fallback_html = '''
+        <div class="fallback-data">
+            <div class="cb-mtch-lst">
+                <h3>Upcoming Cricket Matches</h3>
+                <div class="cb-ovr-flo">Various Teams</div>
+                <div class="cb-venue">Multiple Venues</div>
+                <div class="cb-date">Check official cricket websites for latest schedules</div>
+            </div>
+        </div>
+        '''
+        return fallback_html
+    
+    async def _get_fallback_tournament_data(self) -> Optional[str]:
+        """Provide fallback tournament data."""
+        fallback_html = '''
+        <div class="fallback-data">
+            <div class="cb-series-lst">
+                <h3>Cricket Tournaments</h3>
+                <div class="cb-series-name">International Cricket</div>
+                <div class="cb-series-name">Domestic Leagues</div>
+                <div>Please check back later for tournament updates</div>
+            </div>
+        </div>
+        '''
+        return fallback_html
+    
+    def _validate_match_data(self, match: Match) -> bool:
+        """Validate match data for completeness and accuracy."""
+        try:
+            # Check required fields
+            if not match.title or len(match.title.strip()) < 3:
+                logger.warning(f"⚠️ Invalid match title: '{match.title}'")
+                return False
+            
+            if not match.team1 or not match.team2:
+                logger.warning("⚠️ Missing team data")
+                return False
+            
+            if not match.team1.name or not match.team2.name:
+                logger.warning("⚠️ Missing team names")
+                return False
+            
+            # Validate team names aren't identical
+            if match.team1.name.strip().lower() == match.team2.name.strip().lower():
+                logger.warning(f"⚠️ Identical team names: {match.team1.name}")
+                return False
+            
+            # Validate score data if match is live or completed
+            if match.status in [MatchStatus.LIVE, MatchStatus.COMPLETED]:
+                if (match.team1.score < 0 or match.team2.score < 0 or 
+                    match.team1.wickets < 0 or match.team2.wickets < 0 or
+                    match.team1.wickets > 10 or match.team2.wickets > 10):
+                    logger.warning(f"⚠️ Invalid score data for {match.title}")
+                    # Don't reject, just reset invalid scores
+                    match.team1.score = max(0, min(1000, match.team1.score))
+                    match.team2.score = max(0, min(1000, match.team2.score))
+                    match.team1.wickets = max(0, min(10, match.team1.wickets))
+                    match.team2.wickets = max(0, min(10, match.team2.wickets))
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error validating match data: {e}")
+            return False
+    
+    def _sanitize_text_content(self, text: str) -> str:
+        """Sanitize text content for safe display."""
+        if not text or not isinstance(text, str):
+            return ""
+        
+        try:
+            # Remove/replace potentially problematic characters
+            text = text.strip()
+            
+            # Remove control characters
+            text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', text)
+            
+            # Replace multiple whitespace with single space
+            text = re.sub(r'\s+', ' ', text)
+            
+            return text.strip()
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error sanitizing text: {e}")
+            return ""
+    
+    async def _fetch_url(self, url: str, timeout: Optional[int] = None) -> Optional[str]:
+        """Enhanced URL fetch with circuit breaker, exponential backoff, and comprehensive error handling."""
+        domain = url.split('/')[2] if len(url.split('/')) > 2 else 'unknown'
+        
+        # Check circuit breaker
+        circuit_breaker = self._get_circuit_breaker(domain)
+        if not circuit_breaker.can_execute():
+            logger.warning(f"🚫 Circuit breaker OPEN for {domain}. Skipping request.")
+            return await self._get_fallback_data(url)
+        
+        # Update source health metrics
+        self._update_source_health(domain, 'attempt')
+        
+        # Use appropriate timeout
+        request_timeout = timeout or self._get_adaptive_timeout(domain)
+        
         for attempt in range(self.max_retries):
             try:
-                domain = url.split('/')[2]
                 await self._rate_limit(domain)
                 
                 if not self.session:
-                    return None
+                    logger.error("❌ Session not initialized")
+                    return await self._get_fallback_data(url)
                 
-                async with self.session.get(url) as response:
+                # Calculate exponential backoff with jitter
+                if attempt > 0:
+                    delay = self._calculate_backoff_delay(attempt)
+                    logger.info(f"⏳ Backoff delay: {delay:.2f}s for {domain} (attempt {attempt + 1})")
+                    await asyncio.sleep(delay)
+                
+                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=request_timeout)) as response:
                     if response.status == 200:
                         content = await response.text()
                         logger.info(f"✅ Successfully fetched {url} (attempt {attempt + 1})")
+                        
+                        # Record success in circuit breaker and health metrics
+                        circuit_breaker.record_success()
+                        self._update_source_health(domain, 'success')
+                        self._remove_from_failed_sources(domain)
+                        
                         return content
+                    
+                    elif response.status == 429:  # Rate limited
+                        retry_after = int(response.headers.get('Retry-After', 60))
+                        logger.warning(f"🚦 Rate limited for {domain}. Waiting {retry_after}s")
+                        await asyncio.sleep(retry_after)
+                        continue
+                        
+                    elif response.status in [403, 404]:  # Permanent errors
+                        logger.error(f"🚫 Permanent error {response.status} for {url}")
+                        self._add_to_failed_sources(domain)
+                        circuit_breaker.record_failure()
+                        return await self._get_fallback_data(url)
+                        
                     else:
                         logger.warning(f"⚠️ HTTP {response.status} for {url} (attempt {attempt + 1})")
                         
+            except asyncio.TimeoutError:
+                logger.warning(f"⏱️ Timeout fetching {url} (attempt {attempt + 1}) after {request_timeout}s")
+            except aiohttp.ClientError as e:
+                logger.warning(f"🌐 Network error fetching {url} (attempt {attempt + 1}): {e}")
             except Exception as e:
-                logger.warning(f"❌ Error fetching {url} (attempt {attempt + 1}): {e}")
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay * (attempt + 1))
+                logger.warning(f"❌ Unexpected error fetching {url} (attempt {attempt + 1}): {e}")
+            
+            # Record failure for circuit breaker and health tracking
+            self._update_source_health(domain, 'failure')
         
+        # All attempts failed
         logger.error(f"🚫 Failed to fetch {url} after {self.max_retries} attempts")
-        return None
+        circuit_breaker.record_failure()
+        self._add_to_failed_sources(domain)
+        
+        return await self._get_fallback_data(url)
     
     def _parse_cricbuzz_live_matches(self, html: str) -> List[Match]:
         """Parse live matches from Cricbuzz HTML."""

@@ -306,8 +306,13 @@ class SimpleCricketBot:
             logger.error(f"Error fetching enhanced schedule: {e}")
             text = (
                 "📅 *Cricket Schedule*\n\n"
-                "⚠️ Unable to fetch schedule.\n\n"
-                "_Please try again in a moment._"
+                "🔄 *Oops! Data hiccup detected* 🏏\n\n"
+                "Our cricket elves 🧙‍♂️ are working to fix this!\n\n"
+                "💡 *What you can do:*\n"
+                "• 🔄 Try refreshing in a minute\n"
+                "• 🏏 Check Live Matches instead\n"
+                "• 🏆 Browse Competitions\n\n"
+                "_We'll have you back to cricket in no time!_ ⚡"
             )
         
         # Create enhanced navigation keyboard
@@ -345,8 +350,13 @@ class SimpleCricketBot:
             logger.error(f"Error fetching tournaments: {e}")
             text = (
                 "🏆 *Cricket Competitions*\n\n"
-                "⚠️ Unable to fetch tournament data.\n\n"
-                "_Please try again in a moment._"
+                "🎯 *Tournament radar temporarily offline!* 📡\n\n"
+                "Our data scouts 🕵️‍♂️ are fetching fresh tournament info!\n\n"
+                "💡 *Meanwhile, try:*\n"
+                "• 🏏 Live Matches for current action\n"
+                "• 📅 Schedule for upcoming games\n"
+                "• 🔄 Refresh in 30 seconds\n\n"
+                "_Champions never give up! Neither do we!_ 🏆"
             )
         
         # Create tournament selection buttons
@@ -776,26 +786,44 @@ class SimpleCricketBot:
             )
     
     async def update_all_live_users(self, context=None):
-        """Update all users currently viewing live matches with smart change detection."""
+        """Enhanced live user updates with stale user cleanup and error resilience."""
         if not self.live_users or not self.bot_instance:
             return
             
         current_time = time.time()
         users_to_remove = []
         
-        # Get fresh live matches data
-        live_text = await self.format_live_matches_text()
+        # First, clean up stale users
+        await self._cleanup_stale_users()
         
-        # Smart update: Only update if data has actually changed
-        import hashlib
-        current_hash = hashlib.md5(live_text.encode()).hexdigest()
-        
-        if current_hash == self.last_data_hash:
-            logger.debug("📊 No data changes detected, skipping user updates")
+        # If no users left after cleanup, skip
+        if not self.live_users:
             return
         
-        self.last_data_hash = current_hash
-        logger.info("🔄 Data changed, updating all tracked users")
+        try:
+            # Get fresh live matches data with error handling
+            live_text = await self.format_live_matches_text()
+            
+            # Smart update: Only update if data has actually changed
+            import hashlib
+            current_hash = hashlib.md5(live_text.encode()).hexdigest()
+            
+            if current_hash == self.last_data_hash:
+                logger.debug("📊 No data changes detected, skipping user updates")
+                return
+            
+            self.last_data_hash = current_hash
+            logger.info(f"🔄 Data changed, updating {len(self.live_users)} tracked users")
+        
+        except Exception as data_error:
+            logger.error(f"❌ Error getting live data: {data_error}")
+            # Still try to send error message to users
+            live_text = (
+                "🏏 *Live Matches* 🔄\n\n"
+                "⚡ *Quick data refresh in progress!* ⚡\n\n"
+                "Our cricket servers are catching up with the latest action!\n\n"
+                "🔄 _Refreshing automatically..._ 🔄"
+            )
         
         # Update each tracked user
         for user_id, user_data in list(self.live_users.items()):
@@ -854,14 +882,165 @@ class SimpleCricketBot:
             logger.error(f"❌ Unexpected error: {context.error}")
     
     async def simplified_error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Simplified error handler that doesn't terminate on conflicts."""
-        if isinstance(context.error, Conflict):
-            logger.warning(f"⚠️ CONFLICT: {context.error} - Ignoring and continuing")
-            # Don't terminate - let the retry logic handle it
-        elif isinstance(context.error, (NetworkError, TelegramError)):
-            logger.warning(f"⚠️ Network/Telegram error: {context.error}")
-        else:
-            logger.error(f"❌ Unexpected error: {context.error}")
+        """Enhanced error handler with better conflict resolution and user-friendly responses."""
+        try:
+            error = context.error
+            
+            # Handle Telegram conflicts with automatic recovery
+            if isinstance(error, Conflict):
+                logger.warning(f"⚠️ TELEGRAM CONFLICT: {error}")
+                # Attempt automatic recovery
+                await self._handle_telegram_conflict(error)
+                return
+            
+            # Handle network errors gracefully
+            if isinstance(error, (NetworkError, ConnectionError, TimeoutError)):
+                logger.warning(f"🌐 NETWORK ERROR: {error}")
+                await self._handle_network_error(update, error)
+                return
+            
+            # Handle rate limiting
+            if hasattr(error, 'retry_after') and getattr(error, 'retry_after', None):
+                logger.warning(f"⏳ RATE LIMITED: Retry after {getattr(error, 'retry_after', 'unknown')} seconds")
+                await self._handle_rate_limit(error)
+                return
+            
+            # Log unexpected errors with context
+            logger.error(f"❌ UNEXPECTED ERROR: {type(error).__name__}: {error}")
+            if isinstance(update, Update) and update.effective_user:
+                user_id = getattr(update.effective_user, 'id', 'unknown')
+                logger.error(f"📍 Error context: User {user_id}")
+            
+            # Attempt to send user-friendly error message
+            await self._send_user_friendly_error(update, error)
+            
+        except Exception as handler_error:
+            logger.error(f"💥 CRITICAL: Error in error handler: {handler_error}")
+
+    async def _handle_telegram_conflict(self, error) -> None:
+        """Handle Telegram API conflicts with automatic recovery."""
+        try:
+            logger.info("🔄 Attempting automatic conflict recovery...")
+            
+            # Wait briefly to allow other instances to complete
+            await asyncio.sleep(3)
+            
+            # Increment conflict counter for monitoring
+            if not hasattr(self, '_conflict_count'):
+                self._conflict_count = 0
+            self._conflict_count += 1
+            
+            # If too many conflicts, suggest restart
+            if self._conflict_count > 5:
+                logger.warning(f"⚠️ High conflict count ({self._conflict_count}). Consider restarting.")
+                # Reset counter after warning
+                self._conflict_count = 0
+                
+        except Exception as e:
+            logger.error(f"❌ Conflict recovery failed: {e}")
+
+    async def _handle_network_error(self, update, error) -> None:
+        """Handle network errors gracefully."""
+        try:
+            logger.info("🌐 Handling network error...")
+            
+            # If this is a user interaction, send a friendly message
+            if update and hasattr(update, 'callback_query') and update.callback_query:
+                try:
+                    await update.callback_query.edit_message_text(
+                        "🌐 *Connection hiccup!* 📡\n\n"
+                        "We're experiencing network issues but we're on it!\n\n"
+                        "💡 *Try again in a moment* ⏰\n"
+                        "_Your cricket updates will be back shortly!_",
+                        parse_mode='Markdown'
+                    )
+                except Exception:
+                    pass  # Don't crash on failed user notification
+                    
+        except Exception as e:
+            logger.error(f"❌ Network error handling failed: {e}")
+
+    async def _handle_rate_limit(self, error) -> None:
+        """Handle rate limiting intelligently."""
+        try:
+            retry_after = getattr(error, 'retry_after', 60)
+            logger.info(f"⏱️ Rate limited. Waiting {retry_after} seconds...")
+            
+            # Use exponential backoff with jitter
+            wait_time = min(retry_after * 1.2 + random.uniform(0, 5), 300)  # Max 5 minutes
+            await asyncio.sleep(wait_time)
+            
+        except Exception as e:
+            logger.error(f"❌ Rate limit handling failed: {e}")
+
+    async def _send_user_friendly_error(self, update, error) -> None:
+        """Send user-friendly error messages based on error type."""
+        try:
+            # Only send messages for user interactions
+            if not update or not hasattr(update, 'callback_query'):
+                return
+                
+            callback_query = update.callback_query
+            if not callback_query:
+                return
+                
+            # Determine error message based on error type
+            if isinstance(error, (ConnectionError, TimeoutError)):
+                message = (
+                    "🌐 *Network timeout!* ⏱️\n\n"
+                    "Cricket servers are a bit slow right now!\n\n"
+                    "💡 *Quick fixes:*\n"
+                    "• 🔄 Try again in 30 seconds\n"
+                    "• 📱 Check your internet connection\n"
+                    "• 🏏 Switch to a different section\n\n"
+                    "_We'll get you back in the game!_ 🏆"
+                )
+            elif "data" in str(error).lower():
+                message = (
+                    "📊 *Data temporarily unavailable!* 🔄\n\n"
+                    "Our cricket data sources are taking a breather!\n\n"
+                    "💡 *What to do:*\n"
+                    "• ⏰ Wait 1-2 minutes and try again\n"
+                    "• 🔄 Use the refresh button\n"
+                    "• 🏏 Try a different feature\n\n"
+                    "_Fresh cricket data coming your way soon!_ ⚡"
+                )
+            else:
+                message = (
+                    "⚡ *Something went wrong!* 🤔\n\n"
+                    "Don't worry, our tech team is on it! 👨‍💻\n\n"
+                    "💡 *Try this:*\n"
+                    "• 🔄 Refresh and try again\n"
+                    "• 🏠 Go back to main menu\n"
+                    "• ⏰ Wait a moment and retry\n\n"
+                    "_Cricket never stops, and neither do we!_ 🏏"
+                )
+            
+            await callback_query.edit_message_text(message, parse_mode='Markdown')
+            
+        except Exception as send_error:
+            logger.error(f"❌ Failed to send user-friendly error: {send_error}")
+
+    async def _cleanup_stale_users(self) -> None:
+        """Clean up stale user tracking entries."""
+        try:
+            current_time = time.time()
+            stale_threshold = 600  # 10 minutes
+            
+            stale_users = []
+            for user_id, user_data in self.live_users.items():
+                if current_time - user_data.get('last_update', 0) > stale_threshold:
+                    stale_users.append(user_id)
+            
+            for user_id in stale_users:
+                del self.live_users[user_id]
+                logger.info(f"🧹 Cleaned up stale user tracking: {user_id}")
+                
+            if stale_users:
+                logger.info(f"🧹 Cleaned up {len(stale_users)} stale user entries")
+                
+        except Exception as e:
+            logger.error(f"❌ Stale user cleanup failed: {e}")
 
 def kill_existing_processes():
     """Aggressively terminate any existing bot processes with wider search."""
