@@ -17,3 +17,6 @@ nest-asyncio>=1.6.0
 
 # System monitoring (was causing the Railway build error)
 psutil>=5.9.0
+
+# File I/O for user preferences
+aiofiles>=24.1.0

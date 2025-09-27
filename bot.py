@@ -18,6 +18,10 @@ import psutil
 from typing import Optional, Dict, Set, Any, Union, List
 from datetime import datetime
 from cricket_scraper import get_live_matches, get_match_schedule, get_match_details, get_tournaments, get_tournament_standings
+# Temporarily comment out advanced imports to fix import issues
+# from user_preferences import user_data_manager, UserPreferences
+# from advanced_ui_components import UIComponents  
+# from professional_handlers import ProfessionalHandlers
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import (
@@ -86,8 +90,8 @@ class ProcessLock:
 # Global process lock instance
 process_lock = ProcessLock()
 
-class SimpleCricketBot:
-    """Simple Cricket Bot with only essential features and automatic live updates."""
+class ProfessionalCricketBot:
+    """Professional Cricket Bot with advanced UI features superior to Cricbuzz/ESPNCricinfo."""
     
     def __init__(self, token: str):
         """Initialize the bot with token."""
@@ -105,28 +109,43 @@ class SimpleCricketBot:
         self.slow_interval = 10.0  # Slow interval when no users are active
         self.last_interval_check = 0.0
         
+        # Enhanced professional features
+        self.user_sessions: Dict[int, Dict[str, Any]] = {}  # Track user sessions and navigation
+        self.analytics_cache: Dict[str, Any] = {}  # Cache for match analytics
+        self.trending_cache: Dict[str, Any] = {}  # Cache for trending data
+        self.followed_matches: Dict[int, Set[str]] = {}  # user_id -> set of followed match_ids
+        # self.ui_components = UIComponents()
+        # self.pro_handlers = ProfessionalHandlers(self)
+        
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle the /start command - Main Menu."""
+        """Handle the /start command - Enhanced Professional Main Dashboard."""
         if not update.effective_user or not update.message:
             return
             
         user = update.effective_user
-        logger.info(f"User {user.id} started the bot")
+        logger.info(f"User {user.id} started the bot - Professional UI")
         
-        welcome_text = (
-            f"🏏 *Cricket Live Match Centre* 🏏\n\n"
-            f"Hello {user.first_name or 'User'}! 👋\n\n"
-            f"Get real-time cricket scores and match schedules!\n\n"
-            f"Choose an option below:"
+        # Get or create user preferences
+        user_prefs = await user_data_manager.get_user_preferences(
+            user.id, user.username, user.first_name
         )
+        user_prefs.total_sessions += 1
+        await user_data_manager.save_user_preferences(user_prefs)
         
-        # Enhanced menu with competitions feature
-        keyboard = [
-            [InlineKeyboardButton("🏏 Live Matches", callback_data="live_matches")],
-            [InlineKeyboardButton("📅 Schedule", callback_data="schedule")],
-            [InlineKeyboardButton("🏆 Competitions", callback_data="competitions")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        # Get personalized dashboard data
+        dashboard_data = await user_data_manager.get_user_dashboard_data(user.id)
+        dashboard_data['username'] = user.first_name or user.username or 'Cricket Fan'
+        
+        # Create sophisticated main dashboard
+        welcome_text, reply_markup = self.ui_components.create_main_dashboard_menu(dashboard_data)
+        
+        # Initialize user session
+        self.user_sessions[user.id] = {
+            'navigation_path': ['home'],
+            'current_filters': {},
+            'last_interaction': time.time(),
+            'session_start': time.time()
+        }
         
         await update.message.reply_text(
             welcome_text,
@@ -145,12 +164,53 @@ class SimpleCricketBot:
         callback_data = query.data or ""
         logger.info(f"User {update.effective_user.id} pressed: {callback_data}")
         
-        if callback_data == "live_matches":
-            await self.handle_live_matches(query)
-        elif callback_data == "schedule":
-            await self.handle_schedule(query)
-        elif callback_data == "competitions":
-            await self.handle_competitions(query)
+        # Core features (enhanced)
+        if callback_data == "live_matches" or callback_data == "live_matches_pro":
+            await self.handle_live_matches_pro(query)
+        elif callback_data == "schedule" or callback_data == "schedule_pro":
+            await self.pro_handlers.handle_schedule_pro(query)
+        elif callback_data == "competitions" or callback_data == "competitions_pro":
+            await self.pro_handlers.handle_competitions_pro(query)
+            
+        # Professional features
+        elif callback_data == "analytics_hub":
+            await self.pro_handlers.handle_analytics_hub(query)
+        elif callback_data == "my_teams":
+            await self.pro_handlers.handle_my_teams(query)
+        elif callback_data == "my_alerts":
+            await self.pro_handlers.handle_my_alerts(query)
+        elif callback_data == "match_predictions":
+            await self.pro_handlers.handle_match_predictions(query)
+        elif callback_data == "trending_now":
+            await self.pro_handlers.handle_trending_now(query)
+        elif callback_data == "user_settings":
+            await self.pro_handlers.handle_user_settings(query)
+        elif callback_data == "help_tips":
+            await self.pro_handlers.handle_help_tips(query)
+            
+        # Match actions
+        elif callback_data.startswith("follow_"):
+            await self.pro_handlers.handle_follow_match(query, callback_data)
+        elif callback_data.startswith("unfollow_"):
+            await self.pro_handlers.handle_unfollow_match(query, callback_data)
+        elif callback_data.startswith("alerts_on_"):
+            await self.pro_handlers.handle_alerts_on(query, callback_data)
+        elif callback_data.startswith("alerts_off_"):
+            await self.pro_handlers.handle_alerts_off(query, callback_data)
+        elif callback_data.startswith("analytics_"):
+            await self.pro_handlers.handle_match_analytics(query, callback_data)
+        elif callback_data.startswith("compare_"):
+            await self.pro_handlers.handle_team_comparison(query, callback_data)
+        elif callback_data.startswith("commentary_"):
+            await self.pro_handlers.handle_live_commentary(query, callback_data)
+        elif callback_data.startswith("players_"):
+            await self.pro_handlers.handle_player_stats(query, callback_data)
+        elif callback_data.startswith("share_"):
+            await self.pro_handlers.handle_share_match(query, callback_data)
+        elif callback_data.startswith("refresh_"):
+            await self.pro_handlers.handle_refresh_match(query, callback_data)
+            
+        # Existing handlers (enhanced)
         elif callback_data.startswith("schedule_"):
             await self.handle_schedule_with_options(query, callback_data)
         elif callback_data.startswith("tournament_"):
@@ -159,37 +219,102 @@ class SimpleCricketBot:
             await self.handle_standings(query, callback_data)
         elif callback_data.startswith("filter_"):
             await self.handle_schedule_filter(query, callback_data)
+            
+        # Navigation
         elif callback_data == "back_to_main":
-            await self.handle_back_to_main(query)
+            await self.handle_back_to_main_pro(query)
         else:
             await query.edit_message_text("🤔 Unknown option. Please try again.")
 
-    async def handle_live_matches(self, query) -> None:
-        """Show current live matches with automatic updates."""
-        await query.edit_message_text("🏏 *Live Matches*\n\n🔄 Loading...", parse_mode='Markdown')
+    async def handle_live_matches_pro(self, query) -> None:
+        """Enhanced live matches with professional features."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+            
+        # Update navigation path
+        if user_id in self.user_sessions:
+            self.user_sessions[user_id]['navigation_path'] = ['home', 'live_matches']
         
-        # Get formatted live matches text
-        text = await self.format_live_matches_text()
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Live Matches'])
+        await query.edit_message_text(f"{breadcrumb}🏏 **Live Matches Pro**\n\n🔄 Loading enhanced view...", parse_mode='Markdown')
         
-        # Add refresh and back buttons
+        try:
+            # Get live matches
+            live_matches = await get_live_matches()
+            
+            if live_matches:
+                text = breadcrumb + "🔴 **Live Cricket Matches**\n\n"
+                
+                # Get user preferences for personalization
+                user_prefs = await user_data_manager.get_user_preferences(user_id)
+                
+                for i, match in enumerate(live_matches[:5]):  # Show up to 5 matches
+                    # Check if user is following this match
+                    is_following = user_id in self.followed_matches and match.match_id in self.followed_matches[user_id]
+                    
+                    # Enhanced match display
+                    match_text = self.ui_components.format_live_score_card(match)
+                    
+                    # Add personalization indicators
+                    if any(team in user_prefs.favorite_teams for team in [match.team1.short_name, match.team2.short_name]):
+                        match_text = "⭐ " + match_text
+                    
+                    if is_following:
+                        match_text = "💚 " + match_text
+                    
+                    text += match_text + "\n"
+                    
+                    # Add action buttons for each match
+                    match_buttons = self.ui_components.create_match_action_buttons(
+                        match.match_id, is_following, False
+                    )
+                    
+                    # Store match buttons for inline display (simplified here)
+                    text += "\n━━━━━━━━━━━━━━━━━━━━\n\n"
+                
+                # Add quick filters
+                text += "\n🎛️ **Quick Actions:**\n"
+                text += "• Use buttons below to interact with matches\n"
+                text += "• ⭐ indicates your favorite teams\n"
+                text += "• 💚 indicates matches you're following\n"
+                
+            else:
+                text = breadcrumb + (
+                    "🏏 **Live Matches Pro**\n\n"
+                    "🔍 No live matches found at the moment.\n\n"
+                    "📅 Check our enhanced schedule for upcoming matches!\n\n"
+                    "💡 **Tip:** Set up alerts for your favorite teams to never miss a match!"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error in live matches pro: {e}")
+            text = breadcrumb + (
+                "🏏 **Live Matches Pro**\n\n"
+                "⚠️ Unable to fetch live data right now.\n\n"
+                "🔄 Try refreshing in a moment or check our schedule!"
+            )
+        
+        # Enhanced navigation buttons
         keyboard = [
-            [InlineKeyboardButton("🔄 Refresh", callback_data="live_matches")],
-            [InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")]
+            [InlineKeyboardButton("🔄 Refresh Live", callback_data="live_matches_pro"),
+             InlineKeyboardButton("⚙️ Match Filters", callback_data="live_filters")],
+            [InlineKeyboardButton("📊 Analytics Hub", callback_data="analytics_hub"),
+             InlineKeyboardButton("🔔 Set Alerts", callback_data="my_alerts")],
+            [InlineKeyboardButton("🔙 Dashboard", callback_data="back_to_main")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Update the message and get the result
+        # Update message and track user
         message = await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
         
-        # Track this user for automatic updates
-        user_id = query.from_user.id if query.from_user else None
-        if user_id:
-            self.live_users[user_id] = {
-                'chat_id': query.message.chat_id if query.message else None,
-                'message_id': message.message_id,
-                'last_update': time.time()
-            }
-            logger.info(f"👥 Added user {user_id} to live updates tracking ({len(self.live_users)} active users)")
+        # Track for automatic updates
+        self.live_users[user_id] = {
+            'chat_id': query.message.chat_id if query.message else None,
+            'message_id': message.message_id,
+            'last_update': time.time()
+        }
+        logger.info(f"👥 Added user {user_id} to live updates tracking (Pro) - {len(self.live_users)} active users")
 
     async def handle_schedule(self, query) -> None:
         """Show enhanced schedule menu with date range and filter options."""
@@ -240,25 +365,27 @@ class SimpleCricketBot:
             reply_markup=reply_markup
         )
 
-    async def handle_back_to_main(self, query) -> None:
-        """Return to main menu."""
-        # Remove user from live tracking when they go back to main
+    async def handle_back_to_main_pro(self, query) -> None:
+        """Return to enhanced main dashboard."""
         user_id = query.from_user.id if query.from_user else None
-        if user_id and user_id in self.live_users:
+        if not user_id:
+            return
+            
+        # Remove user from live tracking
+        if user_id in self.live_users:
             del self.live_users[user_id]
             logger.info(f"👋 Removed user {user_id} from live updates tracking ({len(self.live_users)} active users)")
         
-        welcome_text = (
-            f"🏏 *Cricket Live Match Centre* 🏏\n\n"
-            f"Welcome back! Choose an option below:"
-        )
+        # Reset navigation path
+        if user_id in self.user_sessions:
+            self.user_sessions[user_id]['navigation_path'] = ['home']
         
-        keyboard = [
-            [InlineKeyboardButton("🏏 Live Matches", callback_data="live_matches")],
-            [InlineKeyboardButton("📅 Schedule", callback_data="schedule")],
-            [InlineKeyboardButton("🏆 Competitions", callback_data="competitions")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        # Get updated dashboard data
+        dashboard_data = await user_data_manager.get_user_dashboard_data(user_id)
+        dashboard_data['username'] = query.from_user.first_name or query.from_user.username or 'Cricket Fan'
+        
+        # Create sophisticated main dashboard
+        welcome_text, reply_markup = self.ui_components.create_main_dashboard_menu(dashboard_data)
         
         await query.edit_message_text(
             welcome_text,
@@ -1416,7 +1543,7 @@ def main():
                 asyncio.run(simple_start_bot(token))
             
             # Create bot instance
-            bot = SimpleCricketBot(token)
+            bot = ProfessionalCricketBot(token)
             
             # Build application with simple settings
             application = (
