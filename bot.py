@@ -17,7 +17,7 @@ import subprocess
 import psutil
 from typing import Optional, Dict, Set, Any, Union, List
 from datetime import datetime
-from cricket_scraper import get_live_matches, get_match_schedule, get_match_details
+from cricket_scraper import get_live_matches, get_match_schedule, get_match_details, get_tournaments, get_tournament_standings
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import (
@@ -112,10 +112,11 @@ class SimpleCricketBot:
             f"Choose an option below:"
         )
         
-        # Simple menu with only essential features
+        # Enhanced menu with competitions feature
         keyboard = [
             [InlineKeyboardButton("🏏 Live Matches", callback_data="live_matches")],
-            [InlineKeyboardButton("📅 Schedule", callback_data="schedule")]
+            [InlineKeyboardButton("📅 Schedule", callback_data="schedule")],
+            [InlineKeyboardButton("🏆 Competitions", callback_data="competitions")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -140,8 +141,14 @@ class SimpleCricketBot:
             await self.handle_live_matches(query)
         elif callback_data == "schedule":
             await self.handle_schedule(query)
+        elif callback_data == "competitions":
+            await self.handle_competitions(query)
         elif callback_data.startswith("schedule_"):
             await self.handle_schedule_with_options(query, callback_data)
+        elif callback_data.startswith("tournament_"):
+            await self.handle_tournament_details(query, callback_data)
+        elif callback_data.startswith("standings_"):
+            await self.handle_standings(query, callback_data)
         elif callback_data.startswith("filter_"):
             await self.handle_schedule_filter(query, callback_data)
         elif callback_data == "back_to_main":
@@ -240,7 +247,8 @@ class SimpleCricketBot:
         
         keyboard = [
             [InlineKeyboardButton("🏏 Live Matches", callback_data="live_matches")],
-            [InlineKeyboardButton("📅 Schedule", callback_data="schedule")]
+            [InlineKeyboardButton("📅 Schedule", callback_data="schedule")],
+            [InlineKeyboardButton("🏆 Competitions", callback_data="competitions")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -312,6 +320,189 @@ class SimpleCricketBot:
         """Handle schedule filter changes."""
         # This can be extended for more complex filtering UI
         await self.handle_schedule(query)
+    
+    async def handle_competitions(self, query) -> None:
+        """Show list of active cricket competitions/tournaments."""
+        await query.edit_message_text("🏆 *Competitions*\n\n🔄 Loading tournaments...", parse_mode='Markdown')
+        
+        # Initialize tournaments variable to avoid unbound variable issue
+        tournaments = None
+        
+        try:
+            # Get tournaments from scraper
+            tournaments = await get_tournaments()
+            
+            if tournaments:
+                text = await self._format_competitions_text(tournaments)
+            else:
+                text = (
+                    "🏆 *Cricket Competitions*\n\n"
+                    "🔍 No active tournaments found at the moment.\n\n"
+                    "_This could be during off-season periods or due to data unavailability._"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error fetching tournaments: {e}")
+            text = (
+                "🏆 *Cricket Competitions*\n\n"
+                "⚠️ Unable to fetch tournament data.\n\n"
+                "_Please try again in a moment._"
+            )
+        
+        # Create tournament selection buttons
+        keyboard = []
+        
+        if tournaments:
+            # Add tournament buttons (max 8 tournaments to avoid message limits)
+            for tournament in tournaments[:8]:
+                button_text = f"{tournament.name[:25]}..." if len(tournament.name) > 25 else tournament.name
+                callback_data = f"tournament_{tournament.tournament_id}_{tournament.format.lower()}"
+                keyboard.append([InlineKeyboardButton(f"🏆 {button_text}", callback_data=callback_data)])
+            
+            # Add navigation buttons
+            keyboard.append([
+                InlineKeyboardButton("🔄 Refresh Competitions", callback_data="competitions"),
+                InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")
+            ])
+        else:
+            # Only show back button if no tournaments
+            keyboard.append([InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+    
+    async def handle_tournament_details(self, query, callback_data: str) -> None:
+        """Show detailed information about a specific tournament."""
+        # Parse callback data: tournament_id_format
+        parts = callback_data.split('_')
+        if len(parts) < 3:
+            await self.handle_competitions(query)
+            return
+        
+        tournament_id = parts[1]
+        tournament_format = parts[2]
+        
+        # Show loading message
+        await query.edit_message_text(
+            f"🏆 *Tournament Details*\n\n🔄 Loading tournament information...", 
+            parse_mode='Markdown'
+        )
+        
+        try:
+            # Get tournament details and standings
+            tournaments = await get_tournaments()
+            tournament = None
+            
+            # Find the specific tournament
+            for t in tournaments:
+                if t.tournament_id == tournament_id:
+                    tournament = t
+                    break
+            
+            if not tournament:
+                text = (
+                    "🏆 *Tournament Details*\n\n"
+                    "⚠️ Tournament not found or no longer active.\n\n"
+                    "_Please select from the current competitions._"
+                )
+                
+                keyboard = [
+                    [InlineKeyboardButton("🏆 Back to Competitions", callback_data="competitions")],
+                    [InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")]
+                ]
+            else:
+                # Format tournament details
+                text = await self._format_tournament_details(tournament)
+                
+                # Create action buttons
+                keyboard = [
+                    [InlineKeyboardButton("📊 View Standings", callback_data=f"standings_{tournament_id}")],
+                    [InlineKeyboardButton("🏏 Tournament Matches", callback_data=f"schedule_7_all_all_{tournament.name[:10]}")],
+                    [
+                        InlineKeyboardButton("🏆 All Competitions", callback_data="competitions"),
+                        InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")
+                    ]
+                ]
+        
+        except Exception as e:
+            logger.error(f"Error fetching tournament details for {tournament_id}: {e}")
+            text = (
+                "🏆 *Tournament Details*\n\n"
+                "⚠️ Unable to fetch tournament information.\n\n"
+                "_Please try again in a moment._"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("🏆 Back to Competitions", callback_data="competitions")],
+                [InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")]
+            ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+    
+    async def handle_standings(self, query, callback_data: str) -> None:
+        """Show tournament standings/points table."""
+        # Parse callback data: standings_tournament_id
+        parts = callback_data.split('_')
+        if len(parts) < 2:
+            await self.handle_competitions(query)
+            return
+        
+        tournament_id = parts[1]
+        
+        # Show loading message
+        await query.edit_message_text(
+            f"📊 *Tournament Standings*\n\n🔄 Loading points table...", 
+            parse_mode='Markdown'
+        )
+        
+        try:
+            # Get tournament standings
+            standings = await get_tournament_standings(tournament_id)
+            
+            if standings:
+                text = await self._format_standings_text(standings)
+            else:
+                # Try to get tournament name for better context
+                tournaments = await get_tournaments()
+                tournament_name = "Tournament"
+                for t in tournaments:
+                    if t.tournament_id == tournament_id:
+                        tournament_name = t.name
+                        break
+                
+                text = (
+                    f"📊 *{tournament_name} Standings*\n\n"
+                    "🔍 No standings data available.\n\n"
+                    "_This could be because:_\n"
+                    "• Points table not yet published\n"
+                    "• Tournament in knockout phase\n"
+                    "• Data temporarily unavailable\n\n"
+                    "_Please try again later._"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error fetching standings for {tournament_id}: {e}")
+            text = (
+                "📊 *Tournament Standings*\n\n"
+                "⚠️ Unable to fetch standings data.\n\n"
+                "_Please try again in a moment._"
+            )
+        
+        # Create navigation buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("🔄 Refresh Standings", callback_data=f"standings_{tournament_id}"),
+                InlineKeyboardButton("🏆 Tournament Details", callback_data=f"tournament_{tournament_id}_general")
+            ],
+            [
+                InlineKeyboardButton("🏆 All Competitions", callback_data="competitions"),
+                InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")
+            ]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
     
     async def _format_enhanced_schedule(self, matches: List, days: str, match_format: Optional[str] = None, team_filter: Optional[str] = None, tournament_filter: Optional[str] = None) -> str:
         """Format matches with enhanced display including series context and detailed information."""
@@ -388,6 +579,122 @@ class SimpleCricketBot:
             desc_parts.append(f"Tournament: {tournament_filter}")
         
         return " | ".join(desc_parts)
+    
+    async def _format_competitions_text(self, tournaments) -> str:
+        """Format tournaments list for Telegram display."""
+        text = "🏆 *Cricket Competitions*\n\n"
+        
+        if not tournaments:
+            return text + "🔍 No active tournaments found."
+        
+        # Group tournaments by status
+        ongoing_tournaments = [t for t in tournaments if t.status == "ongoing"]
+        upcoming_tournaments = [t for t in tournaments if t.status == "upcoming"]
+        completed_tournaments = [t for t in tournaments if t.status == "completed"]
+        
+        # Display ongoing tournaments first
+        if ongoing_tournaments:
+            text += "🔴 **LIVE TOURNAMENTS**\n"
+            text += "─" * 25 + "\n"
+            for tournament in ongoing_tournaments[:4]:  # Max 4 ongoing
+                text += f"{tournament.to_telegram_format()}\n"
+                if tournament.current_stage:
+                    text += f"   📍 Stage: {tournament.current_stage}\n"
+                text += "\n"
+        
+        # Display upcoming tournaments
+        if upcoming_tournaments:
+            if ongoing_tournaments:
+                text += "\n" + "═" * 30 + "\n\n"
+            text += "🕐 **UPCOMING TOURNAMENTS**\n"
+            text += "─" * 30 + "\n"
+            for tournament in upcoming_tournaments[:3]:  # Max 3 upcoming
+                text += f"{tournament.to_telegram_format()}\n"
+                if tournament.start_date:
+                    text += f"   📅 Starts: {tournament.start_date}\n"
+                text += "\n"
+        
+        # Display recently completed tournaments
+        if completed_tournaments and len(ongoing_tournaments) + len(upcoming_tournaments) < 5:
+            if ongoing_tournaments or upcoming_tournaments:
+                text += "\n" + "═" * 30 + "\n\n"
+            text += "✅ **RECENTLY COMPLETED**\n"
+            text += "─" * 28 + "\n"
+            for tournament in completed_tournaments[:2]:  # Max 2 completed
+                text += f"{tournament.to_telegram_format()}\n"
+                if tournament.end_date:
+                    text += f"   🏁 Ended: {tournament.end_date}\n"
+                text += "\n"
+        
+        # Add summary
+        text += f"\n📊 **Total:** {len(tournaments)} competitions found"
+        text += f"\n🔄 _Data cached for 30 minutes_"
+        
+        return text
+    
+    async def _format_tournament_details(self, tournament) -> str:
+        """Format detailed tournament information for Telegram display."""
+        text = tournament.to_telegram_format(include_details=True)
+        
+        # Add additional details not in the base format
+        text += "\n" + "═" * 40 + "\n\n"
+        
+        # Tournament overview
+        text += "📋 **TOURNAMENT OVERVIEW**\n"
+        text += "─" * 30 + "\n"
+        
+        if tournament.organizer:
+            text += f"🏢 Organizer: {tournament.organizer}\n"
+        
+        if tournament.teams:
+            team_count = len(tournament.teams)
+            text += f"👥 Teams: {team_count} participating\n"
+            
+            # Show first few team names if available
+            if team_count > 0:
+                team_names = [team.short_name or team.name for team in tournament.teams[:6]]
+                if team_count > 6:
+                    team_names.append(f"and {team_count - 6} more...")
+                text += f"   🏏 {', '.join(team_names)}\n"
+        
+        if tournament.total_matches > 0:
+            progress = (tournament.completed_matches / tournament.total_matches) * 100
+            text += f"📊 Progress: {tournament.completed_matches}/{tournament.total_matches} matches ({progress:.1f}%)\n"
+        
+        # Format and type details
+        text += f"\n🏏 **FORMAT & TYPE**\n"
+        text += "─" * 20 + "\n"
+        text += f"🎯 Format: {tournament.format}\n"
+        text += f"🏆 Type: {tournament.tournament_type}\n"
+        
+        # Status and stage information
+        if tournament.current_stage or tournament.status:
+            text += f"\n📍 **CURRENT STATUS**\n"
+            text += "─" * 25 + "\n"
+            if tournament.current_stage:
+                text += f"🎯 Stage: {tournament.current_stage}\n"
+            text += f"⚡ Status: {tournament.status.title()}\n"
+        
+        # Venue information
+        if tournament.venue_countries:
+            text += f"\n🌍 **VENUES**\n"
+            text += "─" * 15 + "\n"
+            text += f"🏟️ Countries: {', '.join(tournament.venue_countries)}\n"
+        
+        # Description if available
+        if tournament.description:
+            text += f"\n📝 **DESCRIPTION**\n"
+            text += "─" * 20 + "\n"
+            text += f"{tournament.description}\n"
+        
+        text += f"\n🔄 _Last updated: {datetime.now().strftime('%H:%M UTC')}_"
+        
+        return text
+    
+    async def _format_standings_text(self, standings) -> str:
+        """Format tournament standings for Telegram display."""
+        # Use the standings object's built-in formatting
+        return standings.to_telegram_format(show_detailed=True)
     
     def _create_schedule_navigation_keyboard(self, current_days: str, current_format: Optional[str] = None, current_team: Optional[str] = None, current_tournament: Optional[str] = None) -> List[List]:
         """Create navigation keyboard for schedule with quick filter options."""

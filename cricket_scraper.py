@@ -168,6 +168,178 @@ class Match:
         
         return result
 
+@dataclass
+class TeamStats:
+    """Data model for team statistics in tournaments."""
+    team: Team
+    position: int = 0
+    matches_played: int = 0
+    wins: int = 0
+    losses: int = 0
+    draws: int = 0
+    no_result: int = 0
+    points: float = 0.0
+    net_run_rate: float = 0.0
+    runs_for: int = 0
+    runs_against: int = 0
+    overs_faced: float = 0.0
+    overs_bowled: float = 0.0
+    form: List[str] = field(default_factory=list)  # L, W, N, D for last 5 matches
+    
+    def __post_init__(self):
+        """Calculate derived statistics."""
+        if self.matches_played > 0:
+            if self.overs_faced > 0 and self.overs_bowled > 0:
+                runs_for_rate = self.runs_for / self.overs_faced if self.overs_faced > 0 else 0
+                runs_against_rate = self.runs_against / self.overs_bowled if self.overs_bowled > 0 else 0
+                self.net_run_rate = runs_for_rate - runs_against_rate
+    
+    def to_telegram_format(self, show_detailed: bool = False) -> str:
+        """Format team stats for Telegram display."""
+        # Position emoji
+        pos_emoji = "🥇" if self.position == 1 else "🥈" if self.position == 2 else "🥉" if self.position == 3 else f"{self.position}."
+        
+        # Form indicators
+        form_text = ""
+        if self.form and show_detailed:
+            form_emojis = {"W": "🟢", "L": "🔴", "D": "🟡", "N": "⚪"}
+            form_text = f" {''.join([form_emojis.get(f, '⚪') for f in self.form[-5:]])}"
+        
+        result = f"{pos_emoji} **{self.team.short_name}**"
+        if show_detailed:
+            result += f"\n   📊 **{self.points:.1f} pts** | {self.matches_played} played"
+            result += f"\n   🏆 {self.wins}W {self.losses}L"
+            if self.draws > 0:
+                result += f" {self.draws}D"
+            if self.no_result > 0:
+                result += f" {self.no_result}NR"
+            result += f"\n   📈 NRR: {self.net_run_rate:+.3f}{form_text}"
+        else:
+            result += f" | **{self.points:.0f}** pts | {self.wins}W-{self.losses}L | NRR: {self.net_run_rate:+.2f}"
+        
+        return result
+
+@dataclass
+class Tournament:
+    """Data model for cricket tournaments/competitions."""
+    tournament_id: str
+    name: str
+    short_name: str = ""
+    format: str = ""  # T20, ODI, Test
+    tournament_type: str = ""  # League, Knockout, Round-robin, etc.
+    current_stage: str = ""  # Group Stage, Playoffs, Finals, etc.
+    start_date: str = ""
+    end_date: str = ""
+    teams: List[Team] = field(default_factory=list)
+    total_matches: int = 0
+    completed_matches: int = 0
+    venue_countries: List[str] = field(default_factory=list)
+    status: str = "ongoing"  # upcoming, ongoing, completed
+    description: str = ""
+    organizer: str = ""
+    
+    def __post_init__(self):
+        """Initialize derived fields."""
+        if not self.short_name:
+            # Create short name from tournament name
+            words = self.name.split()
+            if len(words) >= 2:
+                self.short_name = ''.join([word[0].upper() for word in words[:3]])
+            else:
+                self.short_name = self.name[:6].upper()
+    
+    def to_telegram_format(self, include_details: bool = False) -> str:
+        """Format tournament info for Telegram display."""
+        # Tournament status emoji
+        status_emoji = {
+            "upcoming": "🕐",
+            "ongoing": "🔴", 
+            "completed": "✅"
+        }.get(self.status, "🏆")
+        
+        result = f"{status_emoji} **{self.name}**"
+        
+        if include_details:
+            result += f"\n🏏 Format: {self.format} | Type: {self.tournament_type}"
+            
+            if self.current_stage:
+                result += f"\n📍 Stage: {self.current_stage}"
+            
+            if self.start_date and self.end_date:
+                result += f"\n📅 {self.start_date} - {self.end_date}"
+            
+            if self.venue_countries:
+                result += f"\n🌍 Venues: {', '.join(self.venue_countries)}"
+                
+            if self.teams:
+                result += f"\n👥 Teams: {len(self.teams)}"
+                
+            if self.total_matches > 0:
+                result += f"\n🏏 Matches: {self.completed_matches}/{self.total_matches}"
+                
+            if self.description:
+                result += f"\n📋 {self.description}"
+        else:
+            # Compact format for lists
+            result += f" ({self.format})"
+            if self.current_stage:
+                result += f" - {self.current_stage}"
+        
+        return result
+
+@dataclass 
+class Standing:
+    """Data model for tournament standings/points table."""
+    tournament: Tournament
+    team_stats: List[TeamStats] = field(default_factory=list)
+    last_updated: str = ""
+    groups: Dict[str, List[TeamStats]] = field(default_factory=dict)  # For group-based tournaments
+    stage: str = ""  # Group Stage, Points Table, etc.
+    notes: List[str] = field(default_factory=list)  # Qualification notes, etc.
+    
+    def __post_init__(self):
+        """Sort team stats by position."""
+        if self.team_stats:
+            self.team_stats.sort(key=lambda x: (x.position or float('inf'), -x.points, -x.net_run_rate))
+    
+    def to_telegram_format(self, show_detailed: bool = True) -> str:
+        """Format standings for Telegram display."""
+        result = f"🏆 **{self.tournament.short_name} - {self.stage or 'Standings'}**\n"
+        result += f"📅 Updated: {self.last_updated}\n\n"
+        
+        if self.groups:
+            # Group-based tournament display
+            for group_name, group_teams in self.groups.items():
+                result += f"**Group {group_name}**\n"
+                result += "─" * (len(group_name) + 8) + "\n"
+                
+                for team_stat in group_teams[:6]:  # Top 6 teams per group
+                    result += f"{team_stat.to_telegram_format(show_detailed)}\n"
+                
+                result += "\n"
+        else:
+            # Regular points table
+            if show_detailed:
+                result += "**Position | Team | Points | Played | W-L | NRR**\n"
+                result += "─" * 45 + "\n"
+            
+            for i, team_stat in enumerate(self.team_stats[:10]):  # Top 10 teams
+                if i == 4 and not show_detailed:  # Show qualification line
+                    result += "─" * 25 + "\n"
+                result += f"{team_stat.to_telegram_format(show_detailed)}\n"
+        
+        # Add qualification notes
+        if self.notes:
+            result += "\n📋 **Notes:**\n"
+            for note in self.notes[:3]:  # Max 3 notes
+                result += f"• {note}\n"
+                
+        if len(self.team_stats) > 10:
+            remaining = len(self.team_stats) - 10
+            result += f"\n... and {remaining} more teams"
+        
+        return result
+
 class RealCricketScraper:
     """Real Cricket Data Scraper using Web Scraping from Free Sources."""
     
@@ -1087,6 +1259,422 @@ class RealCricketScraper:
         
         return filtered_matches
 
+    async def get_tournaments(self) -> List[Tournament]:
+        """Get list of active cricket tournaments/competitions."""
+        cache_key = "tournaments_list"
+        
+        # Check cache first (30 minutes cache)
+        cached_tournaments = self._get_cached_tournaments(cache_key)
+        if cached_tournaments:
+            logger.info(f"🗄️ Returning cached tournaments data ({len(cached_tournaments)} tournaments)")
+            return cached_tournaments
+        
+        logger.info("🏆 Fetching cricket tournaments...")
+        all_tournaments = []
+        
+        # Try multiple sources for tournament data
+        tournament_urls = [
+            f"{self.cricbuzz_base_url}/cricket-series",
+            f"{self.cricbuzz_base_url}/cricket-series/international",
+            f"{self.cricbuzz_base_url}/cricket-schedule/series",
+            f"{self.espn_cricinfo_base_url}/series/_/status/current"
+        ]
+        
+        for tournament_url in tournament_urls:
+            try:
+                html = await self._fetch_url(tournament_url)
+                if html:
+                    tournaments = self._parse_tournament_list(html)
+                    if tournaments:
+                        all_tournaments.extend(tournaments)
+                        logger.info(f"✅ Found {len(tournaments)} tournaments from {tournament_url}")
+                        break  # Success, no need to try other URLs
+                    else:
+                        logger.warning(f"⚠️ No tournaments parsed from {tournament_url}")
+                else:
+                    logger.warning(f"⚠️ Failed to fetch {tournament_url}")
+            except Exception as e:
+                logger.warning(f"❌ Tournament scraping failed for {tournament_url}: {e}")
+                continue
+        
+        # Remove duplicates and sort by status (ongoing first)
+        unique_tournaments = self._deduplicate_tournaments(all_tournaments)
+        
+        # Cache the results for 30 minutes
+        self._cache_tournaments(cache_key, unique_tournaments)
+        
+        return unique_tournaments[:15]  # Return max 15 tournaments
+    
+    async def get_tournament_standings(self, tournament_id: str) -> Optional[Standing]:
+        """Get standings/points table for a specific tournament."""
+        cache_key = f"standings_{tournament_id}"
+        
+        # Check cache first (30 minutes cache)
+        cached_standings = self._get_cached_standings(cache_key)
+        if cached_standings:
+            logger.info(f"🗄️ Returning cached standings data for tournament {tournament_id}")
+            return cached_standings
+        
+        logger.info(f"📊 Fetching tournament standings for {tournament_id}...")
+        
+        # Try multiple URLs for standings data
+        standings_urls = [
+            f"{self.cricbuzz_base_url}/cricket-series/{tournament_id}/points-table",
+            f"{self.cricbuzz_base_url}/cricket-series/{tournament_id}/standings",
+            f"{self.cricbuzz_base_url}/cricket-series/{tournament_id}"
+        ]
+        
+        for standings_url in standings_urls:
+            try:
+                html = await self._fetch_url(standings_url)
+                if html:
+                    standings = self._parse_tournament_standings(html, tournament_id)
+                    if standings:
+                        # Cache the results for 30 minutes
+                        self._cache_standings(cache_key, standings)
+                        logger.info(f"✅ Found standings data for tournament {tournament_id}")
+                        return standings
+                    else:
+                        logger.warning(f"⚠️ No standings parsed from {standings_url}")
+                else:
+                    logger.warning(f"⚠️ Failed to fetch {standings_url}")
+            except Exception as e:
+                logger.warning(f"❌ Standings scraping failed for {standings_url}: {e}")
+                continue
+        
+        logger.error(f"🚫 Failed to fetch standings for tournament {tournament_id}")
+        return None
+
+    def _parse_tournament_list(self, html: str) -> List[Tournament]:
+        """Parse tournament list from HTML."""
+        tournaments = []
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Look for tournament/series elements with various selectors
+            series_selectors = [
+                'div.cb-series-lst',
+                'div.cb-series-item',
+                'div.cb-series-card',
+                'div.series-card',
+                'a[href*="cricket-series"]'
+            ]
+            
+            series_items = []
+            for selector in series_selectors:
+                items = soup.select(selector)
+                if items:
+                    series_items.extend(items)
+                    break
+            
+            for i, item in enumerate(series_items[:20]):  # Limit to 20 tournaments
+                try:
+                    # Extract tournament name
+                    name_elem = item.find(['h3', 'h2', 'h4', 'a']) if isinstance(item, Tag) else None
+                    tournament_name = self._safe_text(name_elem) if name_elem else ""
+                    
+                    if not tournament_name or len(tournament_name) < 3:
+                        continue
+                    
+                    # Extract tournament ID from href if available
+                    link_elem = item.find('a', href=True) if isinstance(item, Tag) else None
+                    tournament_id = ""
+                    if link_elem and isinstance(link_elem, Tag):
+                        href = link_elem.get('href', '')
+                        # Extract series ID from URL - ensure href is a string
+                        href_str = str(href) if href else ''
+                        id_match = re.search(r'/cricket-series/(\d+)', href_str)
+                        if id_match:
+                            tournament_id = id_match.group(1)
+                        else:
+                            tournament_id = f"tournament_{i+1}"
+                    else:
+                        tournament_id = f"tournament_{i+1}"
+                    
+                    # Extract format and other details
+                    item_text = item.get_text() if isinstance(item, Tag) else ""
+                    tournament_format = self._extract_tournament_format(item_text, tournament_name)
+                    
+                    # Determine tournament status
+                    status = "ongoing"  # Default
+                    if re.search(r'upcoming|starts|begins', item_text, re.I):
+                        status = "upcoming"
+                    elif re.search(r'completed|ended|finished', item_text, re.I):
+                        status = "completed"
+                    
+                    # Extract dates if available
+                    start_date = self._extract_tournament_dates(item_text, 'start')
+                    end_date = self._extract_tournament_dates(item_text, 'end')
+                    
+                    tournament = Tournament(
+                        tournament_id=tournament_id,
+                        name=tournament_name,
+                        format=tournament_format,
+                        status=status,
+                        start_date=start_date,
+                        end_date=end_date,
+                        tournament_type=self._determine_tournament_type(tournament_name, item_text),
+                        current_stage=self._extract_current_stage(item_text)
+                    )
+                    
+                    tournaments.append(tournament)
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Error parsing tournament item {i}: {e}")
+                    continue
+        
+        except Exception as e:
+            logger.error(f"❌ Error parsing tournament list: {e}")
+        
+        return tournaments
+    
+    def _parse_tournament_standings(self, html: str, tournament_id: str) -> Optional[Standing]:
+        """Parse tournament standings/points table from HTML."""
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Look for points table elements
+            table_selectors = [
+                'div.cb-srs-pnts-tbl',
+                'table.points-table',
+                'div.cb-points-table',
+                'div.standings-table',
+                'table[class*="points"]'
+            ]
+            
+            points_table = None
+            for selector in table_selectors:
+                table = soup.select_one(selector)
+                if table:
+                    points_table = table
+                    break
+            
+            if not points_table:
+                logger.warning("⚠️ No points table found in HTML")
+                return None
+            
+            # Extract team statistics
+            team_stats = []
+            
+            # Look for team rows in the table
+            team_row_selectors = [
+                'tr.cb-srs-pnts-th',
+                'tr.team-row',
+                'tr[class*="points"]',
+                'tbody tr'
+            ]
+            
+            team_rows = []
+            for selector in team_row_selectors:
+                rows = points_table.select(selector)
+                if rows:
+                    team_rows = rows
+                    break
+            
+            for i, row in enumerate(team_rows[:12]):  # Max 12 teams
+                try:
+                    if not isinstance(row, Tag):
+                        continue
+                    
+                    cells = row.find_all(['td', 'th'])
+                    if len(cells) < 3:  # Need at least team name and some stats
+                        continue
+                    
+                    # Extract team name (usually first or second cell)
+                    team_name = ""
+                    for cell in cells[:3]:
+                        cell_text = self._safe_text(cell).strip()
+                        if cell_text and not cell_text.isdigit() and len(cell_text) > 1:
+                            # Clean team name
+                            team_name = re.sub(r'[^\w\s]', '', cell_text).strip()
+                            if team_name:
+                                break
+                    
+                    if not team_name:
+                        continue
+                    
+                    # Extract statistics from cells
+                    cell_values = [self._safe_text(cell).strip() for cell in cells]
+                    
+                    # Parse numerical values
+                    numbers = [self._parse_number(val) for val in cell_values if self._is_numeric(val)]
+                    
+                    # Create team stats with best effort parsing
+                    team = Team(name=team_name)
+                    
+                    team_stat = TeamStats(
+                        team=team,
+                        position=i + 1,
+                        matches_played=int(numbers[0]) if len(numbers) > 0 else 0,
+                        wins=int(numbers[1]) if len(numbers) > 1 else 0,
+                        losses=int(numbers[2]) if len(numbers) > 2 else 0,
+                        points=float(numbers[3]) if len(numbers) > 3 else 0.0,
+                        net_run_rate=float(numbers[4]) if len(numbers) > 4 else 0.0
+                    )
+                    
+                    team_stats.append(team_stat)
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Error parsing team row {i}: {e}")
+                    continue
+            
+            if not team_stats:
+                logger.warning("⚠️ No team statistics found")
+                return None
+            
+            # Create tournament object
+            tournament = Tournament(
+                tournament_id=tournament_id,
+                name=f"Tournament {tournament_id}"
+            )
+            
+            # Create standings object
+            standings = Standing(
+                tournament=tournament,
+                team_stats=team_stats,
+                last_updated=datetime.now().strftime("%Y-%m-%d %H:%M"),
+                stage="Points Table"
+            )
+            
+            return standings
+            
+        except Exception as e:
+            logger.error(f"❌ Error parsing tournament standings: {e}")
+            return None
+    
+    def _extract_tournament_format(self, item_text: str, tournament_name: str) -> str:
+        """Extract tournament format from text."""
+        combined_text = f"{tournament_name} {item_text}".lower()
+        
+        format_patterns = [
+            (r'\bt20\b', 'T20'),
+            (r'\bodi\b', 'ODI'), 
+            (r'\btest\b', 'Test'),
+            (r'\bipl\b', 'T20'),
+            (r'\bbbl\b', 'T20'),
+            (r'\bpsl\b', 'T20'),
+            (r'\bcpl\b', 'T20'),
+            (r'world\s+cup', 'ODI'),
+            (r'champions\s+trophy', 'ODI')
+        ]
+        
+        for pattern, format_name in format_patterns:
+            if re.search(pattern, combined_text):
+                return format_name
+        
+        return "Cricket"
+    
+    def _determine_tournament_type(self, tournament_name: str, item_text: str) -> str:
+        """Determine tournament type from name and text."""
+        combined_text = f"{tournament_name} {item_text}".lower()
+        
+        if re.search(r'league|ipl|bbl|psl|cpl', combined_text):
+            return "League"
+        elif re.search(r'world\s+cup|champions|trophy', combined_text):
+            return "Knockout"
+        elif re.search(r'series|bilateral', combined_text):
+            return "Series"
+        else:
+            return "Tournament"
+    
+    def _extract_current_stage(self, item_text: str) -> str:
+        """Extract current stage from text."""
+        stage_patterns = [
+            (r'group\s+stage', 'Group Stage'),
+            (r'playoffs?', 'Playoffs'),
+            (r'semi.?finals?', 'Semi Finals'),
+            (r'finals?', 'Finals'),
+            (r'qualifiers?', 'Qualifiers')
+        ]
+        
+        for pattern, stage in stage_patterns:
+            if re.search(pattern, item_text, re.I):
+                return stage
+        
+        return ""
+    
+    def _extract_tournament_dates(self, item_text: str, date_type: str) -> str:
+        """Extract start or end dates from text."""
+        # Look for date patterns
+        date_patterns = [
+            r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',
+            r'(\d{1,2}\s+\w+\s+\d{4})',
+            r'(\w+\s+\d{1,2},?\s+\d{4})'
+        ]
+        
+        for pattern in date_patterns:
+            matches = re.findall(pattern, item_text)
+            if matches:
+                if date_type == 'start':
+                    return matches[0] if len(matches) > 0 else ""
+                else:  # end date
+                    return matches[-1] if len(matches) > 0 else ""
+        
+        return ""
+    
+    def _deduplicate_tournaments(self, tournaments: List[Tournament]) -> List[Tournament]:
+        """Remove duplicate tournaments and sort by relevance."""
+        seen_names = set()
+        unique_tournaments = []
+        
+        # Sort by status priority: ongoing > upcoming > completed
+        status_priority = {"ongoing": 0, "upcoming": 1, "completed": 2}
+        tournaments.sort(key=lambda t: status_priority.get(t.status, 3))
+        
+        for tournament in tournaments:
+            # Create a normalized name for comparison
+            normalized_name = re.sub(r'\W+', '', tournament.name.lower())
+            if normalized_name not in seen_names:
+                seen_names.add(normalized_name)
+                unique_tournaments.append(tournament)
+        
+        return unique_tournaments
+    
+    def _is_numeric(self, value: str) -> bool:
+        """Check if a string represents a number."""
+        try:
+            float(value.replace('+', '').replace('-', ''))
+            return True
+        except ValueError:
+            return False
+    
+    def _parse_number(self, value: str) -> Union[int, float]:
+        """Parse a string to number."""
+        try:
+            if '.' in value:
+                return float(value)
+            else:
+                return int(value)
+        except ValueError:
+            return 0
+
+    # Tournament caching methods
+    def _get_cached_tournaments(self, cache_key: str) -> Optional[List[Tournament]]:
+        """Get cached tournaments if available and not expired."""
+        if cache_key in self.schedule_cache:
+            cached_data, timestamp = self.schedule_cache[cache_key]
+            if time.time() - timestamp < 1800:  # 30 minutes cache
+                return cached_data
+        return None
+    
+    def _cache_tournaments(self, cache_key: str, tournaments: List[Tournament]) -> None:
+        """Cache tournaments data."""
+        self.schedule_cache[cache_key] = (tournaments, time.time())
+        logger.info(f"📦 Cached {len(tournaments)} tournaments")
+    
+    def _get_cached_standings(self, cache_key: str) -> Optional[Standing]:
+        """Get cached standings if available and not expired.""" 
+        if cache_key in self.schedule_cache:
+            cached_data, timestamp = self.schedule_cache[cache_key]
+            if time.time() - timestamp < 1800:  # 30 minutes cache
+                return cached_data
+        return None
+    
+    def _cache_standings(self, cache_key: str, standings: Standing) -> None:
+        """Cache standings data."""
+        self.schedule_cache[cache_key] = (standings, time.time())
+        logger.info(f"📦 Cached standings for tournament {standings.tournament.tournament_id}")
+
 # Global scraper instance
 _scraper_instance = None
 
@@ -1125,6 +1713,26 @@ async def get_match_details(match_id: str) -> Optional[Match]:
             return None
     except Exception as e:
         logger.error(f"❌ Error in get_match_details: {e}")
+        return None
+
+async def get_tournaments() -> List[Tournament]:
+    """Public function to get active cricket tournaments."""
+    try:
+        async with RealCricketScraper() as scraper:
+            tournaments = await scraper.get_tournaments()
+            return tournaments
+    except Exception as e:
+        logger.error(f"❌ Error in get_tournaments: {e}")
+        return []
+
+async def get_tournament_standings(tournament_id: str) -> Optional[Standing]:
+    """Public function to get tournament standings."""
+    try:
+        async with RealCricketScraper() as scraper:
+            standings = await scraper.get_tournament_standings(tournament_id)
+            return standings
+    except Exception as e:
+        logger.error(f"❌ Error in get_tournament_standings: {e}")
         return None
 
 # Sync wrapper functions for backward compatibility
