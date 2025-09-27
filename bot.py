@@ -30,12 +30,11 @@ from telegram.ext import (
 )
 from telegram.error import Conflict, TelegramError, NetworkError
 
-# Configure logging
+# Configure logging - Railway optimized (stdout only, no file logging)
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     handlers=[
-        logging.FileHandler('bot.log'),
         logging.StreamHandler()
     ]
 )

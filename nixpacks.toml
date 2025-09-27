@@ -1,0 +1,31 @@
+# Railway Nixpacks Configuration for Cricket Bot
+# Optimized for Python 3.11 deployment on Railway
+
+[variables]
+# Deployment environment variables
+NIXPACKS_PYTHON_VERSION = "3.11"
+PYTHONUNBUFFERED = "1"
+PYTHONDONTWRITEBYTECODE = "1"
+
+[phases.setup]
+# Install Python 3.11 and required system dependencies
+nixPkgs = ["python311", "python311Packages.pip"]
+
+[phases.install]
+# Install Python dependencies from requirements.txt
+cmds = [
+    "pip install --upgrade pip",
+    "pip install -r requirements.txt"
+]
+
+[phases.build]
+# Pre-deployment build phase (if needed)
+cmds = [
+    "python -c 'import sys; print(f\"Python version: {sys.version}\")'",
+    "python -c 'import asyncio; print(f\"Using built-in asyncio: {asyncio.__file__}\")'",
+    "python -m py_compile bot.py main.py cricket_scraper.py"
+]
+
+[start]
+# Use the Procfile for process configuration
+cmd = "python -u main.py"
