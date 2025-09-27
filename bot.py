@@ -98,6 +98,13 @@ class SimpleCricketBot:
         self.match_cache: Dict[str, Any] = {}  # Cache for match details
         self.last_data_hash = ""  # To detect actual data changes
         
+        # Dynamic scheduling system
+        self.update_job: Optional[Any] = None
+        self.current_interval = 10.0  # Current update interval
+        self.fast_interval = 1.5  # Fast interval when users are active (1.5 seconds)
+        self.slow_interval = 10.0  # Slow interval when no users are active
+        self.last_interval_check = 0.0
+        
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle the /start command - Main Menu."""
         if not update.effective_user or not update.message:
@@ -755,7 +762,13 @@ class SimpleCricketBot:
     async def format_live_matches_text(self) -> str:
         """Format the live matches text for display with enhanced formatting."""
         try:
-            live_matches = await get_live_matches()
+            # Use centralized fetcher for ultra-fast data and deduplication
+            try:
+                from centralized_fetcher import get_live_matches_centralized
+                live_matches = await get_live_matches_centralized("telegram_bot")
+            except ImportError:
+                logger.warning("⚠️ Centralized fetcher not available, using fallback")
+                live_matches = await get_live_matches()
             
             if live_matches:
                 text = "🏏 *Live Cricket Matches*\n\n"
@@ -769,7 +782,7 @@ class SimpleCricketBot:
                         text += "\n" + "─" * 30 + "\n\n"
                 
                 text += f"\n\n📊 *{len(live_matches)} live matches available*\n"
-                text += "🔄 _Auto-updating every 10 seconds..._"
+                text += "🔄 _Auto-updating every 1-2 seconds for real-time scores..._"
                 
                 return text
             else:
@@ -786,6 +799,40 @@ class SimpleCricketBot:
                 "_Please try again in a moment._"
             )
     
+    def adjust_update_interval(self) -> None:
+        """Dynamically adjust update interval based on active users."""
+        current_time = time.time()
+        
+        # Only check interval adjustment every 5 seconds to avoid thrashing
+        if current_time - self.last_interval_check < 5.0:
+            return
+            
+        self.last_interval_check = current_time
+        active_users = len(self.live_users)
+        
+        # Determine optimal interval
+        target_interval = self.fast_interval if active_users > 0 else self.slow_interval
+        
+        # Only reschedule if interval needs to change significantly
+        if abs(self.current_interval - target_interval) > 0.5:
+            self.current_interval = target_interval
+            
+            if self.application and self.application.job_queue and self.update_job:
+                try:
+                    # Remove existing job
+                    self.update_job.schedule_removal()
+                    
+                    # Add new job with updated interval
+                    self.update_job = self.application.job_queue.run_repeating(
+                        self.update_all_live_users,
+                        interval=self.current_interval,
+                        first=0.5  # Start quickly
+                    )
+                    
+                    logger.info(f"🚀 Adjusted update interval to {target_interval}s for {active_users} active users")
+                except Exception as e:
+                    logger.error(f"❌ Failed to adjust update interval: {e}")
+    
     async def update_all_live_users(self, context=None):
         """Enhanced live user updates with stale user cleanup and error resilience."""
         if not self.live_users or not self.bot_instance:
@@ -793,6 +840,9 @@ class SimpleCricketBot:
             
         current_time = time.time()
         users_to_remove = []
+        
+        # Adjust update interval dynamically based on user activity
+        self.adjust_update_interval()
         
         # First, clean up stale users
         await self._cleanup_stale_users()
@@ -1251,14 +1301,14 @@ async def async_main():
         application.add_error_handler(bot.simple_error_handler)
         logger.info("🛡️ Added simple error handler")
         
-        # Set up automatic live updates
+        # Set up dynamic live updates
         if application.job_queue:
-            application.job_queue.run_repeating(
+            bot.update_job = application.job_queue.run_repeating(
                 bot.update_all_live_users,
-                interval=10,
-                first=8
+                interval=bot.slow_interval,  # Start with slow interval
+                first=2  # Faster initial start
             )
-            logger.info("🔄 Started automatic live updates (10 second interval)")
+            logger.info(f"🔄 Started dynamic live updates ({bot.slow_interval}s interval, adjusts to {bot.fast_interval}s when users active)")
         else:
             logger.warning("⚠️ Job queue not available, automatic updates disabled")
         

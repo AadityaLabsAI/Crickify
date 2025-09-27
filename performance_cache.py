@@ -372,31 +372,31 @@ class PerformanceCacheManager:
         """Initialize cache manager with multiple specialized caches."""
         # Specialized caches for different data types
         self.live_matches_cache = LRUCache(
-            max_size=100,
-            max_memory_mb=10.0,
-            default_ttl=30.0,  # 30 seconds for live data
-            cleanup_interval=15.0
+            max_size=200,
+            max_memory_mb=15.0,
+            default_ttl=1.5,  # 1.5 seconds for ultra-fast live data
+            cleanup_interval=5.0  # More frequent cleanup for real-time
         )
         
         self.schedule_cache = LRUCache(
-            max_size=200,
-            max_memory_mb=15.0,
-            default_ttl=600.0,  # 10 minutes for schedule data
-            cleanup_interval=120.0
+            max_size=300,
+            max_memory_mb=20.0,
+            default_ttl=300.0,  # 5 minutes for schedule data (faster refresh)
+            cleanup_interval=60.0
         )
         
         self.tournament_cache = LRUCache(
-            max_size=50,
-            max_memory_mb=5.0,
-            default_ttl=1800.0,  # 30 minutes for tournament data
-            cleanup_interval=300.0
+            max_size=100,
+            max_memory_mb=8.0,
+            default_ttl=900.0,  # 15 minutes for tournament data
+            cleanup_interval=180.0
         )
         
         self.standings_cache = LRUCache(
-            max_size=100,
-            max_memory_mb=8.0,
-            default_ttl=1200.0,  # 20 minutes for standings
-            cleanup_interval=240.0
+            max_size=150,
+            max_memory_mb=12.0,
+            default_ttl=600.0,  # 10 minutes for standings (faster refresh)
+            cleanup_interval=120.0
         )
         
         # Performance monitoring

@@ -385,11 +385,11 @@ class RealCricketScraper:
         """Initialize the cricket scraper with enhanced error handling."""
         self.session = None
         self.last_request_time = {}
-        self.rate_limit_delay = 2.0  # 2 seconds between requests for respectful scraping
+        self.rate_limit_delay = 1.5  # 1.5 seconds between requests for fast updates
         self.match_details_cache = {}  # Cache for detailed match information
-        self.cache_duration = 12  # Cache duration in seconds - used for detail page throttling
+        self.cache_duration = 8  # 8 second cache for real-time data
         self.schedule_cache = {}  # Cache for schedule data
-        self.schedule_cache_duration = 300  # 5 minutes for schedule cache
+        self.schedule_cache_duration = 120  # 2 minutes for schedule cache (faster updates)
         
         # Enhanced error handling and resilience features
         self.circuit_breakers = {}  # Domain-based circuit breakers
@@ -402,6 +402,29 @@ class RealCricketScraper:
         self.cricbuzz_base_url = "https://www.cricbuzz.com"
         self.espn_cricinfo_base_url = "https://www.espncricinfo.com"
         
+        # JSON API endpoints for structured data (much faster than HTML parsing)
+        self.cricbuzz_api_endpoints = {
+            'live_matches': "https://www.cricbuzz.com/api/cricket-match/live-scores",
+            'live_scores': "https://www.cricbuzz.com/api/cricket/live",  
+            'match_details': "https://www.cricbuzz.com/api/cricket-match/{}",
+            'commentary': "https://www.cricbuzz.com/api/cricket-match/{}/commentary",
+            'scorecard': "https://www.cricbuzz.com/api/cricket-match/{}/scorecard"
+        }
+        
+        self.espn_api_endpoints = {
+            'live_matches': "https://www.espncricinfo.com/ci/engine/match/index.html?view=live",
+            'live_scores': "https://hs-consumer-api.espncricinfo.com/v1/pages/matches",
+            'match_centre': "https://hs-consumer-api.espncricinfo.com/v1/pages/match/home",
+            'match_details': "https://hs-consumer-api.espncricinfo.com/v1/pages/match/details"
+        }
+        
+        # Alternative/backup JSON endpoints
+        self.backup_endpoints = {
+            'cricbuzz_mobile': "https://m.cricbuzz.com/api/cricket-match/live-scores/",
+            'cricbuzz_scores': "https://www.cricbuzz.com/cricket-api/live-scores/",
+            'espn_mobile': "https://m.espncricinfo.com/api/v1/live-scores"
+        }
+        
         # Headers to mimic a real browser
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -413,17 +436,17 @@ class RealCricketScraper:
             'Cache-Control': 'max-age=0'
         }
         
-        # Enhanced retry configuration with exponential backoff
-        self.max_retries = 5
-        self.base_retry_delay = 2  # Base delay in seconds
-        self.max_retry_delay = 30  # Maximum retry delay
-        self.retry_multiplier = 2  # Exponential backoff multiplier
-        self.jitter_range = 0.3  # Random jitter to prevent thundering herd
+        # Enhanced retry configuration optimized for real-time scraping
+        self.max_retries = 3  # Reduced retries for faster failure detection
+        self.base_retry_delay = 1  # Faster retry base delay
+        self.max_retry_delay = 15  # Reduced max delay for real-time needs
+        self.retry_multiplier = 1.5  # More aggressive retry multiplier
+        self.jitter_range = 0.2  # Reduced jitter for more predictable timing
         
-        # Timeout configurations
-        self.default_timeout = 15
-        self.slow_timeout = 30  # For slower sources
-        self.fast_timeout = 10   # For faster sources
+        # Optimized timeout configurations for real-time scraping
+        self.default_timeout = 10  # Reduced for faster response
+        self.slow_timeout = 20  # Reduced slow timeout
+        self.fast_timeout = 6   # Very fast timeout for live data
     
     async def __aenter__(self):
         """Enhanced async context manager entry with connection pooling."""
@@ -714,75 +737,77 @@ class RealCricketScraper:
         return await self._get_fallback_data(url)
     
     def _parse_cricbuzz_live_matches(self, html: str) -> List[Match]:
-        """Parse live matches from Cricbuzz HTML."""
+        """Enhanced parsing of live matches from Cricbuzz HTML with 2024 selectors."""
         matches = []
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Look for live match cards in Cricbuzz
-            match_cards = soup.find_all('div', attrs={'class': ['cb-mtch-lst', 'cb-schdl']})
+            # Enhanced selectors for 2024 Cricbuzz structure
+            match_selectors = [
+                'div[class*="cb-mtch-lst"]',  # Standard match list
+                'div[class*="cb-live-match"]',  # Live matches
+                'div[class*="cb-scrd-itms"]',  # Score items
+                'div[class*="cb-schdl"]',  # Schedule items
+                'div.cb-col-100.cb-col',  # Alternative structure
+                'a[href*="live-cricket"]',  # Live cricket links
+            ]
             
-            for card in match_cards[:5]:  # Limit to 5 matches
+            match_cards = []
+            for selector in match_selectors:
+                cards = soup.select(selector)
+                if cards:
+                    match_cards.extend(cards)
+                    logger.info(f"🎯 Found {len(cards)} match cards with selector: {selector}")
+                    break
+            
+            # If no matches found with standard selectors, try broader search
+            if not match_cards:
+                # Look for any div containing cricket score patterns
+                all_divs = soup.find_all('div')
+                for div in all_divs:
+                    text = self._safe_text(div)
+                    if re.search(r'\b\d+[/-]\d+\b.*\([\d.]+\s*ov\)', text) or 'vs' in text.lower():
+                        match_cards.append(div)
+                logger.info(f"🔍 Fallback search found {len(match_cards)} potential match cards")
+            
+            for i, card in enumerate(match_cards[:8]):  # Process up to 8 matches
                 try:
-                    # Extract match info
-                    match_title = self._safe_text(card.find('h3', attrs={'class': 'cb-lv-scrs-mtch-hdr'}) if isinstance(card, Tag) else None)
-                    if not match_title:
-                        match_title = self._safe_text(card.find('div', attrs={'class': 'cb-ovr-flo'}) if isinstance(card, Tag) else None)
+                    # Enhanced title extraction
+                    match_title = self._extract_enhanced_title(card)
                     
-                    # Extract team info
-                    team_divs = card.find_all('div', attrs={'class': ['cb-hmscg-tm-nm', 'cb-ovr-flo']}) if isinstance(card, Tag) else []
-                    teams_data = []
-                    
-                    for team_div in team_divs[:2]:  # Only first 2 teams
-                        team_name = self._safe_text(team_div)
-                        if team_name and len(team_name) > 1:
-                            # Try to extract score info
-                            score_elem = team_div.find_next('div', attrs={'class': ['cb-ovr-flo', 'cb-scrd-itms']}) if isinstance(team_div, Tag) else None
-                            score_text = self._safe_text(score_elem) if score_elem else ""
-                            
-                            score, wickets, overs = self._parse_score_text(score_text)
-                            
-                            team = Team(
-                                name=team_name,
-                                short_name=team_name[:3].upper(),
-                                score=score,
-                                wickets=wickets,
-                                overs=overs
-                            )
-                            teams_data.append(team)
+                    # Enhanced team extraction with score parsing
+                    teams_data = self._extract_teams_with_scores(card)
                     
                     if len(teams_data) >= 2 and match_title:
-                        # Determine match status
-                        status_text = self._safe_text(card.find('div', attrs={'class': ['cb-text-live', 'cb-text-complete']}) if isinstance(card, Tag) else None)
-                        status = MatchStatus.LIVE if 'live' in status_text.lower() else MatchStatus.UPCOMING
+                        # Enhanced status detection
+                        status = self._determine_match_status(card)
                         
-                        # Extract venue and time
-                        venue_elem = card.find('div', attrs={'class': 'cb-mtch-info-itm'}) if isinstance(card, Tag) else None
-                        venue = self._safe_text(venue_elem) if venue_elem else "Unknown Venue"
+                        # Enhanced venue and match details
+                        match_details = self._extract_match_metadata(card)
                         
-                        # Extract match format if available
-                        format_text = "Cricket Match"
-                        format_indicators = card.find_all(text=re.compile(r'T20|ODI|Test|T10', re.I)) if isinstance(card, Tag) else []
-                        if format_indicators:
-                            format_text = str(format_indicators[0]).strip()
-                        
+                        # Create match with enhanced data
                         match = Match(
-                            match_id=f"cb_{len(matches) + 1}_{int(time.time())}",  # Unique ID with timestamp
+                            match_id=f"cb_{i + 1}_{int(time.time())}",
                             title=match_title,
                             team1=teams_data[0],
-                            team2=teams_data[1],
+                            team2=teams_data[1] if len(teams_data) > 1 else Team("TBD", "TBD"),
                             status=status,
-                            venue=venue,
-                            date=datetime.now().strftime("%d %b %Y, %I:%M %p"),
-                            format=format_text
+                            venue=match_details.get('venue', 'Venue TBD'),
+                            date=match_details.get('date', datetime.now().strftime("%d %b %Y, %I:%M %p")),
+                            format=match_details.get('format', 'Cricket Match'),
+                            toss=match_details.get('toss', ''),
+                            current_partnership=match_details.get('partnership', ''),
+                            recent_overs=match_details.get('recent_overs', []),
+                            commentary=match_details.get('commentary', [])
                         )
                         matches.append(match)
+                        logger.info(f"✅ Parsed match: {match_title} ({teams_data[0].short_name} vs {teams_data[1].short_name if len(teams_data) > 1 else 'TBD'})")
                         
                 except Exception as e:
-                    logger.warning(f"⚠️ Error parsing Cricbuzz match card: {e}")
+                    logger.warning(f"⚠️ Error parsing Cricbuzz match card {i}: {e}")
                     continue
             
-            logger.info(f"✅ Parsed {len(matches)} matches from Cricbuzz")
+            logger.info(f"🏏 Successfully parsed {len(matches)} matches from Cricbuzz")
             
         except Exception as e:
             logger.error(f"❌ Error parsing Cricbuzz HTML: {e}")
@@ -790,70 +815,76 @@ class RealCricketScraper:
         return matches
     
     def _parse_espn_live_matches(self, html: str) -> List[Match]:
-        """Parse live matches from ESPN Cricinfo HTML."""
+        """Enhanced parsing of live matches from ESPN Cricinfo HTML with 2024 structure."""
         matches = []
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Look for match containers in ESPN Cricinfo
-            match_containers = soup.find_all('div', attrs={'class': ['match-info', 'match-block']})
+            # Enhanced selectors for 2024 ESPN Cricinfo structure
+            match_selectors = [
+                'div[class*="match"]',  # General match containers
+                'div[class*="score"]',  # Score containers
+                'div[class*="result"]',  # Result containers
+                'article[class*="match"]',  # Article-based matches
+                'div.ds-p-4',  # ESPN's design system containers
+                'div[data-testid*="match"]',  # Test ID based selectors
+                'a[href*="match"]',  # Match links
+                'div[class*="card"]'  # Card-based layouts
+            ]
             
-            for container in match_containers[:5]:  # Limit to 5 matches
+            match_containers = []
+            for selector in match_selectors:
+                containers = soup.select(selector)
+                if containers:
+                    match_containers.extend(containers)
+                    logger.info(f"📺 Found {len(containers)} ESPN containers with: {selector}")
+                    break
+            
+            # Try finding score patterns in text if no containers found
+            if not match_containers:
+                # Look for text containing team vs team or score patterns
+                potential_matches = soup.find_all(text=re.compile(r'\bvs\b|\b\d+[/-]\d+\b'))
+                for text_node in potential_matches[:10]:
+                    parent = text_node.parent if hasattr(text_node, 'parent') else None
+                    if parent and parent not in match_containers:
+                        match_containers.append(parent)
+                logger.info(f"🔍 ESPN fallback found {len(match_containers)} potential containers")
+            
+            for i, container in enumerate(match_containers[:8]):  # Process up to 8 matches
                 try:
-                    # Extract match title
-                    title_elem = None
-                    if isinstance(container, Tag):
-                        for tag_name in ['h3', 'h2', 'a']:
-                            title_elem = container.find(tag_name)
-                            if title_elem:
-                                break
-                    match_title = self._safe_text(title_elem) if title_elem else ""
+                    # Enhanced ESPN title extraction
+                    match_title = self._extract_espn_title(container)
                     
-                    # Extract team names and scores
-                    team_elements = container.find_all('span', attrs={'class': ['name', 'team']}) if isinstance(container, Tag) else []
-                    score_elements = container.find_all('span', attrs={'class': ['score', 'runs']}) if isinstance(container, Tag) else []
-                    
-                    teams_data = []
-                    for i, team_elem in enumerate(team_elements[:2]):
-                        team_name = self._safe_text(team_elem)
-                        if team_name:
-                            score_text = ""
-                            if i < len(score_elements):
-                                score_text = self._safe_text(score_elements[i])
-                            
-                            score, wickets, overs = self._parse_score_text(score_text)
-                            
-                            team = Team(
-                                name=team_name,
-                                short_name=team_name[:3].upper(),
-                                score=score,
-                                wickets=wickets,
-                                overs=overs
-                            )
-                            teams_data.append(team)
+                    # Enhanced ESPN team and score extraction
+                    teams_data = self._extract_espn_teams_scores(container)
                     
                     if len(teams_data) >= 2 and match_title:
-                        # Determine status
-                        status_indicators = container.find_all(text=re.compile(r'live|completed|upcoming', re.I)) if isinstance(container, Tag) else []
-                        status = MatchStatus.LIVE if any('live' in str(s).lower() for s in status_indicators if s) else MatchStatus.UPCOMING
+                        # Enhanced status detection for ESPN
+                        status = self._determine_espn_status(container)
+                        
+                        # Extract ESPN-specific metadata
+                        espn_details = self._extract_espn_metadata(container)
                         
                         match = Match(
-                            match_id=f"espn_{len(matches) + 1}",
+                            match_id=f"espn_{i + 1}_{int(time.time())}",
                             title=match_title,
                             team1=teams_data[0],
-                            team2=teams_data[1],
+                            team2=teams_data[1] if len(teams_data) > 1 else Team("TBD", "TBD"),
                             status=status,
-                            venue="ESPN Cricinfo",
-                            date=datetime.now().strftime("%d %b %Y, %I:%M %p"),
-                            format="Cricket Match"
+                            venue=espn_details.get('venue', 'Venue TBD'),
+                            date=espn_details.get('date', datetime.now().strftime("%d %b %Y, %I:%M %p")),
+                            format=espn_details.get('format', 'Cricket Match'),
+                            series_name=espn_details.get('series', ''),
+                            match_status_detail=espn_details.get('status_detail', '')
                         )
                         matches.append(match)
+                        logger.info(f"📺 ESPN parsed: {match_title} ({teams_data[0].short_name} vs {teams_data[1].short_name if len(teams_data) > 1 else 'TBD'})")
                         
                 except Exception as e:
-                    logger.warning(f"⚠️ Error parsing ESPN match container: {e}")
+                    logger.warning(f"⚠️ Error parsing ESPN container {i}: {e}")
                     continue
             
-            logger.info(f"✅ Parsed {len(matches)} matches from ESPN Cricinfo")
+            logger.info(f"📺 Successfully parsed {len(matches)} matches from ESPN Cricinfo")
             
         except Exception as e:
             logger.error(f"❌ Error parsing ESPN HTML: {e}")
@@ -869,6 +900,416 @@ class RealCricketScraper:
             return text if text else ""
         except:
             return ""
+    
+    def _extract_enhanced_title(self, card) -> str:
+        """Extract match title with multiple strategies for Cricbuzz."""
+        if not isinstance(card, Tag):
+            return ""
+        
+        # Try multiple selectors for enhanced title extraction
+        title_selectors = [
+            'h3.cb-lv-scrs-mtch-hdr',
+            'h3[class*="cb-"]',
+            'div.cb-ovr-flo',
+            'a[href*="live-cricket"]',
+            'div[class*="title"]',
+            'span[class*="title"]'
+        ]
+        
+        for selector in title_selectors:
+            title_elem = card.select_one(selector)
+            if title_elem:
+                title = self._safe_text(title_elem)
+                if title and len(title) > 5:
+                    return title
+        
+        # Fallback: search for text containing "vs" pattern
+        card_text = self._safe_text(card)
+        vs_match = re.search(r'([A-Z]{2,}\s+vs\s+[A-Z]{2,})', card_text, re.I)
+        if vs_match:
+            return vs_match.group(1)
+        
+        return "Cricket Match"
+    
+    def _extract_teams_with_scores(self, card) -> List[Team]:
+        """Enhanced team extraction with scores for Cricbuzz."""
+        teams_data = []
+        if not isinstance(card, Tag):
+            return teams_data
+        
+        try:
+            # Enhanced team name selectors
+            team_selectors = [
+                'div.cb-hmscg-tm-nm',
+                'div[class*="cb-ovr-flo"]',
+                'span[class*="team"]',
+                'div[class*="team-name"]'
+            ]
+            
+            team_elements = []
+            for selector in team_selectors:
+                elems = card.select(selector)
+                if len(elems) >= 2:
+                    team_elements = elems[:2]
+                    break
+            
+            # Extract team info with scores
+            for i, team_elem in enumerate(team_elements):
+                team_name = self._safe_text(team_elem)
+                if team_name and len(team_name) > 1:
+                    # Enhanced score extraction
+                    score_text = self._find_associated_score(team_elem, card)
+                    score, wickets, overs = self._parse_score_text(score_text)
+                    
+                    # Calculate run rate if possible
+                    run_rate = self._calculate_run_rate(score, overs)
+                    
+                    team = Team(
+                        name=team_name,
+                        short_name=self._generate_short_name(team_name),
+                        score=score,
+                        wickets=wickets,
+                        overs=overs,
+                        run_rate=run_rate
+                    )
+                    teams_data.append(team)
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error extracting teams with scores: {e}")
+        
+        return teams_data
+    
+    def _find_associated_score(self, team_elem, card) -> str:
+        """Find score associated with a team element."""
+        if not isinstance(team_elem, Tag):
+            return ""
+        
+        # Try to find score in next siblings
+        next_elem = team_elem.find_next_sibling()
+        if next_elem:
+            score_text = self._safe_text(next_elem)
+            if re.search(r'\d+[/-]\d+', score_text):
+                return score_text
+        
+        # Try parent container
+        parent = team_elem.parent
+        if parent:
+            parent_text = self._safe_text(parent)
+            score_match = re.search(r'(\d+[/-]\d+.*?\([^)]*\))', parent_text)
+            if score_match:
+                return score_match.group(1)
+        
+        # Search in card for patterns near team name
+        card_text = self._safe_text(card)
+        team_name = self._safe_text(team_elem)
+        if team_name:
+            # Look for score after team name
+            pattern = rf'{re.escape(team_name)}.*?(\d+[/-]\d+.*?\([^)]*\))'
+            match = re.search(pattern, card_text, re.I)
+            if match:
+                return match.group(1)
+        
+        return ""
+    
+    def _calculate_run_rate(self, score: int, overs: str) -> float:
+        """Calculate run rate from score and overs."""
+        try:
+            if score == 0 or not overs or overs == "0.0":
+                return 0.0
+            
+            # Parse overs (e.g., "15.3" means 15.5 overs)
+            if '.' in overs:
+                main_overs, ball_part = overs.split('.')
+                total_overs = float(main_overs) + float(ball_part) / 6
+            else:
+                total_overs = float(overs)
+            
+            if total_overs > 0:
+                return round(score / total_overs, 2)
+        except:
+            pass
+        return 0.0
+    
+    def _determine_match_status(self, card) -> MatchStatus:
+        """Determine match status from card content."""
+        if not isinstance(card, Tag):
+            return MatchStatus.UPCOMING
+        
+        card_text = self._safe_text(card).lower()
+        
+        # Check for live indicators
+        live_indicators = ['live', 'in progress', 'batting', 'bowling', '* ']
+        if any(indicator in card_text for indicator in live_indicators):
+            return MatchStatus.LIVE
+        
+        # Check for completed indicators
+        completed_indicators = ['won by', 'match tied', 'no result', 'completed', 'finished']
+        if any(indicator in card_text for indicator in completed_indicators):
+            return MatchStatus.COMPLETED
+        
+        # Look for specific selectors
+        status_selectors = [
+            '.cb-text-live',
+            '.cb-text-complete',
+            '[class*="live"]',
+            '[class*="complete"]'
+        ]
+        
+        for selector in status_selectors:
+            status_elem = card.select_one(selector)
+            if status_elem:
+                status_text = self._safe_text(status_elem).lower()
+                if 'live' in status_text:
+                    return MatchStatus.LIVE
+                elif 'complete' in status_text or 'won' in status_text:
+                    return MatchStatus.COMPLETED
+        
+        return MatchStatus.UPCOMING
+    
+    def _extract_match_metadata(self, card) -> Dict[str, Any]:
+        """Extract comprehensive match metadata from Cricbuzz card."""
+        metadata = {}
+        if not isinstance(card, Tag):
+            return metadata
+        
+        try:
+            # Extract venue
+            venue_selectors = ['.cb-mtch-info-itm', '.cb-venue', '[class*="venue"]']
+            for selector in venue_selectors:
+                venue_elem = card.select_one(selector)
+                if venue_elem:
+                    metadata['venue'] = self._safe_text(venue_elem)
+                    break
+            
+            # Extract format
+            card_text = self._safe_text(card)
+            format_patterns = [
+                (r'\bT20I?\b', 'T20I'),
+                (r'\bODI\b', 'ODI'),
+                (r'\bTest\b', 'Test'),
+                (r'\bT10\b', 'T10'),
+                (r'IPL', 'IPL T20'),
+                (r'BBL', 'BBL T20'),
+                (r'PSL', 'PSL T20')
+            ]
+            
+            for pattern, format_name in format_patterns:
+                if re.search(pattern, card_text, re.I):
+                    metadata['format'] = format_name
+                    break
+            
+            # Extract date/time information
+            date_elem = card.select_one('.cb-date, .cb-mtch-tm, [class*="date"], [class*="time"]')
+            if date_elem:
+                metadata['date'] = self._safe_text(date_elem)
+            
+            # Try to extract partnership info
+            partnership_pattern = r'(\d+.*run.*partnership|partnership.*\d+)'
+            partnership_match = re.search(partnership_pattern, card_text, re.I)
+            if partnership_match:
+                metadata['partnership'] = partnership_match.group(1)
+            
+            # Extract recent overs if available
+            overs_pattern = r'(\d+\.\d+).*?(\d+\s*runs?)'
+            overs_matches = re.findall(overs_pattern, card_text)
+            if overs_matches:
+                metadata['recent_overs'] = [f"{over}-{runs}" for over, runs in overs_matches[-3:]]
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error extracting metadata: {e}")
+        
+        return metadata
+    
+    def _extract_espn_title(self, container) -> str:
+        """Extract match title for ESPN Cricinfo."""
+        if not isinstance(container, Tag):
+            return ""
+        
+        # Enhanced ESPN title selectors
+        title_selectors = [
+            'h3', 'h2', 'h1',
+            'a[href*="match"]',
+            'div[class*="title"]',
+            'span[class*="title"]',
+            'div[data-testid*="title"]',
+            'div.ds-text-title-xs'
+        ]
+        
+        for selector in title_selectors:
+            title_elem = container.select_one(selector)
+            if title_elem:
+                title = self._safe_text(title_elem)
+                if title and len(title) > 5:
+                    return title
+        
+        # Fallback to container text search
+        container_text = self._safe_text(container)
+        vs_match = re.search(r'([A-Z]{2,}.*?vs.*?[A-Z]{2,})', container_text, re.I)
+        if vs_match:
+            return vs_match.group(1)
+        
+        return "Cricket Match"
+    
+    def _extract_espn_teams_scores(self, container) -> List[Team]:
+        """Extract teams and scores for ESPN Cricinfo."""
+        teams_data = []
+        if not isinstance(container, Tag):
+            return teams_data
+        
+        try:
+            # Enhanced ESPN team selectors
+            team_selectors = [
+                'span[class*="name"]',
+                'span[class*="team"]',
+                'div[class*="team"]',
+                'a[class*="team"]',
+                'div[data-testid*="team"]'
+            ]
+            
+            team_elements = []
+            for selector in team_selectors:
+                elems = container.select(selector)
+                if len(elems) >= 2:
+                    team_elements = elems[:2]
+                    break
+            
+            # Alternative: search for text patterns
+            if not team_elements:
+                container_text = self._safe_text(container)
+                # Look for team abbreviations (3 capital letters)
+                team_matches = re.findall(r'\b([A-Z]{3})\b', container_text)
+                if len(team_matches) >= 2:
+                    for team_abbr in team_matches[:2]:
+                        # Create elements from text patterns
+                        teams_data.append(Team(
+                            name=team_abbr,
+                            short_name=team_abbr,
+                            score=0,
+                            wickets=0,
+                            overs="0.0"
+                        ))
+                    return teams_data
+            
+            # Extract team data with scores
+            score_selectors = [
+                'span[class*="score"]',
+                'span[class*="runs"]',
+                'div[class*="score"]'
+            ]
+            
+            score_elements = []
+            for selector in score_selectors:
+                score_elements = container.select(selector)
+                if score_elements:
+                    break
+            
+            for i, team_elem in enumerate(team_elements):
+                team_name = self._safe_text(team_elem)
+                if team_name:
+                    score_text = ""
+                    if i < len(score_elements):
+                        score_text = self._safe_text(score_elements[i])
+                    else:
+                        # Try to find score near team element
+                        score_text = self._find_espn_score_near_team(team_elem, container)
+                    
+                    score, wickets, overs = self._parse_score_text(score_text)
+                    run_rate = self._calculate_run_rate(score, overs)
+                    
+                    team = Team(
+                        name=team_name,
+                        short_name=self._generate_short_name(team_name),
+                        score=score,
+                        wickets=wickets,
+                        overs=overs,
+                        run_rate=run_rate
+                    )
+                    teams_data.append(team)
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error extracting ESPN teams: {e}")
+        
+        return teams_data
+    
+    def _find_espn_score_near_team(self, team_elem, container) -> str:
+        """Find score near team element in ESPN."""
+        # Search in siblings
+        next_sibling = team_elem.find_next_sibling()
+        if next_sibling:
+            score_text = self._safe_text(next_sibling)
+            if re.search(r'\d+[/-]\d+', score_text):
+                return score_text
+        
+        # Search in parent context
+        parent = team_elem.parent
+        if parent:
+            parent_text = self._safe_text(parent)
+            score_match = re.search(r'(\d+[/-]\d+.*?\([^)]*\))', parent_text)
+            if score_match:
+                return score_match.group(1)
+        
+        return ""
+    
+    def _determine_espn_status(self, container) -> MatchStatus:
+        """Determine match status for ESPN Cricinfo."""
+        if not isinstance(container, Tag):
+            return MatchStatus.UPCOMING
+        
+        container_text = self._safe_text(container).lower()
+        
+        # ESPN-specific live indicators
+        live_indicators = ['live', 'in progress', '•', 'currently playing']
+        if any(indicator in container_text for indicator in live_indicators):
+            return MatchStatus.LIVE
+        
+        # ESPN completion indicators
+        completed_indicators = ['won by', 'match tied', 'no result', 'result']
+        if any(indicator in container_text for indicator in completed_indicators):
+            return MatchStatus.COMPLETED
+        
+        return MatchStatus.UPCOMING
+    
+    def _extract_espn_metadata(self, container) -> Dict[str, Any]:
+        """Extract metadata for ESPN Cricinfo."""
+        metadata = {}
+        if not isinstance(container, Tag):
+            return metadata
+        
+        try:
+            container_text = self._safe_text(container)
+            
+            # Extract series information
+            series_match = re.search(r'(.*?series.*?|.*?tour.*?|.*?league.*?)', container_text, re.I)
+            if series_match:
+                metadata['series'] = series_match.group(1).strip()
+            
+            # Extract venue if available
+            venue_match = re.search(r'at\s+([^,]+)', container_text, re.I)
+            if venue_match:
+                metadata['venue'] = venue_match.group(1).strip()
+            
+            # Extract format
+            format_patterns = [
+                (r'T20I?', 'T20I'),
+                (r'ODI', 'ODI'),
+                (r'Test', 'Test'),
+                (r'T10', 'T10')
+            ]
+            
+            for pattern, format_name in format_patterns:
+                if re.search(pattern, container_text, re.I):
+                    metadata['format'] = format_name
+                    break
+            
+            # Extract date if available
+            date_match = re.search(r'(\d{1,2}\s+\w+\s+\d{4})', container_text)
+            if date_match:
+                metadata['date'] = date_match.group(1)
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error extracting ESPN metadata: {e}")
+        
+        return metadata
     
     def _parse_score_text(self, score_text: str) -> tuple:
         """Parse score text like '123/4 (15.2)' into score, wickets, overs."""
@@ -1131,68 +1572,74 @@ class RealCricketScraper:
         }
     
     async def get_live_matches(self) -> List[Match]:
-        """Get current live cricket matches with detailed enrichment from multiple sources."""
-        logger.info("🔍 Starting real cricket data fetch with detail enrichment...")
+        """Get current live cricket matches with ultra-fast JSON extraction and HTML fallback."""
+        logger.info("🚀 Starting ultra-fast JSON-first cricket data fetch...")
+        
+        # Step 1: Try JSON extraction first (10x faster than HTML parsing)
+        try:
+            from cricket_json_extractor import get_live_matches_json
+            json_matches = await get_live_matches_json()
+            
+            if json_matches and len(json_matches) > 0:
+                logger.info(f"✅ JSON SUCCESS: Retrieved {len(json_matches)} matches using structured data")
+                return json_matches
+            else:
+                logger.info("📊 JSON returned no matches, falling back to HTML parsing...")
+                
+        except ImportError:
+            logger.warning("⚠️ JSON extractor not available, using HTML fallback")
+        except Exception as e:
+            logger.warning(f"⚠️ JSON extraction failed: {e}, falling back to HTML parsing")
+        
+        # Step 2: Fallback to HTML parsing (legacy method)
+        logger.info("🔍 Fallback: Using HTML scraping for cricket data...")
         all_matches = []
         
         # Try Cricbuzz first
-        logger.info("🏏 Attempting Cricbuzz scraping...")
+        logger.info("🏏 Attempting Cricbuzz HTML scraping...")
         try:
             cricbuzz_url = f"{self.cricbuzz_base_url}/cricket-match/live-scores"
             html = await self._fetch_url(cricbuzz_url)
             if html:
                 cricbuzz_matches = self._parse_cricbuzz_live_matches(html)
                 if cricbuzz_matches:
-                    # Enrich matches with detail page data
+                    # For HTML fallback, limit enrichment to save time
                     enriched_matches = []
-                    for match in cricbuzz_matches[:3]:  # Limit to 3 matches for detailed enrichment
+                    for match in cricbuzz_matches[:2]:  # Limit to 2 for faster fallback
                         enriched_match = await self._enrich_match_with_details(match)
                         enriched_matches.append(enriched_match if enriched_match else match)
                     
                     all_matches.extend(enriched_matches)
-                    logger.info(f"✅ Cricbuzz: Found and enriched {len(enriched_matches)} live matches")
+                    logger.info(f"✅ Cricbuzz HTML: Found {len(enriched_matches)} live matches")
                 else:
-                    logger.warning("⚠️ Cricbuzz: No matches parsed from HTML")
-            else:
-                logger.warning("⚠️ Cricbuzz: Failed to fetch HTML")
+                    logger.warning("⚠️ Cricbuzz HTML: No matches parsed")
         except Exception as e:
-            logger.warning(f"❌ Cricbuzz scraping failed: {e}")
+            logger.warning(f"❌ Cricbuzz HTML scraping failed: {e}")
         
-        # Try multiple ESPN Cricinfo URLs as backup
-        logger.info("📺 Attempting ESPN Cricinfo scraping...")
-        espn_urls = [
-            f"{self.espn_cricinfo_base_url}/live-cricket-score",
-            f"{self.espn_cricinfo_base_url}/live-cricket-match-centre",
-            f"{self.espn_cricinfo_base_url}"
-        ]
-        
-        for espn_url in espn_urls:
+        # Try ESPN as secondary fallback
+        if len(all_matches) < 2:  # Only if we don't have enough matches
+            logger.info("📺 Attempting ESPN HTML scraping...")
             try:
+                espn_url = f"{self.espn_cricinfo_base_url}/live-cricket-score"
                 html = await self._fetch_url(espn_url)
                 if html:
                     espn_matches = self._parse_espn_live_matches(html)
                     if espn_matches:
                         # Add unique matches only
-                        for match in espn_matches:
+                        for match in espn_matches[:3]:  # Limit for speed
                             if not any(existing.title.lower() == match.title.lower() for existing in all_matches):
                                 all_matches.append(match)
-                        logger.info(f"✅ ESPN Cricinfo: Found {len(espn_matches)} additional matches from {espn_url}")
-                        break  # Success, no need to try other URLs
-                    else:
-                        logger.warning(f"⚠️ ESPN Cricinfo: No matches parsed from {espn_url}")
-                else:
-                    logger.warning(f"⚠️ ESPN Cricinfo: Failed to fetch {espn_url}")
+                        logger.info(f"✅ ESPN HTML: Found {len(espn_matches)} additional matches")
             except Exception as e:
-                logger.warning(f"❌ ESPN Cricinfo scraping failed for {espn_url}: {e}")
-                continue
+                logger.warning(f"❌ ESPN HTML scraping failed: {e}")
         
-        # If we have real matches, return them
+        # Return matches if found
         if all_matches:
-            logger.info(f"✅ REAL DATA SUCCESS: Returning {len(all_matches)} REAL live cricket matches")
-            return all_matches[:5]  # Return max 5 matches
+            logger.info(f"✅ HTML FALLBACK SUCCESS: Returning {len(all_matches)} live cricket matches")
+            return all_matches[:5]
         
-        # Fallback: Create minimal fallback data indicating scraping issues
-        logger.warning("🚫 FALLBACK: No real cricket data available from scraping, creating fallback data")
+        # Final fallback
+        logger.warning("🚫 ALL METHODS FAILED: Creating fallback data")
         return self._create_fallback_matches()
     
     def _create_fallback_matches(self) -> List[Match]:

@@ -140,7 +140,7 @@ class IntelligentCacheWarmer:
             data_type="live_matches",
             fetcher_func=self._warm_live_matches,
             priority=WarmingPriority.CRITICAL,
-            interval=30.0,  # Every 30 seconds
+            interval=1.0,  # Every 1 second for ultra-fast updates
             conditions=[lambda ctx: True]  # Always warm live matches
         ))
         
@@ -150,7 +150,7 @@ class IntelligentCacheWarmer:
             data_type="schedule",
             fetcher_func=self._warm_popular_schedule,
             priority=WarmingPriority.HIGH,
-            interval=300.0,  # Every 5 minutes
+            interval=120.0,  # Every 2 minutes (faster refresh)
             prefetch_related=["tournaments_list"],
             conditions=[self._is_high_traffic_period]
         ))
@@ -161,7 +161,7 @@ class IntelligentCacheWarmer:
             data_type="tournament",
             fetcher_func=self._warm_tournaments,
             priority=WarmingPriority.HIGH,
-            interval=600.0,  # Every 10 minutes
+            interval=300.0,  # Every 5 minutes (faster refresh)
             prefetch_related=["popular_standings"]
         ))
         
@@ -275,7 +275,7 @@ class IntelligentCacheWarmer:
         """Background worker for cache warming."""
         while self._running:
             try:
-                await asyncio.sleep(10)  # Check every 10 seconds
+                await asyncio.sleep(0.5)  # Check every 0.5 seconds for real-time
                 await self._execute_warming_cycle()
             except asyncio.CancelledError:
                 break
@@ -301,7 +301,7 @@ class IntelligentCacheWarmer:
         # Execute strategies with rate limiting
         for strategy in ready_strategies[:3]:  # Max 3 strategies per cycle
             await self._execute_strategy(strategy, context)
-            await asyncio.sleep(1)  # Rate limiting between strategies
+            await asyncio.sleep(0.1)  # Minimal rate limiting for real-time performance
     
     async def _execute_strategy(self, strategy: WarmingStrategy, context: Dict[str, Any]):
         """Execute a specific warming strategy."""
