@@ -8,13 +8,15 @@ import logging
 import sys
 from bot import main
 
-# Configure logging
+# Configure logging for Railway.com deployment
+# Railway treats stderr as error level, so force all logs to stdout
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(levelname)s:%(name)s:%(message)s',  # Simplified format for Railway
     handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+        logging.StreamHandler(sys.stdout)  # Explicit stdout to prevent error tagging
+    ],
+    force=True  # Override any existing logging configuration
 )
 
 logger = logging.getLogger(__name__)
@@ -24,7 +26,7 @@ if __name__ == '__main__':
     telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
     
     if not telegram_token:
-        logger.error("TELEGRAM_BOT_TOKEN environment variable is required")
+        print("ERROR: TELEGRAM_BOT_TOKEN environment variable is required", file=sys.stdout)
         sys.exit(1)
     
     logger.info("Starting Cricket Live Match Centre Telegram Bot...")

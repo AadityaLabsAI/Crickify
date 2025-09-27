@@ -31,12 +31,14 @@ from telegram.ext import (
 from telegram.error import Conflict, TelegramError, NetworkError
 
 # Configure logging - Railway optimized (stdout only, no file logging)
+# Railway treats stderr as error level, so force all logs to stdout
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(levelname)s:%(name)s:%(message)s',
     level=logging.INFO,
     handlers=[
-        logging.StreamHandler()
-    ]
+        logging.StreamHandler(sys.stdout)  # Explicit stdout to prevent error tagging
+    ],
+    force=True  # Override any existing logging configuration
 )
 
 # Prevent token exposure in logs by setting sensitive loggers to WARNING level
