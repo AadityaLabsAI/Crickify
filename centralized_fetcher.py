@@ -262,6 +262,7 @@ class CentralizedFetcher:
             self.active_requests[cache_key] = request
         
         # Execute the actual fetch
+        result = None  # Initialize result to prevent unbound variable
         try:
             start_time = time.time()
             logger.info(f"🚀 Executing centralized fetch: {request.data_type} for {len(request.requesters)} requesters")
@@ -307,12 +308,28 @@ class CentralizedFetcher:
                 if cache_key in self.pending_results:
                     future = self.pending_results[cache_key]
                     if not future.done():
+                        # Ensure we always have a valid result
+                        if result is None:
+                            result = FetchResult(
+                                request_id=request.request_id,
+                                data=None,
+                                success=False,
+                                error="Unknown error occurred"
+                            )
                         future.set_result(result)
                     del self.pending_results[cache_key]
                 
                 if cache_key in self.active_requests:
                     del self.active_requests[cache_key]
         
+        # Ensure we always return a valid FetchResult
+        if result is None:
+            result = FetchResult(
+                request_id=request.request_id,
+                data=None,
+                success=False,
+                error="No result available"
+            )
         return result
     
     async def _perform_fetch(self, request: FetchRequest) -> Any:
@@ -349,6 +366,7 @@ class CentralizedFetcher:
     def _get_ttl_for_data_type(self, data_type: str) -> float:
         """
         Get appropriate TTL for different data types.
+        Synchronized with cache warming intervals to prevent expiration before refresh.
         
         Args:
             data_type: Type of data
@@ -356,10 +374,11 @@ class CentralizedFetcher:
         Returns:
             TTL in seconds
         """
+        # Fix: Align TTL with cache warming intervals to prevent premature expiration
         ttl_mapping = {
-            'live_matches': 1.5,  # 1.5 seconds for live data (ultra-fast)
-            'schedule': 300.0,    # 5 minutes for schedule
-            'tournaments': 900.0  # 15 minutes for tournaments
+            'live_matches': 5.0,   # 5 seconds (matches cache warming interval × 1.7)
+            'schedule': 180.0,     # 3 minutes (matches cache warming 120s × 1.5)
+            'tournaments': 450.0   # 7.5 minutes (matches cache warming 300s × 1.5)
         }
         
         return ttl_mapping.get(data_type, 60.0)  # Default 1 minute

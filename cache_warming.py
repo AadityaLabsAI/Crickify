@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 from collections import defaultdict, deque
 import threading
 from enum import Enum
+import concurrent.futures
+import functools
 
 from performance_cache import performance_cache, cached_with_monitoring
 from tournament_manager import tournament_manager
@@ -42,13 +44,18 @@ class WarmingStrategy:
     conditions: List[Callable] = field(default_factory=list)  # Conditions for warming
     prefetch_related: List[str] = field(default_factory=list) # Related data to prefetch
     max_age: float = 300.0  # Maximum age before re-warming (seconds)
+    ttl_multiplier: float = 2.0  # TTL = interval * ttl_multiplier (ensures data stays valid)
     
-    def should_warm(self, context: Dict[str, Any] = None) -> bool:
+    def should_warm(self, context: Optional[Dict[str, Any]] = None) -> bool:
         """Check if this strategy should be executed."""
         if not self.conditions:
             return True
         
         return all(condition(context or {}) for condition in self.conditions)
+    
+    def get_cache_ttl(self) -> float:
+        """Calculate appropriate TTL for this strategy to prevent expiration before next refresh."""
+        return self.interval * self.ttl_multiplier
 
 @dataclass
 class UserBehaviorPattern:
@@ -110,6 +117,7 @@ class UserBehaviorPattern:
 class IntelligentCacheWarmer:
     """
     Intelligent cache warming system with behavioral prediction and optimization.
+    Railway-deployment friendly with resource budgeting and concurrency limits.
     """
     
     def __init__(self):
@@ -121,7 +129,9 @@ class IntelligentCacheWarmer:
             'warmings_executed': 0,
             'prefetches_triggered': 0,
             'cache_hits_from_warming': 0,
-            'total_warming_time': 0.0
+            'total_warming_time': 0.0,
+            'resource_budget_exceeded': 0,
+            'circuit_breaker_trips': 0
         }
         
         # Background warming
@@ -129,18 +139,39 @@ class IntelligentCacheWarmer:
         self._running = False
         self._lock = threading.RLock()
         
+        # Resource budgeting and concurrency control (Railway-friendly)
+        self._thread_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="cache_warm"
+        )
+        self._max_concurrent_prefetch = 3
+        self._current_prefetch_count = 0
+        self._max_warming_per_cycle = 2  # Limit warming strategies per cycle
+        self._resource_budget_seconds = 5.0  # Max seconds per warming cycle
+        
+        # Circuit breaker for resource protection
+        self._circuit_breaker_failures = 0
+        self._circuit_breaker_threshold = 5
+        self._circuit_breaker_reset_time = 300  # 5 minutes
+        self._circuit_breaker_last_failure = 0
+        
+        # Rate limiting for network calls
+        self._last_network_call = 0
+        self._min_network_call_interval = 0.5  # Minimum 500ms between network calls
+        
         # Register default strategies
         self._register_default_strategies()
     
     def _register_default_strategies(self):
-        """Register default cache warming strategies."""
+        """Register default cache warming strategies with proper TTL/refresh synchronization."""
         # Critical: Live matches (most important for user experience)
+        # Fix: Set interval to 3 seconds with TTL of 5 seconds to ensure data stays valid
         self.register_strategy(WarmingStrategy(
             name="live_matches_critical",
             data_type="live_matches",
             fetcher_func=self._warm_live_matches,
             priority=WarmingPriority.CRITICAL,
-            interval=1.0,  # Every 1 second for ultra-fast updates
+            interval=3.0,  # Every 3 seconds (balanced for Railway constraints)
+            ttl_multiplier=1.7,  # TTL = 5.1 seconds (ensures data stays valid)
             conditions=[lambda ctx: True]  # Always warm live matches
         ))
         
@@ -150,7 +181,8 @@ class IntelligentCacheWarmer:
             data_type="schedule",
             fetcher_func=self._warm_popular_schedule,
             priority=WarmingPriority.HIGH,
-            interval=120.0,  # Every 2 minutes (faster refresh)
+            interval=120.0,  # Every 2 minutes
+            ttl_multiplier=1.5,  # TTL = 180 seconds (3 minutes)
             prefetch_related=["tournaments_list"],
             conditions=[self._is_high_traffic_period]
         ))
@@ -161,27 +193,30 @@ class IntelligentCacheWarmer:
             data_type="tournament",
             fetcher_func=self._warm_tournaments,
             priority=WarmingPriority.HIGH,
-            interval=300.0,  # Every 5 minutes (faster refresh)
+            interval=300.0,  # Every 5 minutes
+            ttl_multiplier=1.5,  # TTL = 450 seconds (7.5 minutes)
             prefetch_related=["popular_standings"]
         ))
         
-        # Medium: Popular tournament standings
+        # Medium: Popular tournament standings (limited to reduce resource usage)
         self.register_strategy(WarmingStrategy(
             name="standings_popular",
             data_type="standings",
             fetcher_func=self._warm_popular_standings,
             priority=WarmingPriority.MEDIUM,
-            interval=900.0,  # Every 15 minutes
+            interval=1200.0,  # Every 20 minutes (reduced frequency)
+            ttl_multiplier=1.5,  # TTL = 1800 seconds (30 minutes)
             conditions=[self._has_popular_tournaments]
         ))
         
-        # Low: Extended schedule data
+        # Low: Extended schedule data (reduced frequency for Railway efficiency)
         self.register_strategy(WarmingStrategy(
             name="schedule_extended",
             data_type="schedule",
             fetcher_func=self._warm_extended_schedule,
             priority=WarmingPriority.LOW,
-            interval=1800.0,  # Every 30 minutes
+            interval=3600.0,  # Every hour (reduced for efficiency)
+            ttl_multiplier=1.2,  # TTL = 4320 seconds (72 minutes)
             conditions=[self._is_low_traffic_period]
         ))
     
@@ -209,35 +244,55 @@ class IntelligentCacheWarmer:
                                    user_id: int,
                                    current_request: str,
                                    tournament_id: Optional[str] = None):
-        """Perform intelligent prefetching based on user patterns."""
+        """Perform intelligent prefetching with resource budgeting and circuit breaker."""
         try:
+            # Circuit breaker check
+            if self._is_circuit_breaker_open():
+                logger.debug("🚫 Circuit breaker open, skipping prefetch")
+                return
+            
+            # Resource budget check
+            if self._current_prefetch_count >= self._max_concurrent_prefetch:
+                logger.debug("🛑 Max concurrent prefetch limit reached, skipping")
+                self.performance_stats['resource_budget_exceeded'] += 1
+                return
+            
             pattern = self.user_patterns.get(user_id)
             if not pattern:
                 return
             
             predictions = pattern.predict_next_requests(current_request)
             
-            # Prefetch high-probability next requests
-            for next_request, score in predictions[:2]:  # Top 2 predictions
-                if score > 0.3:  # Minimum confidence threshold
-                    await self._prefetch_for_request(next_request, tournament_id, user_id)
-            
-            self.performance_stats['prefetches_triggered'] += 1
+            # Prefetch only the highest-probability request (reduced from 2)
+            self._current_prefetch_count += 1
+            try:
+                for next_request, score in predictions[:1]:  # Only top 1 prediction
+                    if score > 0.5:  # Higher confidence threshold (was 0.3)
+                        await self._prefetch_for_request(next_request, tournament_id, user_id)
+                        break  # Only prefetch one item to conserve resources
+                
+                self.performance_stats['prefetches_triggered'] += 1
+            finally:
+                self._current_prefetch_count -= 1
             
         except Exception as e:
             logger.error(f"Intelligent prefetch error for user {user_id}: {e}")
+            self._record_circuit_breaker_failure()
     
     async def _prefetch_for_request(self, 
                                    request_type: str,
                                    tournament_id: Optional[str],
                                    user_id: int):
-        """Prefetch data for a predicted request."""
+        """Prefetch data for a predicted request with rate limiting."""
         cache_key = f"prefetch_{request_type}_{tournament_id or 'all'}_{user_id}"
         
         # Check if already cached
         cache = performance_cache.get_cache_for_type(request_type)
         if cache.get(cache_key):
             return  # Already prefetched
+        
+        # Rate limiting for network calls
+        await self._apply_rate_limiting()
         
         try:
             if request_type == "live_matches":
@@ -252,11 +307,13 @@ class IntelligentCacheWarmer:
                 return
             
             if data:
-                cache.set(cache_key, data, ttl=120.0)  # 2 minute TTL for prefetched data
+                # Use shorter TTL for prefetched data to avoid over-caching
+                cache.set(cache_key, data, ttl=60.0)  # 1 minute TTL for prefetched data
                 logger.debug(f"🎯 Prefetched {request_type} for user {user_id}")
         
         except Exception as e:
             logger.error(f"Prefetch failed for {request_type}: {e}")
+            self._record_circuit_breaker_failure()
     
     def start_background_warming(self):
         """Start background cache warming task."""
@@ -284,9 +341,15 @@ class IntelligentCacheWarmer:
                 await asyncio.sleep(60)  # Wait before retry
     
     async def _execute_warming_cycle(self):
-        """Execute a cache warming cycle."""
+        """Execute a cache warming cycle with resource budgeting and circuit breaker."""
+        cycle_start_time = time.time()
         current_time = time.time()
         context = self._build_warming_context()
+        
+        # Circuit breaker check
+        if self._is_circuit_breaker_open():
+            logger.debug("🚫 Circuit breaker open, skipping warming cycle")
+            return
         
         # Sort strategies by priority and timing
         ready_strategies = []
@@ -298,13 +361,28 @@ class IntelligentCacheWarmer:
         # Sort by priority (critical first)
         ready_strategies.sort(key=lambda s: s.priority.value)
         
-        # Execute strategies with rate limiting
-        for strategy in ready_strategies[:3]:  # Max 3 strategies per cycle
+        # Execute strategies with strict resource budgeting
+        executed_count = 0
+        for strategy in ready_strategies:
+            # Check resource budget
+            elapsed_time = time.time() - cycle_start_time
+            if elapsed_time >= self._resource_budget_seconds:
+                logger.debug(f"⏱️ Resource budget exceeded ({elapsed_time:.2f}s), stopping cycle")
+                self.performance_stats['resource_budget_exceeded'] += 1
+                break
+            
+            if executed_count >= self._max_warming_per_cycle:
+                logger.debug(f"🔄 Max warming strategies per cycle reached ({executed_count}), stopping")
+                break
+            
             await self._execute_strategy(strategy, context)
-            await asyncio.sleep(0.1)  # Minimal rate limiting for real-time performance
+            executed_count += 1
+            
+            # Rate limiting between strategies
+            await asyncio.sleep(0.5)  # 500ms between strategies for Railway efficiency
     
     async def _execute_strategy(self, strategy: WarmingStrategy, context: Dict[str, Any]):
-        """Execute a specific warming strategy."""
+        """Execute a specific warming strategy with proper TTL and error handling."""
         start_time = time.time()
         
         try:
@@ -314,11 +392,15 @@ class IntelligentCacheWarmer:
             if data:
                 cache = performance_cache.get_cache_for_type(strategy.data_type)
                 cache_key = f"warmed_{strategy.name}_{int(time.time())}"
-                cache.set(cache_key, data, ttl=strategy.max_age)
+                # Fix: Use calculated TTL to ensure data stays valid for the entire interval
+                ttl = strategy.get_cache_ttl()
+                cache.set(cache_key, data, ttl=ttl)
                 
-                # Warm related data
-                for related in strategy.prefetch_related:
-                    asyncio.create_task(self._warm_related_data(related, data))
+                # Warm related data with controlled concurrency
+                if strategy.prefetch_related and self._current_prefetch_count < self._max_concurrent_prefetch:
+                    # Only warm 1 related item to conserve resources
+                    for related in strategy.prefetch_related[:1]:
+                        asyncio.create_task(self._warm_related_data(related, data))
             
             # Update statistics
             execution_time = time.time() - start_time
@@ -326,10 +408,11 @@ class IntelligentCacheWarmer:
             self.performance_stats['total_warming_time'] += execution_time
             self.warming_history[strategy.name] = time.time()
             
-            logger.debug(f"✅ Warmed {strategy.name} in {execution_time:.2f}s")
+            logger.debug(f"✅ Warmed {strategy.name} in {execution_time:.2f}s (TTL: {strategy.get_cache_ttl()}s)")
             
         except Exception as e:
             logger.error(f"Strategy {strategy.name} failed: {e}")
+            self._record_circuit_breaker_failure()
     
     def _build_warming_context(self) -> Dict[str, Any]:
         """Build context for warming decisions."""
@@ -368,75 +451,149 @@ class IntelligentCacheWarmer:
         # Return tournaments accessed by 2+ users
         return [tid for tid, count in tournament_popularity.items() if count >= 2]
     
-    # Warming implementation functions
+    def _is_circuit_breaker_open(self) -> bool:
+        """Check if circuit breaker is open."""
+        if self._circuit_breaker_failures >= self._circuit_breaker_threshold:
+            if time.time() - self._circuit_breaker_last_failure < self._circuit_breaker_reset_time:
+                return True
+            else:
+                # Reset circuit breaker after timeout
+                self._circuit_breaker_failures = 0
+                logger.info("🔄 Circuit breaker reset")
+        return False
+    
+    def _record_circuit_breaker_failure(self):
+        """Record a circuit breaker failure."""
+        self._circuit_breaker_failures += 1
+        self._circuit_breaker_last_failure = time.time()
+        if self._circuit_breaker_failures == self._circuit_breaker_threshold:
+            logger.warning(f"⚡ Circuit breaker opened after {self._circuit_breaker_threshold} failures")
+            self.performance_stats['circuit_breaker_trips'] += 1
+    
+    async def _apply_rate_limiting(self):
+        """Apply rate limiting for network calls."""
+        current_time = time.time()
+        time_since_last_call = current_time - self._last_network_call
+        if time_since_last_call < self._min_network_call_interval:
+            sleep_time = self._min_network_call_interval - time_since_last_call
+            await asyncio.sleep(sleep_time)
+        self._last_network_call = time.time()
+    
+    async def _run_in_thread(self, func: Callable, *args, **kwargs) -> Any:
+        """Run a synchronous function in a thread executor."""
+        loop = asyncio.get_event_loop()
+        partial_func = functools.partial(func, *args, **kwargs)
+        return await loop.run_in_executor(self._thread_executor, partial_func)
+    
+    # Warming implementation functions with async/sync fixes
     async def _warm_live_matches(self) -> Optional[Any]:
-        """Warm live matches data."""
+        """Warm live matches data with proper async handling."""
         try:
-            # This would integrate with actual data fetching
-            # For now, return placeholder to establish the pattern
+            # Fix: Run synchronous scraper function in thread executor
             from cricket_scraper import get_live_matches
-            return await get_live_matches()
+            
+            # Apply rate limiting
+            await self._apply_rate_limiting()
+            
+            # Run synchronous function in thread executor to avoid blocking
+            data = await self._run_in_thread(get_live_matches)
+            return data
         except Exception as e:
             logger.error(f"Failed to warm live matches: {e}")
+            self._record_circuit_breaker_failure()
             return None
     
     async def _warm_popular_schedule(self) -> Optional[Any]:
-        """Warm popular schedule data."""
+        """Warm popular schedule data with proper async handling."""
         try:
             from cricket_scraper import get_match_schedule
-            # Warm next 3 and 7 days (most common requests)
-            data_3_days = await get_match_schedule(days=3)
-            data_7_days = await get_match_schedule(days=7)
-            return {'3_days': data_3_days, '7_days': data_7_days}
+            
+            # Apply rate limiting
+            await self._apply_rate_limiting()
+            
+            # Fix: Run synchronous function in thread executor
+            # Only warm 3 days to reduce resource usage
+            data_3_days = await self._run_in_thread(get_match_schedule, days=3)
+            return {'3_days': data_3_days}
         except Exception as e:
             logger.error(f"Failed to warm schedule: {e}")
+            self._record_circuit_breaker_failure()
             return None
     
     async def _warm_tournaments(self) -> Optional[Any]:
-        """Warm tournaments data."""
+        """Warm tournaments data with proper async handling."""
         try:
             from cricket_scraper import get_tournaments
-            return await get_tournaments()
+            
+            # Apply rate limiting
+            await self._apply_rate_limiting()
+            
+            # Fix: Run synchronous function in thread executor
+            data = await self._run_in_thread(get_tournaments)
+            return data
         except Exception as e:
             logger.error(f"Failed to warm tournaments: {e}")
+            self._record_circuit_breaker_failure()
             return None
     
     async def _warm_popular_standings(self) -> Optional[Any]:
-        """Warm popular tournament standings."""
+        """Warm popular tournament standings with controlled resource usage."""
         try:
             popular_tournaments = self._get_popular_tournaments()
             standings_data = {}
             
             from cricket_scraper import get_tournament_standings
-            for tournament_id in popular_tournaments[:5]:  # Top 5 popular tournaments
-                standings = await get_tournament_standings(tournament_id)
+            
+            # Limit to top 2 tournaments to reduce resource usage
+            for tournament_id in popular_tournaments[:2]:
+                # Apply rate limiting
+                await self._apply_rate_limiting()
+                
+                # Fix: Run synchronous function in thread executor
+                standings = await self._run_in_thread(get_tournament_standings, tournament_id)
                 if standings:
                     standings_data[tournament_id] = standings
-                await asyncio.sleep(0.5)  # Rate limiting
+                
+                # Additional delay between tournaments
+                await asyncio.sleep(1.0)
             
             return standings_data
         except Exception as e:
             logger.error(f"Failed to warm popular standings: {e}")
+            self._record_circuit_breaker_failure()
             return None
     
     async def _warm_tournament_standings(self, tournament_id: str) -> Optional[Any]:
-        """Warm specific tournament standings."""
+        """Warm specific tournament standings with proper async handling."""
         try:
             from cricket_scraper import get_tournament_standings
-            return await get_tournament_standings(tournament_id)
+            
+            # Apply rate limiting
+            await self._apply_rate_limiting()
+            
+            # Fix: Run synchronous function in thread executor
+            data = await self._run_in_thread(get_tournament_standings, tournament_id)
+            return data
         except Exception as e:
             logger.error(f"Failed to warm standings for {tournament_id}: {e}")
+            self._record_circuit_breaker_failure()
             return None
     
     async def _warm_extended_schedule(self) -> Optional[Any]:
-        """Warm extended schedule data (14 days, month)."""
+        """Warm extended schedule data with reduced scope for efficiency."""
         try:
             from cricket_scraper import get_match_schedule
-            data_14_days = await get_match_schedule(days=14)
-            data_month = await get_match_schedule(days="month")
-            return {'14_days': data_14_days, 'month': data_month}
+            
+            # Apply rate limiting
+            await self._apply_rate_limiting()
+            
+            # Fix: Run synchronous function in thread executor
+            # Reduced scope: only 7 days to conserve resources
+            data_7_days = await self._run_in_thread(get_match_schedule, days=7)
+            return {'7_days': data_7_days}
         except Exception as e:
             logger.error(f"Failed to warm extended schedule: {e}")
+            self._record_circuit_breaker_failure()
             return None
     
     async def _warm_related_data(self, related_type: str, base_data: Any):
@@ -450,14 +607,18 @@ class IntelligentCacheWarmer:
             logger.error(f"Failed to warm related data {related_type}: {e}")
     
     def stop_background_warming(self):
-        """Stop background cache warming."""
+        """Stop background cache warming and clean up resources."""
         self._running = False
         if self._warming_task:
             self._warming_task.cancel()
-        logger.info("🔥 Stopped background cache warming")
+        
+        # Shutdown thread executor
+        self._thread_executor.shutdown(wait=False)
+        
+        logger.info("🔥 Stopped background cache warming and cleaned up resources")
     
     def get_performance_stats(self) -> Dict[str, Any]:
-        """Get cache warming performance statistics."""
+        """Get cache warming performance statistics including resource management metrics."""
         with self._lock:
             total_users = len(self.user_patterns)
             avg_warming_time = (
@@ -470,7 +631,11 @@ class IntelligentCacheWarmer:
                 'active_strategies': len(self.strategies),
                 'tracked_users': total_users,
                 'average_warming_time_seconds': avg_warming_time,
-                'warming_efficiency': self._calculate_warming_efficiency()
+                'warming_efficiency': self._calculate_warming_efficiency(),
+                'circuit_breaker_open': self._is_circuit_breaker_open(),
+                'current_prefetch_count': self._current_prefetch_count,
+                'max_concurrent_prefetch': self._max_concurrent_prefetch,
+                'resource_budget_seconds': self._resource_budget_seconds
             }
     
     def _calculate_warming_efficiency(self) -> float:
@@ -524,7 +689,9 @@ def track_user_behavior(interaction_type: str):
             
             # Record user interaction
             if user_id:
-                record_user_interaction(user_id, interaction_type, tournament_id)
+                # Ensure tournament_id is properly typed for the function
+                tournament_id_str = str(tournament_id) if tournament_id is not None else None
+                record_user_interaction(user_id, interaction_type, tournament_id_str)
             
             # Execute original function
             return await func(*args, **kwargs)

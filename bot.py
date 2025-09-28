@@ -22,6 +22,7 @@ from cricket_scraper import get_live_matches, get_match_schedule, get_match_deta
 from user_preferences import UserDataManager, UserPreferences
 from advanced_ui_components import UIComponents
 from professional_handlers import ProfessionalHandlers
+from cache_warming import start_cache_warming, stop_cache_warming
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import (
@@ -242,6 +243,46 @@ class ProfessionalCricketBot:
             await self.handle_back_to_main_pro(query)
         else:
             await self.handle_unknown_callback(query, callback_data)
+
+    async def handle_unknown_callback(self, query, callback_data: str) -> None:
+        """Handle unknown callback with helpful suggestions."""
+        user_id = query.from_user.id if query.from_user else None
+        
+        # Log for debugging
+        logger.warning(f"Unknown callback from user {user_id}: {callback_data}")
+        
+        # Create helpful error message with suggestions
+        text = (
+            "🤔 **Oops! Something went wrong** 🤔\n\n"
+            "That button seems to have disappeared into the cricket field! 🏏\n\n"
+            "🚀 **Let's get you back on track:**\n"
+            "• 🏠 Return to main dashboard\n"
+            "• 🔴 Check live matches\n"
+            "• 📅 Browse upcoming matches\n"
+            "• 🏆 Explore tournaments\n\n"
+            "💡 **Pro Tip:** Our interface updates automatically with new features!"
+        )
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("🏠 Main Dashboard", callback_data="back_to_main"),
+                InlineKeyboardButton("🔴 Live Matches", callback_data="live_matches_pro")
+            ],
+            [
+                InlineKeyboardButton("📅 Schedule", callback_data="schedule_pro"),
+                InlineKeyboardButton("🏆 Tournaments", callback_data="competitions_pro")
+            ],
+            [
+                InlineKeyboardButton("🔄 Refresh Page", callback_data="force_refresh")
+            ]
+        ]
+        
+        try:
+            await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            logger.error(f"Error in unknown callback handler: {e}")
+            # Fallback to simple message
+            await query.answer("Sorry, that option isn't available right now. Please try the main menu.", show_alert=True)
 
     async def handle_live_matches_pro(self, query) -> None:
         """Enhanced live matches with professional features."""
@@ -1530,6 +1571,11 @@ async def async_main():
         
         logger.info("✅ Handlers configured, attempting to start bot...")
         
+        # Start intelligent cache warming system
+        logger.info("🔥 Starting intelligent cache warming system...")
+        start_cache_warming()
+        logger.info("✅ Cache warming system started")
+        
         # Due to persistent conflicts, start directly with webhook mode
         logger.info("🌐 Starting directly in webhook mode due to persistent polling conflicts...")
         
@@ -1603,46 +1649,6 @@ async def simple_start_bot(token: str) -> bool:
     except Exception as e:
         logger.warning(f"⚠️ Simple cleanup failed: {e}")
         return False
-
-    async def handle_unknown_callback(self, query, callback_data: str) -> None:
-        """Handle unknown callback with helpful suggestions."""
-        user_id = query.from_user.id if query.from_user else None
-        
-        # Log for debugging
-        logger.warning(f"Unknown callback from user {user_id}: {callback_data}")
-        
-        # Create helpful error message with suggestions
-        text = (
-            "🤔 **Oops! Something went wrong** 🤔\n\n"
-            "That button seems to have disappeared into the cricket field! 🏏\n\n"
-            "🚀 **Let's get you back on track:**\n"
-            "• 🏠 Return to main dashboard\n"
-            "• 🔴 Check live matches\n"
-            "• 📅 Browse upcoming matches\n"
-            "• 🏆 Explore tournaments\n\n"
-            "💡 **Pro Tip:** Our interface updates automatically with new features!"
-        )
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("🏠 Main Dashboard", callback_data="back_to_main"),
-                InlineKeyboardButton("🔴 Live Matches", callback_data="live_matches_pro")
-            ],
-            [
-                InlineKeyboardButton("📅 Schedule", callback_data="schedule_pro"),
-                InlineKeyboardButton("🏆 Tournaments", callback_data="competitions_pro")
-            ],
-            [
-                InlineKeyboardButton("🔄 Refresh Page", callback_data="force_refresh")
-            ]
-        ]
-        
-        try:
-            await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
-        except Exception as e:
-            logger.error(f"Error in unknown callback handler: {e}")
-            # Fallback to simple message
-            await query.answer("Sorry, that option isn't available right now. Please try the main menu.", show_alert=True)
     
     async def handle_force_refresh(self, query) -> None:
         """Force refresh current view."""
