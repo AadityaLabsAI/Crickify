@@ -45,13 +45,132 @@ class Team:
         if not self.short_name:
             self.short_name = self.name[:3].upper()
     
+    def to_telegram_format(self, is_live: bool = False, is_batting: bool = True) -> str:
+        """Format team info for Telegram display with enhanced visuals."""
+        # Import here to avoid circular import
+        from advanced_ui_components import UIComponents
+        
+        # Enhanced score display with visual indicators
+        if is_live:
+            # Live animated display
+            score_text = f"🏏 **{self.score}/{self.wickets}** ({self.overs} ov)"
+            score_text = UIComponents.create_live_pulse_effect(score_text)
+            
+            # Enhanced run rate with live context
+            rr_display = UIComponents.create_run_rate_indicator(self.run_rate, is_live=True)
+            
+            # Team performance indicator
+            perf_indicator = UIComponents.create_team_performance_indicator(self, is_batting, True)
+            
+            return f"{perf_indicator}\n{score_text}\n📊 {rr_display}"
+        else:
+            # Standard enhanced display
+            perf_indicator = UIComponents.create_team_performance_indicator(self, is_batting, False)
+            rr_display = UIComponents.create_run_rate_indicator(self.run_rate, is_live=False)
+            
+            return f"{perf_indicator} • **{self.score}/{self.wickets}** ({self.overs} ov) • {rr_display}"
+
+@dataclass
+class PlayerStats:
+    """Comprehensive player statistics data model."""
+    player_name: str
+    team: str
+    batting_stats: 'BattingStats' = None
+    bowling_stats: 'BowlingStats' = None
+    fielding_stats: 'FieldingStats' = None
+    recent_form: List[str] = field(default_factory=list)  # Last 5 matches performance
+    career_averages: Dict[str, float] = field(default_factory=dict)
+    milestone_tracking: Dict[str, Any] = field(default_factory=dict)
+    head_to_head: Dict[str, 'HeadToHeadRecord'] = field(default_factory=dict)
+    
+    def to_telegram_format(self, show_detailed: bool = True) -> str:
+        """Format player stats for Telegram display."""
+        result = f"👤 **{self.player_name}** ({self.team})\n"
+        
+        if self.batting_stats and show_detailed:
+            result += f"🏏 **Batting:** {self.batting_stats.to_telegram_format()}\n"
+        
+        if self.bowling_stats and show_detailed:
+            result += f"⚾ **Bowling:** {self.bowling_stats.to_telegram_format()}\n"
+        
+        if self.recent_form:
+            form_emojis = {"W": "🟢", "L": "🔴", "D": "🟡", "N": "⚪"}
+            form_display = "".join([form_emojis.get(f, "⚪") for f in self.recent_form[-5:]])
+            result += f"📈 **Recent Form:** {form_display}\n"
+        
+        return result
+
+@dataclass
+class BattingStats:
+    """Detailed batting statistics."""
+    matches: int = 0
+    innings: int = 0
+    runs: int = 0
+    balls_faced: int = 0
+    fours: int = 0
+    sixes: int = 0
+    fifties: int = 0
+    hundreds: int = 0
+    highest_score: int = 0
+    average: float = 0.0
+    strike_rate: float = 0.0
+    not_outs: int = 0
+    
+    def __post_init__(self):
+        """Calculate derived stats."""
+        if self.balls_faced > 0:
+            self.strike_rate = round((self.runs / self.balls_faced) * 100, 2)
+        if self.innings > 0 and (self.innings - self.not_outs) > 0:
+            self.average = round(self.runs / (self.innings - self.not_outs), 2)
+    
     def to_telegram_format(self) -> str:
-        """Format team info for Telegram display."""
-        return f"🏏 **{self.short_name}** {self.score}/{self.wickets} ({self.overs} ov, RR: {self.run_rate:.2f})"
+        """Format batting stats for Telegram."""
+        return f"{self.runs} runs @ {self.average} avg, SR: {self.strike_rate}% | 4s: {self.fours}, 6s: {self.sixes}"
+
+@dataclass
+class BowlingStats:
+    """Detailed bowling statistics."""
+    matches: int = 0
+    innings: int = 0
+    overs: float = 0.0
+    maidens: int = 0
+    runs_conceded: int = 0
+    wickets: int = 0
+    best_bowling: str = "0/0"
+    average: float = 0.0
+    economy: float = 0.0
+    strike_rate: float = 0.0
+    five_wickets: int = 0
+    ten_wickets: int = 0
+    
+    def __post_init__(self):
+        """Calculate derived stats."""
+        if self.overs > 0:
+            self.economy = round(self.runs_conceded / self.overs, 2)
+        if self.wickets > 0:
+            self.average = round(self.runs_conceded / self.wickets, 2)
+            if self.overs > 0:
+                self.strike_rate = round((self.overs * 6) / self.wickets, 1)
+    
+    def to_telegram_format(self) -> str:
+        """Format bowling stats for Telegram."""
+        return f"{self.wickets} wkts @ {self.average} avg, Econ: {self.economy} | Best: {self.best_bowling}"
+
+@dataclass
+class FieldingStats:
+    """Fielding statistics."""
+    matches: int = 0
+    catches: int = 0
+    run_outs: int = 0
+    stumpings: int = 0
+    
+    def to_telegram_format(self) -> str:
+        """Format fielding stats for Telegram."""
+        return f"Catches: {self.catches}, Run-outs: {self.run_outs}, Stumpings: {self.stumpings}"
 
 @dataclass
 class Commentary:
-    """Data model for ball-by-ball commentary."""
+    """Enhanced ball-by-ball commentary with detailed analysis."""
     over: str
     ball: str
     runs: int
@@ -59,15 +178,141 @@ class Commentary:
     timestamp: str
     is_wicket: bool = False
     is_boundary: bool = False
+    # Enhanced fields for comprehensive commentary
+    batsman: str = ""
+    bowler: str = ""
+    commentary_type: str = "regular"  # regular, milestone, key_moment, strategic
+    ball_type: str = ""  # fast, spin, yorker, bouncer, etc.
+    shot_type: str = ""  # drive, cut, pull, sweep, etc.
+    field_position: str = ""  # where the ball went
+    impact_rating: int = 0  # 1-10 impact rating for the ball
+    context_analysis: str = ""  # Strategic context and insights
+    momentum_shift: str = ""  # positive, negative, neutral
+    
+    def to_telegram_format(self, is_live: bool = False) -> str:
+        """Format commentary for Telegram display with enhanced visuals."""
+        # Import here to avoid circular import
+        from advanced_ui_components import UIComponents
+        
+        if self.is_wicket:
+            # Use dramatic wicket animation
+            wicket_alert = UIComponents.create_wicket_alert("", is_live)
+            return f"💥 **{self.over}.{self.ball}** - {wicket_alert}\n   {self.description}"
+        elif self.is_boundary:
+            # Determine if it's a 4 or 6 from description
+            if '6' in self.description or 'six' in self.description.lower():
+                boundary_alert = UIComponents.create_boundary_alert(6, is_live)
+            else:
+                boundary_alert = UIComponents.create_boundary_alert(4, is_live)
+            return f"⚡ **{self.over}.{self.ball}** - {boundary_alert}\n   {self.description}"
+        else:
+            # Regular ball with enhanced formatting
+            emoji = "🏏" if self.runs > 0 else "⚪"
+            if is_live:
+                return UIComponents.create_live_pulse_effect(f"{emoji} **{self.over}.{self.ball}** - {self.description}")
+            else:
+                return f"{emoji} **{self.over}.{self.ball}** - {self.description}"
+
+@dataclass
+class MatchAnalytics:
+    """Comprehensive match analytics and insights."""
+    match_id: str
+    win_probability: Dict[str, float] = field(default_factory=dict)  # team -> probability
+    required_run_rate: float = 0.0
+    current_run_rate: float = 0.0
+    run_rate_required: float = 0.0
+    powerplay_analysis: 'PowerplayAnalysis' = None
+    partnership_analysis: List['PartnershipAnalysis'] = field(default_factory=list)
+    momentum_tracker: List[Dict[str, Any]] = field(default_factory=list)
+    key_moments: List[Dict[str, Any]] = field(default_factory=list)
+    team_comparison: 'TeamComparison' = None
+    pitch_analysis: Dict[str, Any] = field(default_factory=dict)
+    weather_impact: Dict[str, Any] = field(default_factory=dict)
     
     def to_telegram_format(self) -> str:
-        """Format commentary for Telegram display."""
-        emoji = "🔴" if self.is_wicket else "🟢" if self.is_boundary else "⚪"
-        return f"{emoji} **{self.over}.{self.ball}** - {self.description}"
+        """Format analytics for Telegram display."""
+        result = "📊 **Match Analytics**\n\n"
+        
+        if self.win_probability:
+            result += "🎯 **Win Probability:**\n"
+            for team, prob in self.win_probability.items():
+                result += f"   {team}: {prob:.1f}%\n"
+        
+        if self.required_run_rate > 0:
+            result += f"📈 **Required RR:** {self.required_run_rate:.2f}\n"
+            result += f"📊 **Current RR:** {self.current_run_rate:.2f}\n"
+        
+        return result
+
+@dataclass
+class PowerplayAnalysis:
+    """Powerplay performance analysis."""
+    phase: str  # "Powerplay 1", "Middle Overs", "Death Overs"
+    overs_range: str  # "1-6", "7-15", "16-20"
+    runs_scored: int = 0
+    wickets_lost: int = 0
+    run_rate: float = 0.0
+    boundaries: int = 0
+    dot_balls: int = 0
+    milestone_reached: bool = False
+    performance_rating: str = ""  # Excellent, Good, Average, Poor
+    
+    def to_telegram_format(self) -> str:
+        """Format powerplay analysis for Telegram."""
+        rating_emoji = {"Excellent": "🟢", "Good": "🟡", "Average": "🟠", "Poor": "🔴"}.get(self.performance_rating, "⚪")
+        return f"{rating_emoji} **{self.phase}** ({self.overs_range}): {self.runs_scored}/{self.wickets_lost} @ {self.run_rate:.1f} RR"
+
+@dataclass
+class PartnershipAnalysis:
+    """Partnership tracking and analysis."""
+    batsman1: str
+    batsman2: str
+    runs: int = 0
+    balls: int = 0
+    boundaries: int = 0
+    partnership_rate: float = 0.0
+    milestone_status: str = ""  # "50-run partnership", "100-run partnership"
+    duration: str = ""  # "23.4 overs"
+    is_active: bool = True
+    
+    def __post_init__(self):
+        if self.balls > 0:
+            self.partnership_rate = round((self.runs / self.balls) * 6, 2)
+    
+    def to_telegram_format(self) -> str:
+        """Format partnership for Telegram."""
+        status = "🟢 Active" if self.is_active else "🔴 Ended"
+        return f"🤝 **{self.batsman1} & {self.batsman2}**: {self.runs} runs ({self.balls} balls) | {status}"
+
+@dataclass
+class TeamComparison:
+    """Head-to-head team comparison and analysis."""
+    team1_name: str
+    team2_name: str
+    head_to_head_record: Dict[str, int] = field(default_factory=dict)  # wins, losses, draws
+    recent_form_comparison: Dict[str, List[str]] = field(default_factory=dict)
+    venue_advantage: str = ""
+    key_player_matchups: List[Dict[str, str]] = field(default_factory=list)
+    strengths_weaknesses: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
+    
+    def to_telegram_format(self) -> str:
+        """Format team comparison for Telegram."""
+        result = f"⚖️ **{self.team1_name} vs {self.team2_name}**\n\n"
+        
+        if self.head_to_head_record:
+            t1_wins = self.head_to_head_record.get(f"{self.team1_name}_wins", 0)
+            t2_wins = self.head_to_head_record.get(f"{self.team2_name}_wins", 0)
+            draws = self.head_to_head_record.get("draws", 0)
+            result += f"📊 **H2H Record:** {self.team1_name} {t1_wins}-{t2_wins} {self.team2_name}"
+            if draws > 0:
+                result += f" ({draws} draws)"
+            result += "\n"
+        
+        return result
 
 @dataclass
 class Match:
-    """Data model for a cricket match."""
+    """Enhanced data model for a cricket match with comprehensive analytics."""
     match_id: str
     title: str
     team1: Team
@@ -90,16 +335,38 @@ class Match:
     start_time: str = ""
     broadcasters: List[str] = field(default_factory=list)
     match_status_detail: str = ""  # More detailed status
+    # Comprehensive cricket features
+    match_analytics: MatchAnalytics = None
+    player_stats: List[PlayerStats] = field(default_factory=list)
+    historical_context: 'HistoricalContext' = None
+    pitch_report: Dict[str, Any] = field(default_factory=dict)
+    key_battles: List[Dict[str, str]] = field(default_factory=list)  # Key player vs player battles
     
-    def to_telegram_format(self, include_commentary: bool = False, include_enhanced_details: bool = False) -> str:
-        """Format match info for Telegram display."""
-        status_emoji = {
-            MatchStatus.LIVE: "🔴",
-            MatchStatus.UPCOMING: "🕐",
-            MatchStatus.COMPLETED: "✅"
-        }.get(self.status, "📊")
+    def to_telegram_format(self, include_commentary: bool = False, include_enhanced_details: bool = False, use_enhanced_visuals: bool = True) -> str:
+        """Format match info for Telegram display with superior visual enhancements."""
+        # Import here to avoid circular import
+        from advanced_ui_components import UIComponents
         
-        result = f"{status_emoji} **{self.title}**\n"
+        if use_enhanced_visuals:
+            # Use the new breathtaking score card format
+            result = UIComponents.format_live_score_card(self, include_animations=(self.status == MatchStatus.LIVE))
+            
+            # Add enhanced commentary if requested
+            if include_commentary and self.commentary:
+                result += "\n📝 **Recent Commentary:**\n"
+                for comment in self.commentary[-3:]:  # Last 3 balls
+                    result += f"{comment.to_telegram_format(self.status == MatchStatus.LIVE)}\n"
+            
+            return result
+        else:
+            # Fallback to original format (legacy support)
+            status_emoji = {
+                MatchStatus.LIVE: "🔴",
+                MatchStatus.UPCOMING: "🕐", 
+                MatchStatus.COMPLETED: "✅"
+            }.get(self.status, "📊")
+            
+            result = f"{status_emoji} **{self.title}**\n"
         
         # Add series/tournament info if available
         if include_enhanced_details and (self.series_name or self.tournament_name):

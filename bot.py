@@ -270,8 +270,8 @@ class ProfessionalCricketBot:
                     # Check if user is following this match
                     is_following = user_id in self.followed_matches and match.match_id in self.followed_matches[user_id]
                     
-                    # Enhanced match display
-                    match_text = self.ui_components.format_live_score_card(match)
+                    # Enhanced match display with breathtaking animations
+                    match_text = self.ui_components.format_live_score_card(match, include_animations=True)
                     
                     # Add personalization indicators
                     if any(team in user_prefs.favorite_teams for team in [match.team1.short_name, match.team2.short_name]):
