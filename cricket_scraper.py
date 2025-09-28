@@ -71,13 +71,40 @@ class Team:
             return f"{perf_indicator} • **{self.score}/{self.wickets}** ({self.overs} ov) • {rr_display}"
 
 @dataclass
+class HeadToHeadRecord:
+    """Head-to-head performance record between players or teams."""
+    opponent: str
+    matches: int = 0
+    wins: int = 0
+    losses: int = 0
+    draws: int = 0
+    runs_scored: int = 0
+    runs_conceded: int = 0
+    wickets_taken: int = 0
+    wickets_lost: int = 0
+    average_score: float = 0.0
+    best_performance: str = ""
+    last_encounter: str = ""
+    venue_advantage: Dict[str, Any] = field(default_factory=dict)
+    
+    def __post_init__(self):
+        """Calculate derived statistics."""
+        if self.matches > 0:
+            self.average_score = round(self.runs_scored / self.matches, 2) if self.matches > 0 else 0.0
+    
+    def to_telegram_format(self) -> str:
+        """Format head-to-head record for Telegram display."""
+        win_rate = (self.wins / self.matches * 100) if self.matches > 0 else 0
+        return f"🆚 vs {self.opponent}: {self.wins}W-{self.losses}L ({self.matches} matches, {win_rate:.1f}% win rate)"
+
+@dataclass
 class PlayerStats:
     """Comprehensive player statistics data model."""
     player_name: str
     team: str
-    batting_stats: 'BattingStats' = None
-    bowling_stats: 'BowlingStats' = None
-    fielding_stats: 'FieldingStats' = None
+    batting_stats: Optional['BattingStats'] = None
+    bowling_stats: Optional['BowlingStats'] = None
+    fielding_stats: Optional['FieldingStats'] = None
     recent_form: List[str] = field(default_factory=list)  # Last 5 matches performance
     career_averages: Dict[str, float] = field(default_factory=dict)
     milestone_tracking: Dict[str, Any] = field(default_factory=dict)
@@ -221,11 +248,11 @@ class MatchAnalytics:
     required_run_rate: float = 0.0
     current_run_rate: float = 0.0
     run_rate_required: float = 0.0
-    powerplay_analysis: 'PowerplayAnalysis' = None
+    powerplay_analysis: Optional['PowerplayAnalysis'] = None
     partnership_analysis: List['PartnershipAnalysis'] = field(default_factory=list)
     momentum_tracker: List[Dict[str, Any]] = field(default_factory=list)
     key_moments: List[Dict[str, Any]] = field(default_factory=list)
-    team_comparison: 'TeamComparison' = None
+    team_comparison: Optional['TeamComparison'] = None
     pitch_analysis: Dict[str, Any] = field(default_factory=dict)
     weather_impact: Dict[str, Any] = field(default_factory=dict)
     
@@ -311,6 +338,37 @@ class TeamComparison:
         return result
 
 @dataclass
+class HistoricalContext:
+    """Historical context and background information for cricket matches."""
+    venue_history: Dict[str, Any] = field(default_factory=dict)
+    previous_encounters: List[Dict[str, Any]] = field(default_factory=list)
+    milestone_context: Dict[str, Any] = field(default_factory=dict)
+    record_watch: List[str] = field(default_factory=list)  # Records that could be broken
+    series_context: Dict[str, Any] = field(default_factory=dict)
+    tournament_significance: str = ""
+    conditions_history: Dict[str, Any] = field(default_factory=dict)  # Weather, pitch conditions
+    team_form_context: Dict[str, List[str]] = field(default_factory=dict)
+    key_anniversaries: List[str] = field(default_factory=list)
+    debut_watch: List[str] = field(default_factory=list)  # Players making debuts
+    
+    def to_telegram_format(self) -> str:
+        """Format historical context for Telegram display."""
+        result = "📜 **Historical Context**\n\n"
+        
+        if self.milestone_context:
+            result += "🎯 **Milestones to Watch:**\n"
+            for milestone, details in self.milestone_context.items():
+                result += f"   • {milestone}: {details}\n"
+        
+        if self.record_watch:
+            result += f"\n🏆 **Records in Focus:** {', '.join(self.record_watch[:3])}\n"
+        
+        if self.tournament_significance:
+            result += f"\n🎯 **Significance:** {self.tournament_significance}\n"
+        
+        return result
+
+@dataclass
 class Match:
     """Enhanced data model for a cricket match with comprehensive analytics."""
     match_id: str
@@ -336,11 +394,14 @@ class Match:
     broadcasters: List[str] = field(default_factory=list)
     match_status_detail: str = ""  # More detailed status
     # Comprehensive cricket features
-    match_analytics: MatchAnalytics = None
+    match_analytics: Optional['MatchAnalytics'] = None
     player_stats: List[PlayerStats] = field(default_factory=list)
-    historical_context: 'HistoricalContext' = None
+    historical_context: Optional['HistoricalContext'] = None
     pitch_report: Dict[str, Any] = field(default_factory=dict)
     key_battles: List[Dict[str, str]] = field(default_factory=list)  # Key player vs player battles
+    # Additional professional features
+    required_run_rate: float = 0.0  # Required run rate for chase scenarios
+    win_probability: float = 0.0  # Current win probability percentage
     
     def to_telegram_format(self, include_commentary: bool = False, include_enhanced_details: bool = False, use_enhanced_visuals: bool = True) -> str:
         """Format match info for Telegram display with superior visual enhancements."""

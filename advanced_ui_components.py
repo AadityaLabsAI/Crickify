@@ -67,7 +67,7 @@ class UIComponents:
             return f"{bar} {percentage}%"
     
     @staticmethod
-    def create_run_rate_indicator(current_rr: float, required_rr: float = None, is_live: bool = False) -> str:
+    def create_run_rate_indicator(current_rr: float, required_rr: Optional[float] = None, is_live: bool = False) -> str:
         """Create stunning visual run rate indicator with advanced animations and cricket context."""
         if required_rr is None:
             # Live match current run rate with enhanced visuals
@@ -271,7 +271,7 @@ class UIComponents:
         return f"⚡ {text} ⚡"
     
     @staticmethod
-    def create_overs_visualization(current_overs: str, total_overs: int = 20, recent_balls: List[str] = None) -> str:
+    def create_overs_visualization(current_overs: str, total_overs: int = 20, recent_balls: Optional[List[str]] = None) -> str:
         """Create dynamic overs visualization with ball-by-ball graphics."""
         try:
             overs_float = float(current_overs)
@@ -748,7 +748,7 @@ class UIComponents:
         return InlineKeyboardMarkup(buttons)
     
     @staticmethod
-    def create_live_matches_grid(matches: List[Match], user_favorites: List[str] = None, 
+    def create_live_matches_grid(matches: List[Match], user_favorites: Optional[List[str]] = None, 
                                current_page: int = 1, total_pages: int = 1) -> Tuple[str, InlineKeyboardMarkup]:
         """Create professional live matches grid with enhanced visual design."""
         if not matches:
@@ -928,8 +928,8 @@ class UIComponents:
         return InlineKeyboardMarkup(buttons)
     
     @staticmethod
-    def create_smart_alert_keyboard(alert_context: str, match_id: str = None, 
-                                  user_preferences: Dict[str, Any] = None) -> InlineKeyboardMarkup:
+    def create_smart_alert_keyboard(alert_context: str, match_id: Optional[str] = None, 
+                                  user_preferences: Optional[Dict[str, Any]] = None) -> InlineKeyboardMarkup:
         """Create intelligent alert setup keyboard with context-aware options."""
         user_preferences = user_preferences or {}
         buttons = []
