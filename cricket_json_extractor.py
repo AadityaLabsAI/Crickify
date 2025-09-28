@@ -53,34 +53,42 @@ class CricketJSONExtractor:
         self.endpoint_health = {}  # Track endpoint health
         self.last_successful_endpoints = {}  # Cache successful endpoints
         
+        # Ultra-fast optimization settings
+        self.max_concurrent_requests = 3  # Concurrent endpoint requests
+        self.priority_endpoints = {}  # Track fastest responding endpoints
+        self.response_time_cache = {}  # Cache response times for optimization
+        self.data_change_hashes = {}  # Track data changes to avoid redundant processing
+        
     def _initialize_endpoints(self) -> Dict[str, List[JSONEndpoint]]:
         """Initialize all JSON endpoints with fallback priorities."""
         return {
             'live_matches': [
-                # Primary Cricbuzz JSON endpoints (fastest)
+                # Primary Cricbuzz JSON endpoints (fastest) - Optimized for 1.5s updates
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/live-scores",
                     parser="cricbuzz",
-                    timeout=3
+                    timeout=1.2,  # Ultra-fast timeout for 1.5s updates
+                    rate_limit=0.05
                 ),
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket/live",
                     parser="cricbuzz",
-                    timeout=3
+                    timeout=1.2,
+                    rate_limit=0.05
                 ),
-                
-                # ESPN JSON endpoints (good fallback)
-                JSONEndpoint(
-                    url="https://hs-consumer-api.espncricinfo.com/v1/pages/matches",
-                    parser="espn",
-                    timeout=4
-                ),
-                
-                # Mobile endpoints (lightweight, very fast)
                 JSONEndpoint(
                     url="https://m.cricbuzz.com/api/cricket-match/live-scores",
                     parser="cricbuzz_mobile",
-                    timeout=2
+                    timeout=0.8,  # Mobile endpoints are typically faster
+                    rate_limit=0.03
+                ),
+                
+                # ESPN JSON endpoints (good fallback) - Optimized
+                JSONEndpoint(
+                    url="https://hs-consumer-api.espncricinfo.com/v1/pages/matches",
+                    parser="espn",
+                    timeout=1.5,  # Reduced timeout for faster response
+                    rate_limit=0.08
                 ),
                 
                 # Backup endpoints
@@ -132,46 +140,180 @@ class CricketJSONExtractor:
         }
     
     async def extract_live_matches(self) -> List[Match]:
-        """Extract live matches using JSON endpoints for maximum speed."""
-        logger.info("🚀 Starting ultra-fast JSON extraction for live matches...")
+        """Extract live matches using concurrent JSON endpoints for maximum speed."""
+        logger.info("🚀 Starting ultra-fast concurrent JSON extraction for live matches...")
         
         start_time = time.time()
         matches = []
         
-        # Try all live match endpoints in priority order
-        for endpoint in self.endpoints['live_matches']:
-            try:
-                # Use cached successful endpoint first
-                if self._is_endpoint_healthy(endpoint):
-                    match_data = await self._fetch_json_data(endpoint)
-                    if match_data:
-                        parsed_matches = await self._parse_json_matches(match_data, endpoint.parser)
-                        if parsed_matches:
-                            matches.extend(parsed_matches)
-                            self._mark_endpoint_healthy(endpoint, True)
-                            
-                            extraction_time = time.time() - start_time
-                            logger.info(f"✅ JSON extraction SUCCESS: {len(parsed_matches)} matches in {extraction_time:.2f}s from {endpoint.parser}")
-                            
-                            # If we have good matches, prioritize speed over completeness
-                            if len(matches) >= 3:
-                                break
-                    else:
-                        self._mark_endpoint_healthy(endpoint, False)
-                        
-            except Exception as e:
-                logger.warning(f"⚠️ JSON endpoint failed {endpoint.url}: {e}")
-                self._mark_endpoint_healthy(endpoint, False)
-                continue
+        # Get priority-sorted endpoints for fastest response
+        sorted_endpoints = self._get_priority_sorted_endpoints('live_matches')
         
-        # Enhance matches with additional details if we have time
-        if matches and time.time() - start_time < 1.0:  # Only if extraction was very fast
+        # Use concurrent requests for ultra-fast extraction
+        if len(sorted_endpoints) > 1:
+            matches = await self._concurrent_fetch_matches(sorted_endpoints[:self.max_concurrent_requests])
+        else:
+            # Fallback to sequential for single endpoint
+            matches = await self._sequential_fetch_matches(sorted_endpoints)
+        
+        # Quick data enhancement if we have time budget
+        if matches and time.time() - start_time < 0.8:  # Even tighter time budget for 1.5s updates
             matches = await self._enhance_matches_with_details(matches[:3])
         
         total_time = time.time() - start_time
-        logger.info(f"⚡ Total JSON extraction: {len(matches)} matches in {total_time:.2f}s")
+        logger.info(f"⚡ Ultra-fast JSON extraction: {len(matches)} matches in {total_time:.3f}s")
         
         return matches[:5]  # Return max 5 for optimal performance
+    
+    async def _concurrent_fetch_matches(self, endpoints: List[JSONEndpoint]) -> List[Match]:
+        """Fetch matches from multiple endpoints concurrently for ultra-fast response."""
+        logger.info(f"🚀 Starting concurrent fetch from {len(endpoints)} endpoints...")
+        
+        # Create concurrent tasks for all endpoints
+        tasks = []
+        for endpoint in endpoints:
+            if self._is_endpoint_healthy(endpoint):
+                task = asyncio.create_task(self._fetch_and_parse_endpoint(endpoint))
+                tasks.append(task)
+        
+        if not tasks:
+            return []
+        
+        # Wait for first successful response or timeout after 1s for ultra-fast updates
+        matches = []
+        try:
+            done, pending = await asyncio.wait(tasks, timeout=1.0, return_when=asyncio.FIRST_COMPLETED)
+            
+            # Process completed tasks
+            for task in done:
+                try:
+                    result = await task
+                    if result:
+                        matches.extend(result)
+                        # If we get good data quickly, we can return immediately
+                        if len(matches) >= 2:
+                            break
+                except Exception as e:
+                    logger.debug(f"Task failed: {e}")
+            
+            # Cancel pending tasks to save resources
+            for task in pending:
+                task.cancel()
+                
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ Concurrent fetch timeout - falling back to cached data")
+            
+        return matches
+    
+    async def _sequential_fetch_matches(self, endpoints: List[JSONEndpoint]) -> List[Match]:
+        """Sequential fallback when concurrent fetching isn't available."""
+        matches = []
+        
+        for endpoint in endpoints[:2]:  # Only try top 2 for speed
+            try:
+                if self._is_endpoint_healthy(endpoint):
+                    result = await self._fetch_and_parse_endpoint(endpoint)
+                    if result:
+                        matches.extend(result)
+                        break  # Stop at first success for speed
+            except Exception as e:
+                logger.debug(f"Sequential fetch failed for {endpoint.url}: {e}")
+                continue
+                
+        return matches
+    
+    async def _fetch_and_parse_endpoint(self, endpoint: JSONEndpoint) -> List[Match]:
+        """Fetch and parse data from a single endpoint with timing."""
+        start_time = time.time()
+        
+        try:
+            match_data = await self._fetch_json_data(endpoint)
+            if match_data:
+                # Check if data has changed to avoid redundant parsing
+                data_hash = self._get_data_hash(match_data)
+                cache_key = f"{endpoint.parser}_{endpoint.url}"
+                
+                if cache_key in self.data_change_hashes and self.data_change_hashes[cache_key] == data_hash:
+                    logger.debug(f"📊 No data changes detected for {endpoint.parser}")
+                    return []  # Return empty to indicate no changes
+                
+                # Parse new data
+                parsed_matches = await self._parse_json_matches(match_data, endpoint.parser)
+                if parsed_matches:
+                    # Cache the data hash and update response time tracking
+                    self.data_change_hashes[cache_key] = data_hash
+                    response_time = time.time() - start_time
+                    self._update_endpoint_performance(endpoint, response_time)
+                    
+                    self._mark_endpoint_healthy(endpoint, True)
+                    logger.info(f"✅ {endpoint.parser} SUCCESS: {len(parsed_matches)} matches in {response_time:.3f}s")
+                    return parsed_matches
+                else:
+                    self._mark_endpoint_healthy(endpoint, False)
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Endpoint {endpoint.url} failed: {e}")
+            self._mark_endpoint_healthy(endpoint, False)
+        
+        return []
+    
+    def _get_priority_sorted_endpoints(self, endpoint_type: str) -> List[JSONEndpoint]:
+        """Sort endpoints by performance priority for fastest response."""
+        endpoints = self.endpoints.get(endpoint_type, [])
+        
+        # Sort by response time (fastest first) and health status
+        def endpoint_score(endpoint):
+            url_key = f"{endpoint.parser}_{endpoint.url}"
+            response_time = self.response_time_cache.get(url_key, 999.0)  # Default high for unknown
+            health_bonus = 0 if self._is_endpoint_healthy(endpoint) else 100  # Penalty for unhealthy
+            return response_time + health_bonus
+        
+        return sorted(endpoints, key=endpoint_score)
+    
+    def _update_endpoint_performance(self, endpoint: JSONEndpoint, response_time: float):
+        """Track endpoint performance for intelligent prioritization."""
+        url_key = f"{endpoint.parser}_{endpoint.url}"
+        
+        # Use exponential moving average for response time tracking
+        if url_key in self.response_time_cache:
+            current_avg = self.response_time_cache[url_key]
+            self.response_time_cache[url_key] = 0.7 * current_avg + 0.3 * response_time
+        else:
+            self.response_time_cache[url_key] = response_time
+    
+    def _get_data_hash(self, data: Dict[str, Any]) -> str:
+        """Generate hash of data to detect changes efficiently."""
+        import hashlib
+        import json
+        try:
+            # Create a stable hash of the essential data
+            essential_data = self._extract_essential_data(data)
+            data_str = json.dumps(essential_data, sort_keys=True)
+            return hashlib.md5(data_str.encode()).hexdigest()[:12]  # Short hash for efficiency
+        except:
+            return str(hash(str(data)))  # Fallback hash
+    
+    def _extract_essential_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract only the essential data for change detection."""
+        essential = {}
+        
+        # Focus on key fields that indicate real changes
+        key_fields = ['score', 'wickets', 'overs', 'status', 'matchState', 'currentOver', 'partnership']
+        
+        def extract_recursively(obj, path=""):
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    new_path = f"{path}.{key}" if path else key
+                    if any(field in key.lower() for field in key_fields):
+                        essential[new_path] = value
+                    elif isinstance(value, (dict, list)):
+                        extract_recursively(value, new_path)
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    extract_recursively(item, f"{path}[{i}]")
+        
+        extract_recursively(data)
+        return essential
     
     async def _fetch_json_data(self, endpoint: JSONEndpoint, **format_params) -> Optional[Dict[str, Any]]:
         """Fetch JSON data from endpoint with optimized settings."""

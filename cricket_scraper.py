@@ -385,11 +385,16 @@ class RealCricketScraper:
         """Initialize the cricket scraper with enhanced error handling."""
         self.session = None
         self.last_request_time = {}
-        self.rate_limit_delay = 1.5  # 1.5 seconds between requests for fast updates
+        self.rate_limit_delay = 0.5  # Ultra-fast 0.5s rate limit for 1.5s updates
         self.match_details_cache = {}  # Cache for detailed match information
-        self.cache_duration = 8  # 8 second cache for real-time data
+        self.cache_duration = 1.0  # Ultra-short 1s cache for real-time data
         self.schedule_cache = {}  # Cache for schedule data
-        self.schedule_cache_duration = 120  # 2 minutes for schedule cache (faster updates)
+        self.schedule_cache_duration = 60  # 1 minute for schedule cache (faster updates)
+        
+        # Ultra-fast optimization settings
+        self.enable_concurrent_fetch = True  # Enable concurrent endpoint requests
+        self.max_concurrent_sources = 2  # Max concurrent data sources
+        self.data_change_detection = True  # Enable smart change detection
         
         # Enhanced error handling and resilience features
         self.circuit_breakers = {}  # Domain-based circuit breakers
@@ -1570,6 +1575,62 @@ class RealCricketScraper:
             'matches': matches,
             'timestamp': time.time()
         }
+    
+    def _filter_changed_matches(self, matches: List[Match]) -> List[Match]:
+        """Filter matches that have actually changed to reduce bandwidth and processing."""
+        if not self.data_change_detection:
+            return matches
+        
+        changed_matches = []
+        current_time = time.time()
+        
+        for match in matches:
+            match_key = f"match_{match.match_id}"
+            
+            # Generate a hash of essential match data
+            match_hash = self._generate_match_hash(match)
+            
+            # Check if match data has changed
+            if match_key in self.match_details_cache:
+                cached_entry = self.match_details_cache[match_key]
+                
+                # Check if cache is still valid and data hasn't changed
+                if (current_time - cached_entry['timestamp'] < self.cache_duration and
+                    cached_entry.get('hash') == match_hash):
+                    continue  # Skip unchanged match
+            
+            # Mark as changed and update cache
+            self.match_details_cache[match_key] = {
+                'data': match,
+                'timestamp': current_time,
+                'hash': match_hash
+            }
+            changed_matches.append(match)
+        
+        if len(changed_matches) != len(matches):
+            logger.info(f"📊 Bandwidth optimization: {len(changed_matches)}/{len(matches)} matches have changes")
+        
+        return changed_matches
+    
+    def _generate_match_hash(self, match: Match) -> str:
+        """Generate hash of essential match data for change detection."""
+        import hashlib
+        
+        # Focus on fields that indicate real changes
+        essential_data = {
+            'team1_score': match.team1.score,
+            'team1_wickets': match.team1.wickets,
+            'team1_overs': match.team1.overs,
+            'team2_score': match.team2.score,
+            'team2_wickets': match.team2.wickets,
+            'team2_overs': match.team2.overs,
+            'status': match.status.value,
+            'current_partnership': match.current_partnership,
+            'recent_overs': ','.join(match.recent_overs[-3:])  # Last 3 overs
+        }
+        
+        data_str = str(essential_data)
+        return hashlib.md5(data_str.encode()).hexdigest()[:8]  # Short hash for efficiency
     
     async def get_live_matches(self) -> List[Match]:
         """Get current live cricket matches with ultra-fast JSON extraction and HTML fallback."""

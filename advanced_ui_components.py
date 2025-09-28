@@ -132,45 +132,58 @@ class UIComponents:
     
     @staticmethod
     def create_match_action_buttons(match_id: str, user_following: bool = False, 
-                                  user_alerts: bool = False) -> InlineKeyboardMarkup:
-        """Create advanced action buttons superior to existing cricket sites."""
+                                  user_alerts: bool = False, match_status: str = "live") -> InlineKeyboardMarkup:
+        """Create professional match action buttons superior to existing cricket sites."""
         buttons = []
         
-        # First row: Core actions
+        # Row 1: Primary engagement actions with visual feedback
         row1 = []
-        if user_following:
-            row1.append(InlineKeyboardButton("💚 Following", callback_data=f"unfollow_{match_id}"))
-        else:
-            row1.append(InlineKeyboardButton("🤍 Follow", callback_data=f"follow_{match_id}"))
+        follow_btn = InlineKeyboardButton("💚 Following", callback_data=f"unfollow_{match_id}") if user_following else InlineKeyboardButton("🤍 Follow Match", callback_data=f"follow_{match_id}")
+        alert_btn = InlineKeyboardButton("🔕 Alerts ON", callback_data=f"alerts_off_{match_id}") if user_alerts else InlineKeyboardButton("🔔 Alert Me", callback_data=f"alerts_on_{match_id}")
         
-        if user_alerts:
-            row1.append(InlineKeyboardButton("🔕 Alerts On", callback_data=f"alerts_off_{match_id}"))
-        else:
-            row1.append(InlineKeyboardButton("🔔 Set Alert", callback_data=f"alerts_on_{match_id}"))
-        
+        row1.extend([follow_btn, alert_btn])
         buttons.append(row1)
         
-        # Second row: Analysis and sharing
-        row2 = [
-            InlineKeyboardButton("📈 Analytics", callback_data=f"analytics_{match_id}"),
-            InlineKeyboardButton("📊 Compare", callback_data=f"compare_{match_id}")
-        ]
+        # Row 2: Live data and analytics (context-sensitive)
+        if match_status == "live":
+            row2 = [
+                InlineKeyboardButton("📊 Live Stats", callback_data=f"live_stats_{match_id}"),
+                InlineKeyboardButton("🎯 Win Probability", callback_data=f"win_prob_{match_id}")
+            ]
+        else:
+            row2 = [
+                InlineKeyboardButton("📈 Analytics", callback_data=f"analytics_{match_id}"),
+                InlineKeyboardButton("📊 Team Compare", callback_data=f"compare_{match_id}")
+            ]
         buttons.append(row2)
         
-        # Third row: Detailed views
+        # Row 3: Content and insights
         row3 = [
-            InlineKeyboardButton("💬 Commentary", callback_data=f"commentary_{match_id}"),
-            InlineKeyboardButton("👥 Players", callback_data=f"players_{match_id}")
+            InlineKeyboardButton("💬 Live Commentary", callback_data=f"commentary_{match_id}"),
+            InlineKeyboardButton("⚡ Key Moments", callback_data=f"moments_{match_id}")
         ]
         buttons.append(row3)
         
-        # Fourth row: Sharing and navigation
+        # Row 4: Team and player insights
         row4 = [
-            InlineKeyboardButton("📤 Share", callback_data=f"share_{match_id}"),
-            InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_{match_id}"),
-            InlineKeyboardButton("🔙 Back", callback_data="live_matches")
+            InlineKeyboardButton("👥 Playing XI", callback_data=f"playing_xi_{match_id}"),
+            InlineKeyboardButton("🏏 Player Stats", callback_data=f"player_stats_{match_id}")
         ]
         buttons.append(row4)
+        
+        # Row 5: Sharing and advanced actions
+        row5 = [
+            InlineKeyboardButton("📤 Share Score", callback_data=f"share_{match_id}"),
+            InlineKeyboardButton("🔄 Auto-Refresh", callback_data=f"auto_refresh_{match_id}")
+        ]
+        buttons.append(row5)
+        
+        # Row 6: Navigation with breadcrumb
+        row6 = [
+            InlineKeyboardButton("🔙 Live Matches", callback_data="live_matches_pro"),
+            InlineKeyboardButton("🏠 Dashboard", callback_data="back_to_main")
+        ]
+        buttons.append(row6)
         
         return InlineKeyboardMarkup(buttons)
     
@@ -182,67 +195,76 @@ class UIComponents:
         recent_matches = user_data.get('recent_matches', [])
         active_alerts = user_data.get('active_alerts', 0)
         
-        # Enhanced welcome message with personalization
+        # Enhanced welcome message with personalization and cricket atmosphere
         welcome = f"🏏 **Cricket Live Match Centre Pro** 🏏\n\n"
-        welcome += f"Welcome back, **{username}**! 👋\n\n"
+        welcome += f"🌟 Welcome back, **{username}**! Ready for cricket? 🌟\n\n"
         
-        # Personal stats summary
-        welcome += f"📊 **Your Cricket Hub:**\n"
-        welcome += f"❤️ Favorite Teams: {len(favorite_teams) if favorite_teams else 'None set'}\n"
-        welcome += f"🔔 Active Alerts: {active_alerts}\n"
-        welcome += f"📺 Recent Views: {len(recent_matches)}\n\n"
+        # Visual dashboard stats with cricket theming
+        welcome += f"📊 **Your Cricket Command Center:**\n"
+        welcome += f"⭐ Favorite Teams: {len(favorite_teams) if favorite_teams else '🔧 Setup needed'}\n"
+        welcome += f"🔔 Smart Alerts: {active_alerts} active\n"
+        welcome += f"👀 Recent Views: {len(recent_matches)} matches\n\n"
         
-        # Quick insights
+        # Quick insights with cricket context
         if recent_matches:
             last_match = recent_matches[-1]
-            welcome += f"🕐 **Last Viewed:** {last_match.get('match_title', 'Unknown')[:30]}...\n\n"
+            welcome += f"🕐 **Last Viewed:** {last_match.get('match_title', 'Unknown')[:28]}...\n\n"
         
-        # Feature highlights
-        welcome += f"✨ **What's New:**\n"
-        welcome += f"• 🚀 Real-time AI commentary summaries\n"
-        welcome += f"• 📈 Advanced match predictions\n"
-        welcome += f"• 🎯 Smart team comparisons\n"
-        welcome += f"• ⚡ Instant score alerts\n\n"
+        # Premium feature highlights with cricket emojis
+        welcome += f"⚡ **Premium Cricket Features:**\n"
+        welcome += f"• 🚀 Lightning-fast live updates\n"
+        welcome += f"• 🧠 AI-powered match predictions\n"
+        welcome += f"• 🎯 Advanced team analytics\n"
+        welcome += f"• 📱 Smart notification system\n\n"
         
-        welcome += f"Choose your destination below:"
+        welcome += f"🎪 **Choose Your Cricket Adventure:**"
         
-        # Create enhanced menu buttons
+        # Create professional menu with cricket-themed organization
         buttons = []
         
-        # First row: Core features with enhanced labels
+        # Main action row: Live action prioritized
         row1 = [
-            InlineKeyboardButton("🔴 Live Matches", callback_data="live_matches_pro"),
-            InlineKeyboardButton("📅 Schedule Pro", callback_data="schedule_pro")
+            InlineKeyboardButton("🔴 Live Cricket", callback_data="live_matches_pro"),
+            InlineKeyboardButton("📅 Smart Schedule", callback_data="schedule_pro")
         ]
         buttons.append(row1)
         
-        # Second row: Advanced features
+        # Tournament & Competition row
         row2 = [
-            InlineKeyboardButton("🏆 Competitions", callback_data="competitions_pro"),
+            InlineKeyboardButton("🏆 Tournaments", callback_data="competitions_pro"),
             InlineKeyboardButton("📊 Analytics Hub", callback_data="analytics_hub")
         ]
         buttons.append(row2)
         
-        # Third row: Personalization
+        # Personalization row with visual priority
+        fav_label = f"❤️ My Teams ({len(favorite_teams)})" if favorite_teams else "❤️ Add Teams"
+        alert_label = f"🔔 Alerts ({active_alerts})" if active_alerts > 0 else "🔔 Set Alerts"
         row3 = [
-            InlineKeyboardButton("❤️ My Teams", callback_data="my_teams"),
-            InlineKeyboardButton("🔔 Alerts", callback_data="my_alerts")
+            InlineKeyboardButton(fav_label, callback_data="my_teams"),
+            InlineKeyboardButton(alert_label, callback_data="my_alerts")
         ]
         buttons.append(row3)
         
-        # Fourth row: Smart features
+        # Advanced AI features row
         row4 = [
-            InlineKeyboardButton("🎯 Predictions", callback_data="match_predictions"),
-            InlineKeyboardButton("📈 Trending", callback_data="trending_now")
+            InlineKeyboardButton("🎯 AI Predictions", callback_data="match_predictions"),
+            InlineKeyboardButton("🔥 Trending Now", callback_data="trending_now")
         ]
         buttons.append(row4)
         
-        # Fifth row: Settings and help
+        # Quick access row for power users
         row5 = [
-            InlineKeyboardButton("⚙️ Settings", callback_data="user_settings"),
-            InlineKeyboardButton("ℹ️ Help & Tips", callback_data="help_tips")
+            InlineKeyboardButton("⚡ Quick Match", callback_data="quick_match_finder"),
+            InlineKeyboardButton("🎪 Highlights", callback_data="match_highlights")
         ]
         buttons.append(row5)
+        
+        # Settings and support row
+        row6 = [
+            InlineKeyboardButton("⚙️ Settings", callback_data="user_settings"),
+            InlineKeyboardButton("💡 Pro Tips", callback_data="help_tips")
+        ]
+        buttons.append(row6)
         
         return welcome, InlineKeyboardMarkup(buttons)
     
@@ -382,5 +404,261 @@ class UIComponents:
         
         # Back button
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
+        
+        return InlineKeyboardMarkup(buttons)
+    
+    @staticmethod
+    def create_live_matches_grid(matches: List[Match], user_favorites: List[str] = None, 
+                               current_page: int = 1, total_pages: int = 1) -> Tuple[str, InlineKeyboardMarkup]:
+        """Create professional live matches grid with enhanced visual design."""
+        if not matches:
+            return UIComponents._create_no_matches_display()
+        
+        user_favorites = user_favorites or []
+        
+        # Enhanced header with live indicators
+        text = "🔴 **LIVE CRICKET MATCHES** 🔴\n\n"
+        text += f"⚡ **{len(matches)} Live Matches** | 🔄 Auto-updating\n\n"
+        
+        buttons = []
+        
+        # Quick filter row
+        filter_row = [
+            InlineKeyboardButton("⭐ My Teams", callback_data="filter_favorites"),
+            InlineKeyboardButton("🏏 All Formats", callback_data="filter_formats"),
+            InlineKeyboardButton("🌍 All Regions", callback_data="filter_regions")
+        ]
+        buttons.append(filter_row)
+        
+        # Match rows (2 matches per row for better mobile experience)
+        for i in range(0, len(matches), 2):
+            match_row = []
+            
+            for j in range(2):
+                if i + j < len(matches):
+                    match = matches[i + j]
+                    
+                    # Create match button with status and favorite indicators
+                    match_emoji = "⭐" if any(team in user_favorites for team in [match.team1.short_name, match.team2.short_name]) else "🏏"
+                    
+                    button_text = f"{match_emoji} {match.team1.short_name} vs {match.team2.short_name}"
+                    if len(button_text) > 25:
+                        button_text = f"{match_emoji} {match.team1.short_name} v {match.team2.short_name}"
+                    
+                    match_row.append(InlineKeyboardButton(
+                        button_text, 
+                        callback_data=f"match_detail_{match.match_id}"
+                    ))
+            
+            if match_row:
+                buttons.append(match_row)
+        
+        # Action buttons
+        action_row1 = [
+            InlineKeyboardButton("🔄 Refresh All", callback_data="refresh_live_matches"),
+            InlineKeyboardButton("📊 Match Analytics", callback_data="live_analytics")
+        ]
+        buttons.append(action_row1)
+        
+        action_row2 = [
+            InlineKeyboardButton("🔔 Bulk Alerts", callback_data="bulk_alerts"),
+            InlineKeyboardButton("⚙️ Customize View", callback_data="customize_live_view")
+        ]
+        buttons.append(action_row2)
+        
+        # Navigation
+        nav_row = [
+            InlineKeyboardButton("🏠 Dashboard", callback_data="back_to_main"),
+            InlineKeyboardButton("📅 Schedule", callback_data="schedule_pro")
+        ]
+        buttons.append(nav_row)
+        
+        return text, InlineKeyboardMarkup(buttons)
+    
+    @staticmethod
+    def _create_no_matches_display() -> Tuple[str, InlineKeyboardMarkup]:
+        """Create professional no matches display with alternatives."""
+        text = (
+            "🏏 **Live Cricket Hub** 🏏\n\n"
+            "🔍 **No live matches right now**\n\n"
+            "🌅 Perfect time to explore:\n"
+            "• 📅 Upcoming exciting matches\n"
+            "• 🏆 Tournament standings\n"
+            "• 📊 Team analytics & insights\n"
+            "• ⭐ Setup your favorite teams\n\n"
+            "💡 **Pro Tip:** Set alerts for your teams!"
+        )
+        
+        buttons = [
+            [
+                InlineKeyboardButton("📅 Smart Schedule", callback_data="schedule_pro"),
+                InlineKeyboardButton("🏆 Tournaments", callback_data="competitions_pro")
+            ],
+            [
+                InlineKeyboardButton("⭐ Add Teams", callback_data="my_teams"),
+                InlineKeyboardButton("🔔 Set Alerts", callback_data="my_alerts")
+            ],
+            [
+                InlineKeyboardButton("🏠 Dashboard", callback_data="back_to_main")
+            ]
+        ]
+        
+        return text, InlineKeyboardMarkup(buttons)
+    
+    @staticmethod
+    def create_advanced_filters_keyboard(current_filters: Dict[str, str], 
+                                       filter_context: str = "matches") -> InlineKeyboardMarkup:
+        """Create advanced filter system with cricket-specific options."""
+        buttons = []
+        
+        # Header row with filter context
+        header_row = [
+            InlineKeyboardButton(f"🎛️ Filters: {filter_context.title()}", callback_data="filter_info")
+        ]
+        buttons.append(header_row)
+        
+        # Format filters with cricket emojis
+        format_row1 = []
+        format_row2 = []
+        formats = [
+            ("🏏 All Formats", "all"),
+            ("⚡ T20", "t20"),
+            ("🏏 ODI", "odi"),
+            ("🏛️ Test", "test")
+        ]
+        
+        for i, (label, value) in enumerate(formats):
+            emoji = "✅" if current_filters.get("format") == value else "⚪"
+            button = InlineKeyboardButton(f"{emoji} {label}", callback_data=f"filter_format_{value}")
+            if i < 2:
+                format_row1.append(button)
+            else:
+                format_row2.append(button)
+        
+        buttons.extend([format_row1, format_row2])
+        
+        # Status filters with enhanced visuals
+        status_row1 = []
+        status_row2 = []
+        statuses = [
+            ("🔴 Live Now", "live"),
+            ("🕐 Upcoming", "upcoming"),
+            ("✅ Completed", "completed"),
+            ("📅 Today", "today")
+        ]
+        
+        for i, (label, value) in enumerate(statuses):
+            emoji = "✅" if current_filters.get("status") == value else "⚪"
+            button = InlineKeyboardButton(f"{emoji} {label}", callback_data=f"filter_status_{value}")
+            if i < 2:
+                status_row1.append(button)
+            else:
+                status_row2.append(button)
+        
+        buttons.extend([status_row1, status_row2])
+        
+        # Region/Tournament filters
+        region_row = [
+            InlineKeyboardButton("🌍 International", callback_data="filter_region_intl"),
+            InlineKeyboardButton("🏠 Domestic", callback_data="filter_region_domestic")
+        ]
+        buttons.append(region_row)
+        
+        # Advanced options
+        advanced_row = [
+            InlineKeyboardButton("⭐ Favorites Only", callback_data="filter_favorites_only"),
+            InlineKeyboardButton("🔥 Trending", callback_data="filter_trending")
+        ]
+        buttons.append(advanced_row)
+        
+        # Actions row
+        action_row = [
+            InlineKeyboardButton("🗑️ Clear All", callback_data="filter_clear_all"),
+            InlineKeyboardButton("✅ Apply Filters", callback_data="filter_apply"),
+            InlineKeyboardButton("💾 Save Preset", callback_data="filter_save")
+        ]
+        buttons.append(action_row)
+        
+        # Navigation
+        nav_row = [
+            InlineKeyboardButton("🔙 Back", callback_data="back_from_filters")
+        ]
+        buttons.append(nav_row)
+        
+        return InlineKeyboardMarkup(buttons)
+    
+    @staticmethod
+    def create_smart_alert_keyboard(alert_context: str, match_id: str = None, 
+                                  user_preferences: Dict[str, Any] = None) -> InlineKeyboardMarkup:
+        """Create intelligent alert setup keyboard with context-aware options."""
+        user_preferences = user_preferences or {}
+        buttons = []
+        
+        # Alert type selection with cricket-specific options
+        if alert_context == "match_alerts":
+            alert_row1 = [
+                InlineKeyboardButton("🏏 Match Start", callback_data=f"alert_match_start_{match_id}"),
+                InlineKeyboardButton("🎯 Every Wicket", callback_data=f"alert_wickets_{match_id}")
+            ]
+            buttons.append(alert_row1)
+            
+            alert_row2 = [
+                InlineKeyboardButton("🔥 Boundaries Only", callback_data=f"alert_boundaries_{match_id}"),
+                InlineKeyboardButton("📊 Milestones", callback_data=f"alert_milestones_{match_id}")
+            ]
+            buttons.append(alert_row2)
+            
+            alert_row3 = [
+                InlineKeyboardButton("⚡ Close Finish", callback_data=f"alert_close_finish_{match_id}"),
+                InlineKeyboardButton("🏆 Match End", callback_data=f"alert_match_end_{match_id}")
+            ]
+            buttons.append(alert_row3)
+        
+        elif alert_context == "team_alerts":
+            team_row1 = [
+                InlineKeyboardButton("🏏 All Team Matches", callback_data="alert_team_all_matches"),
+                InlineKeyboardButton("🎯 Important Only", callback_data="alert_team_important")
+            ]
+            buttons.append(team_row1)
+            
+            team_row2 = [
+                InlineKeyboardButton("🏆 Tournament Matches", callback_data="alert_team_tournament"),
+                InlineKeyboardButton("🌍 International Only", callback_data="alert_team_international")
+            ]
+            buttons.append(team_row2)
+        
+        elif alert_context == "tournament_alerts":
+            tournament_row1 = [
+                InlineKeyboardButton("🔥 Knockout Stages", callback_data="alert_knockout_stages"),
+                InlineKeyboardButton("🏆 Finals Only", callback_data="alert_finals_only")
+            ]
+            buttons.append(tournament_row1)
+            
+            tournament_row2 = [
+                InlineKeyboardButton("📊 Points Table Updates", callback_data="alert_points_table"),
+                InlineKeyboardButton("🎯 Qualification Scenarios", callback_data="alert_qualification")
+            ]
+            buttons.append(tournament_row2)
+        
+        # Smart timing options
+        timing_row = [
+            InlineKeyboardButton("⏰ Smart Timing", callback_data="alert_smart_timing"),
+            InlineKeyboardButton("🔔 Instant Alerts", callback_data="alert_instant")
+        ]
+        buttons.append(timing_row)
+        
+        # Frequency and customization
+        custom_row = [
+            InlineKeyboardButton("🎛️ Customize", callback_data="alert_customize"),
+            InlineKeyboardButton("📱 Test Alert", callback_data="alert_test")
+        ]
+        buttons.append(custom_row)
+        
+        # Navigation
+        nav_row = [
+            InlineKeyboardButton("🔙 Back", callback_data="my_alerts"),
+            InlineKeyboardButton("🏠 Dashboard", callback_data="back_to_main")
+        ]
+        buttons.append(nav_row)
         
         return InlineKeyboardMarkup(buttons)
