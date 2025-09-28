@@ -552,6 +552,22 @@ class ProfessionalHandlers:
         
         await query.answer("🔔 Smart alerts activated for this match!", show_alert=True)
     
+    async def handle_alerts_off(self, query, callback_data: str) -> None:
+        """Handle turning off alerts for a match."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        match_id = callback_data.split('_', 2)[2]
+        
+        # Remove alert from user preferences
+        user_prefs = await user_data_manager.get_user_preferences(user_id)
+        # Remove alerts for this match
+        user_prefs.active_alerts = [alert for alert in user_prefs.active_alerts if alert.match_id != match_id]
+        await user_data_manager.save_user_preferences(user_prefs)
+        
+        await query.answer("🔕 Alerts disabled for this match", show_alert=True)
+    
     async def handle_match_analytics(self, query, callback_data: str) -> None:
         """Handle match analytics view."""
         match_id = callback_data.split('_', 1)[1]

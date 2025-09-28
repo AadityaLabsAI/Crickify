@@ -18,10 +18,10 @@ import psutil
 from typing import Optional, Dict, Set, Any, Union, List
 from datetime import datetime
 from cricket_scraper import get_live_matches, get_match_schedule, get_match_details, get_tournaments, get_tournament_standings
-# Temporarily comment out advanced imports to fix import issues
-# from user_preferences import user_data_manager, UserPreferences
-# from advanced_ui_components import UIComponents  
-# from professional_handlers import ProfessionalHandlers
+# Import advanced components
+from user_preferences import UserDataManager, UserPreferences
+from advanced_ui_components import UIComponents
+from professional_handlers import ProfessionalHandlers
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import (
@@ -50,6 +50,9 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('telegram.request').setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+# Create global user data manager instance
+user_data_manager = UserDataManager()
 
 class ProcessLock:
     """Process locking mechanism to prevent multiple bot instances."""
@@ -114,8 +117,8 @@ class ProfessionalCricketBot:
         self.analytics_cache: Dict[str, Any] = {}  # Cache for match analytics
         self.trending_cache: Dict[str, Any] = {}  # Cache for trending data
         self.followed_matches: Dict[int, Set[str]] = {}  # user_id -> set of followed match_ids
-        # self.ui_components = UIComponents()
-        # self.pro_handlers = ProfessionalHandlers(self)
+        self.ui_components = UIComponents()
+        self.pro_handlers = ProfessionalHandlers(self)
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle the /start command - Enhanced Professional Main Dashboard."""
@@ -1406,7 +1409,7 @@ async def async_main():
             await asyncio.sleep(20)
         
         # Create bot instance
-        bot = SimpleCricketBot(token)
+        bot = ProfessionalCricketBot(token)
         
         # Build application with enhanced settings
         application = (
@@ -1540,7 +1543,13 @@ def main():
             
             # Simple cleanup on first attempt only
             if attempt == 0:
-                asyncio.run(simple_start_bot(token))
+                # Create event loop if none exists
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                loop.run_until_complete(simple_start_bot(token))
             
             # Create bot instance
             bot = ProfessionalCricketBot(token)
