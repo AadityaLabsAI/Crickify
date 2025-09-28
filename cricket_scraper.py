@@ -402,6 +402,9 @@ class Match:
     # Additional professional features
     required_run_rate: float = 0.0  # Required run rate for chase scenarios
     win_probability: float = 0.0  # Current win probability percentage
+    # Advanced optimization features
+    last_updated: str = ""  # Real-time data freshness indicator
+    data_sources: List[str] = field(default_factory=list)  # Multi-source tracking
     
     def to_telegram_format(self, include_commentary: bool = False, include_enhanced_details: bool = False, use_enhanced_visuals: bool = True) -> str:
         """Format match info for Telegram display with superior visual enhancements."""
@@ -1103,7 +1106,7 @@ class RealCricketScraper:
                         match_cards.append(div)
                 logger.info(f"🔍 Fallback search found {len(match_cards)} potential match cards")
             
-            for i, card in enumerate(match_cards[:8]):  # Process up to 8 matches
+            for i, card in enumerate(match_cards):  # Process all available matches
                 try:
                     # Enhanced title extraction
                     match_title = self._extract_enhanced_title(card)
@@ -1183,7 +1186,7 @@ class RealCricketScraper:
                         match_containers.append(parent)
                 logger.info(f"🔍 ESPN fallback found {len(match_containers)} potential containers")
             
-            for i, container in enumerate(match_containers[:8]):  # Process up to 8 matches
+            for i, container in enumerate(match_containers):  # Process all available matches
                 try:
                     # Enhanced ESPN title extraction
                     match_title = self._extract_espn_title(container)
@@ -1994,7 +1997,7 @@ class RealCricketScraper:
                 if cricbuzz_matches:
                     # For HTML fallback, limit enrichment to save time
                     enriched_matches = []
-                    for match in cricbuzz_matches[:2]:  # Limit to 2 for faster fallback
+                    for match in cricbuzz_matches:  # Process all available matches
                         enriched_match = await self._enrich_match_with_details(match)
                         enriched_matches.append(enriched_match if enriched_match else match)
                     
@@ -2005,31 +2008,613 @@ class RealCricketScraper:
         except Exception as e:
             logger.warning(f"❌ Cricbuzz HTML scraping failed: {e}")
         
-        # Try ESPN as secondary fallback
-        if len(all_matches) < 2:  # Only if we don't have enough matches
-            logger.info("📺 Attempting ESPN HTML scraping...")
-            try:
-                espn_url = f"{self.espn_cricinfo_base_url}/live-cricket-score"
-                html = await self._fetch_url(espn_url)
-                if html:
-                    espn_matches = self._parse_espn_live_matches(html)
-                    if espn_matches:
-                        # Add unique matches only
-                        for match in espn_matches[:3]:  # Limit for speed
-                            if not any(existing.title.lower() == match.title.lower() for existing in all_matches):
-                                all_matches.append(match)
-                        logger.info(f"✅ ESPN HTML: Found {len(espn_matches)} additional matches")
-            except Exception as e:
-                logger.warning(f"❌ ESPN HTML scraping failed: {e}")
+        # Always try ESPN as secondary source for multi-source aggregation
+        logger.info("📺 Fetching ESPN data for multi-source aggregation...")
+        espn_matches = []
+        try:
+            espn_url = f"{self.espn_cricinfo_base_url}/live-cricket-score"
+            html = await self._fetch_url(espn_url)
+            if html:
+                espn_matches = self._parse_espn_live_matches(html)
+                logger.info(f"✅ ESPN HTML: Found {len(espn_matches)} matches for aggregation")
+        except Exception as e:
+            logger.warning(f"❌ ESPN HTML scraping failed: {e}")
         
-        # Return matches if found
-        if all_matches:
+        # Apply multi-source data aggregation if we have data from both sources
+        if all_matches and espn_matches:
+            logger.info("🔗 Applying multi-source data aggregation for superior coverage...")
+            aggregated_matches = await self._enhanced_multi_source_aggregation(all_matches, espn_matches)
+            filtered_matches = self._apply_match_priority_filtering(aggregated_matches)
+            return filtered_matches
+        elif all_matches:
+            # Single source - apply intelligent filtering
             logger.info(f"✅ HTML FALLBACK SUCCESS: Returning {len(all_matches)} live cricket matches")
-            return all_matches[:5]
+            filtered_matches = self._apply_match_priority_filtering(all_matches)
+            return filtered_matches
         
         # Final fallback
         logger.warning("🚫 ALL METHODS FAILED: Creating fallback data")
         return self._create_fallback_matches()
+    
+    def _apply_match_priority_filtering(self, matches: List[Match]) -> List[Match]:
+        """Apply intelligent filtering based on match importance and relevance."""
+        if not matches:
+            return matches
+        
+        logger.info(f"🎯 Applying intelligent filtering to {len(matches)} matches...")
+        
+        # Calculate priority score for each match
+        matches_with_scores = []
+        for match in matches:
+            priority_score = self._calculate_match_priority_score(match)
+            matches_with_scores.append((match, priority_score))
+        
+        # Sort by priority score (higher is better)
+        matches_with_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Apply intelligent limits based on quality and diversity
+        filtered_matches = self._apply_intelligent_match_limits(matches_with_scores)
+        
+        logger.info(f"🎯 Intelligent filtering result: {len(filtered_matches)} high-priority matches selected")
+        return filtered_matches
+    
+    def _calculate_match_priority_score(self, match: Match) -> float:
+        """Calculate priority score for a match based on multiple factors."""
+        score = 0.0
+        
+        # Status priority: Live > Upcoming > Completed
+        if match.status == MatchStatus.LIVE:
+            score += 100.0  # Highest priority
+        elif match.status == MatchStatus.UPCOMING:
+            score += 50.0   # Medium priority
+        else:  # COMPLETED
+            score += 10.0   # Lower priority
+        
+        # Popular teams get higher priority
+        popular_teams = {
+            'india': 40, 'australia': 35, 'england': 30, 'pakistan': 25,
+            'south africa': 20, 'new zealand': 20, 'west indies': 18,
+            'sri lanka': 15, 'bangladesh': 12, 'afghanistan': 10
+        }
+        
+        team1_boost = popular_teams.get(match.team1.name.lower(), 0)
+        team2_boost = popular_teams.get(match.team2.name.lower(), 0)
+        score += team1_boost + team2_boost
+        
+        # Tournament/Series importance
+        important_tournaments = [
+            'world cup', 'ipl', 'ashes', 'champions trophy', 'wc final',
+            'semi-final', 'final', 't20 world cup', 'odi world cup'
+        ]
+        
+        for tournament in important_tournaments:
+            if tournament in match.title.lower() or tournament in match.series_name.lower():
+                score += 30.0
+                break
+        
+        # Format popularity: T20 > ODI > Test
+        if 't20' in match.format.lower():
+            score += 15.0
+        elif 'odi' in match.format.lower():
+            score += 10.0
+        elif 'test' in match.format.lower():
+            score += 8.0
+        
+        # Match significance based on title keywords
+        significant_keywords = ['final', 'semi', 'qualifier', 'eliminator', 'playoff']
+        for keyword in significant_keywords:
+            if keyword in match.title.lower():
+                score += 25.0
+                break
+        
+        # Recency factor for live matches
+        if match.status == MatchStatus.LIVE:
+            # Boost matches with more activity (higher scores, more overs)
+            total_score = match.team1.score + match.team2.score
+            if total_score > 200:
+                score += 15.0
+            elif total_score > 100:
+                score += 10.0
+        
+        # Data completeness score
+        if match.venue and match.venue != "Venue TBD":
+            score += 5.0
+        if match.commentary:
+            score += 5.0
+        if match.current_partnership:
+            score += 3.0
+        
+        return score
+    
+    def _apply_intelligent_match_limits(self, matches_with_scores: List[tuple]) -> List[Match]:
+        """Apply intelligent limits ensuring quality and diversity."""
+        selected_matches = []
+        
+        # Always include all live matches (highest priority)
+        live_matches = [(m, s) for m, s in matches_with_scores if m.status == MatchStatus.LIVE]
+        selected_matches.extend([m for m, s in live_matches])
+        
+        # Add high-quality upcoming matches (limit to avoid overwhelming)
+        upcoming_matches = [(m, s) for m, s in matches_with_scores 
+                          if m.status == MatchStatus.UPCOMING and s > 40.0]
+        selected_matches.extend([m for m, s in upcoming_matches[:8]])  # Max 8 upcoming
+        
+        # Add some completed matches if space allows
+        if len(selected_matches) < 12:
+            completed_matches = [(m, s) for m, s in matches_with_scores 
+                               if m.status == MatchStatus.COMPLETED and s > 30.0]
+            remaining_slots = 12 - len(selected_matches)
+            selected_matches.extend([m for m, s in completed_matches[:remaining_slots]])
+        
+        return selected_matches
+    
+    def _apply_schedule_priority_filtering(self, matches: List[Match]) -> List[Match]:
+        """Apply intelligent filtering for scheduled matches."""
+        if not matches:
+            return matches
+        
+        logger.info(f"📅 Applying schedule priority filtering to {len(matches)} matches...")
+        
+        # Calculate priority scores
+        matches_with_scores = []
+        for match in matches:
+            priority_score = self._calculate_schedule_priority_score(match)
+            matches_with_scores.append((match, priority_score))
+        
+        # Sort by priority
+        matches_with_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Apply intelligent selection
+        selected_matches = []
+        
+        # Include all high-priority matches (score > 70)
+        high_priority = [(m, s) for m, s in matches_with_scores if s > 70.0]
+        selected_matches.extend([m for m, s in high_priority])
+        
+        # Fill with medium priority matches up to reasonable limit
+        if len(selected_matches) < 25:
+            medium_priority = [(m, s) for m, s in matches_with_scores 
+                             if 40.0 <= s <= 70.0 and m not in selected_matches]
+            remaining_slots = 25 - len(selected_matches)
+            selected_matches.extend([m for m, s in medium_priority[:remaining_slots]])
+        
+        logger.info(f"📅 Schedule filtering result: {len(selected_matches)} prioritized matches")
+        return selected_matches
+    
+    def _calculate_schedule_priority_score(self, match: Match) -> float:
+        """Calculate priority score for scheduled matches."""
+        score = 30.0  # Base score
+        
+        # Team popularity (same as live matches)
+        popular_teams = {
+            'india': 40, 'australia': 35, 'england': 30, 'pakistan': 25,
+            'south africa': 20, 'new zealand': 20, 'west indies': 18,
+            'sri lanka': 15, 'bangladesh': 12, 'afghanistan': 10
+        }
+        
+        team1_boost = popular_teams.get(match.team1.name.lower(), 0)
+        team2_boost = popular_teams.get(match.team2.name.lower(), 0)
+        score += team1_boost + team2_boost
+        
+        # Tournament importance
+        major_tournaments = [
+            'world cup', 'ipl', 'ashes', 'champions trophy', 'bbl', 'psl',
+            'big bash', 'indian premier league', 'pakistan super league'
+        ]
+        
+        for tournament in major_tournaments:
+            if (tournament in match.series_name.lower() or 
+                tournament in match.tournament_name.lower() or
+                tournament in match.title.lower()):
+                score += 35.0
+                break
+        
+        # Format preference
+        if 't20' in match.format.lower():
+            score += 20.0
+        elif 'odi' in match.format.lower():
+            score += 15.0
+        elif 'test' in match.format.lower():
+            score += 12.0
+        
+        # Time relevance (sooner = higher priority)
+        try:
+            # Prefer matches in next 7 days
+            if 'today' in match.date.lower() or 'tomorrow' in match.date.lower():
+                score += 25.0
+            elif any(word in match.date.lower() for word in ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']):
+                score += 15.0  # This week
+        except:
+            pass
+        
+        return score
+    
+    def _apply_tournament_priority_filtering(self, tournaments: List[Tournament]) -> List[Tournament]:
+        """Apply intelligent filtering for tournaments."""
+        if not tournaments:
+            return tournaments
+        
+        logger.info(f"🏆 Applying tournament priority filtering to {len(tournaments)} tournaments...")
+        
+        # Calculate priority scores
+        tournaments_with_scores = []
+        for tournament in tournaments:
+            priority_score = self._calculate_tournament_priority_score(tournament)
+            tournaments_with_scores.append((tournament, priority_score))
+        
+        # Sort by priority
+        tournaments_with_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Select top tournaments with intelligent limits
+        selected_tournaments = []
+        
+        # Always include major ongoing tournaments
+        major_ongoing = [(t, s) for t, s in tournaments_with_scores 
+                        if s > 80.0 and t.status == 'ongoing']
+        selected_tournaments.extend([t for t, s in major_ongoing])
+        
+        # Fill with other high-priority tournaments
+        if len(selected_tournaments) < 20:
+            other_tournaments = [(t, s) for t, s in tournaments_with_scores 
+                               if t not in selected_tournaments and s > 50.0]
+            remaining_slots = 20 - len(selected_tournaments)
+            selected_tournaments.extend([t for t, s in other_tournaments[:remaining_slots]])
+        
+        logger.info(f"🏆 Tournament filtering result: {len(selected_tournaments)} prioritized tournaments")
+        return selected_tournaments
+    
+    def _calculate_tournament_priority_score(self, tournament: Tournament) -> float:
+        """Calculate priority score for tournaments."""
+        score = 20.0  # Base score
+        
+        # Status priority: ongoing > upcoming > completed
+        if tournament.status == 'ongoing':
+            score += 50.0
+        elif tournament.status == 'upcoming':
+            score += 30.0
+        else:  # completed
+            score += 5.0
+        
+        # Tournament importance
+        major_tournaments = {
+            'world cup': 100, 'ipl': 90, 'ashes': 80, 'champions trophy': 70,
+            'big bash': 60, 'psl': 55, 'cpl': 50, 'the hundred': 45,
+            'county championship': 40, 'ranji trophy': 35
+        }
+        
+        for keyword, boost in major_tournaments.items():
+            if keyword in tournament.name.lower():
+                score += boost
+                break
+        
+        # Format popularity
+        if 't20' in tournament.format.lower():
+            score += 25.0
+        elif 'odi' in tournament.format.lower():
+            score += 20.0
+        elif 'test' in tournament.format.lower():
+            score += 15.0
+        
+        # Tournament type
+        if tournament.tournament_type.lower() in ['league', 'premier league']:
+            score += 20.0
+        elif 'world' in tournament.tournament_type.lower():
+            score += 30.0
+        
+        # Teams participation (more teams = more interest)
+        if len(tournament.teams) >= 8:
+            score += 15.0
+        elif len(tournament.teams) >= 4:
+            score += 10.0
+        
+        return score
+    
+    async def _enhanced_multi_source_aggregation(self, primary_matches: List[Match], secondary_matches: List[Match]) -> List[Match]:
+        """
+        Advanced multi-source data aggregation to combine Cricbuzz + ESPN data for richer information.
+        This creates superior data coverage compared to single-source limitations.
+        """
+        logger.info(f"🔗 Aggregating data from multiple sources: {len(primary_matches)} primary + {len(secondary_matches)} secondary")
+        
+        # Performance monitoring
+        aggregation_start_time = time.time()
+        
+        aggregated_matches = []
+        processed_titles = set()
+        
+        # First, add all primary matches (usually Cricbuzz - more comprehensive)
+        for match in primary_matches:
+            if match.title not in processed_titles:
+                # Validate and sanitize match data
+                validated_match = self._validate_and_sanitize_match(match)
+                if validated_match:
+                    aggregated_matches.append(validated_match)
+                    processed_titles.add(match.title)
+        
+        # Then, enrich with secondary matches or add unique ones
+        for secondary_match in secondary_matches:
+            # Try to find matching primary match for data enrichment
+            matching_primary = None
+            for primary_match in aggregated_matches:
+                if self._are_matches_similar(primary_match, secondary_match):
+                    matching_primary = primary_match
+                    break
+            
+            if matching_primary:
+                # Enrich existing match with additional data from secondary source
+                enriched_match = self._enrich_match_with_secondary_data(matching_primary, secondary_match)
+                # Replace the primary match with enriched version
+                index = aggregated_matches.index(matching_primary)
+                aggregated_matches[index] = enriched_match
+                logger.info(f"🔗 Enriched match: {matching_primary.title}")
+            else:
+                # Add unique secondary match if it passes quality check
+                if secondary_match.title not in processed_titles:
+                    validated_match = self._validate_and_sanitize_match(secondary_match)
+                    if validated_match and self._passes_quality_threshold(validated_match):
+                        aggregated_matches.append(validated_match)
+                        processed_titles.add(secondary_match.title)
+                        logger.info(f"➕ Added unique secondary match: {secondary_match.title}")
+        
+        # Add data freshness indicators
+        for match in aggregated_matches:
+            match.last_updated = datetime.now().isoformat()
+            match.data_sources = self._identify_data_sources(match)
+        
+        # Performance metrics
+        aggregation_time = time.time() - aggregation_start_time
+        logger.info(f"⚡ Multi-source aggregation completed in {aggregation_time:.2f}s: {len(aggregated_matches)} total matches")
+        
+        # Log aggregation statistics
+        self._log_aggregation_stats(len(primary_matches), len(secondary_matches), len(aggregated_matches), aggregation_time)
+        
+        return aggregated_matches
+    
+    def _validate_and_sanitize_match(self, match: Match) -> Optional[Match]:
+        """
+        Comprehensive data validation and sanitization.
+        Ensures data quality and prevents issues with malformed data.
+        """
+        try:
+            # Basic validation
+            if not match.title or len(match.title.strip()) < 3:
+                logger.warning(f"⚠️ Invalid match title: {match.title}")
+                return None
+            
+            if not match.team1.name or not match.team2.name:
+                logger.warning(f"⚠️ Invalid team data in match: {match.title}")
+                return None
+            
+            # Sanitize text fields
+            match.title = self._sanitize_text_content(match.title)
+            match.venue = self._sanitize_text_content(match.venue)
+            match.toss = self._sanitize_text_content(match.toss)
+            match.current_partnership = self._sanitize_text_content(match.current_partnership)
+            
+            # Sanitize team data
+            match.team1.name = self._sanitize_text_content(match.team1.name)
+            match.team2.name = self._sanitize_text_content(match.team2.name)
+            
+            # Validate numerical data
+            match.team1.score = max(0, match.team1.score if isinstance(match.team1.score, int) else 0)
+            match.team2.score = max(0, match.team2.score if isinstance(match.team2.score, int) else 0)
+            match.team1.wickets = max(0, min(10, match.team1.wickets if isinstance(match.team1.wickets, int) else 0))
+            match.team2.wickets = max(0, min(10, match.team2.wickets if isinstance(match.team2.wickets, int) else 0))
+            
+            # Validate overs format
+            match.team1.overs = self._validate_overs_format(match.team1.overs)
+            match.team2.overs = self._validate_overs_format(match.team2.overs)
+            
+            # Calculate and validate run rates
+            match.team1.run_rate = self._calculate_run_rate(match.team1.score, match.team1.overs)
+            match.team2.run_rate = self._calculate_run_rate(match.team2.score, match.team2.overs)
+            
+            # Ensure match ID is unique and valid
+            if not match.match_id:
+                match.match_id = f"validated_{hash(match.title + str(time.time()))}_{int(time.time())}"
+            
+            logger.debug(f"✅ Successfully validated match: {match.title}")
+            return match
+            
+        except Exception as e:
+            logger.error(f"❌ Error validating match {getattr(match, 'title', 'Unknown')}: {e}")
+            return None
+    
+    def _validate_overs_format(self, overs: str) -> str:
+        """Validate and standardize overs format."""
+        try:
+            if not overs or overs == "0.0":
+                return "0.0"
+            
+            # Handle different formats: "15.3", "15-3", "15/3"
+            overs_str = str(overs).replace('-', '.').replace('/', '.')
+            
+            # Extract main overs and balls
+            if '.' in overs_str:
+                main_overs, balls = overs_str.split('.', 1)
+                main_overs = int(main_overs) if main_overs.isdigit() else 0
+                balls = int(balls[:1]) if balls and balls[0].isdigit() else 0
+                balls = min(5, balls)  # Max 5 balls per over
+                return f"{main_overs}.{balls}"
+            else:
+                main_overs = int(overs_str) if overs_str.isdigit() else 0
+                return f"{main_overs}.0"
+                
+        except Exception:
+            return "0.0"
+    
+    def _are_matches_similar(self, match1: Match, match2: Match) -> bool:
+        """Check if two matches are likely the same match from different sources."""
+        # Compare team names (allowing for slight variations)
+        team1_match = (
+            self._normalize_team_name(match1.team1.name) == self._normalize_team_name(match2.team1.name) or
+            self._normalize_team_name(match1.team1.name) == self._normalize_team_name(match2.team2.name)
+        )
+        
+        team2_match = (
+            self._normalize_team_name(match1.team2.name) == self._normalize_team_name(match2.team2.name) or
+            self._normalize_team_name(match1.team2.name) == self._normalize_team_name(match2.team1.name)
+        )
+        
+        # Check if it's the same match (allowing for team order differences)
+        teams_match = team1_match and team2_match
+        
+        # Additional similarity checks
+        status_match = match1.status == match2.status
+        format_similar = self._are_formats_similar(match1.format, match2.format)
+        
+        # Consider it a match if teams align and either status or format is similar
+        return teams_match and (status_match or format_similar)
+    
+    def _normalize_team_name(self, team_name: str) -> str:
+        """Normalize team name for comparison."""
+        if not team_name:
+            return ""
+        
+        # Remove common suffixes and normalize
+        normalized = team_name.lower().strip()
+        normalized = re.sub(r'\s+(cricket|team|xi|11)$', '', normalized)
+        normalized = re.sub(r'[^\w\s]', '', normalized)  # Remove special chars
+        normalized = re.sub(r'\s+', ' ', normalized)  # Normalize spaces
+        
+        return normalized
+    
+    def _are_formats_similar(self, format1: str, format2: str) -> bool:
+        """Check if match formats are similar."""
+        if not format1 or not format2:
+            return False
+        
+        format1_clean = format1.lower().replace(' ', '')
+        format2_clean = format2.lower().replace(' ', '')
+        
+        # Direct match
+        if format1_clean == format2_clean:
+            return True
+        
+        # Check for format type matches
+        format_types = {
+            't20': ['t20', 'twenty20', 't20i'],
+            'odi': ['odi', 'oneday', 'one-day'],
+            'test': ['test', 'testmatch']
+        }
+        
+        for format_type, variations in format_types.items():
+            if any(var in format1_clean for var in variations) and any(var in format2_clean for var in variations):
+                return True
+        
+        return False
+    
+    def _enrich_match_with_secondary_data(self, primary_match: Match, secondary_match: Match) -> Match:
+        """Enrich primary match with additional data from secondary source."""
+        try:
+            # Create a copy of primary match
+            enriched_match = Match(
+                match_id=primary_match.match_id,
+                title=primary_match.title,
+                team1=primary_match.team1,
+                team2=primary_match.team2,
+                status=primary_match.status,
+                venue=primary_match.venue,
+                date=primary_match.date,
+                format=primary_match.format,
+                toss=primary_match.toss,
+                current_partnership=primary_match.current_partnership,
+                recent_overs=primary_match.recent_overs.copy(),
+                commentary=primary_match.commentary.copy(),
+                series_name=primary_match.series_name,
+                tournament_name=primary_match.tournament_name,
+                match_number=primary_match.match_number,
+                weather=primary_match.weather,
+                timezone=primary_match.timezone,
+                match_type=primary_match.match_type,
+                start_time=primary_match.start_time,
+                broadcasters=primary_match.broadcasters.copy(),
+                match_status_detail=primary_match.match_status_detail
+            )
+            
+            # Enrich with better data from secondary source where primary is lacking
+            if not enriched_match.venue or enriched_match.venue == "Venue TBD":
+                if secondary_match.venue and secondary_match.venue != "Venue TBD":
+                    enriched_match.venue = secondary_match.venue
+            
+            if not enriched_match.series_name and secondary_match.series_name:
+                enriched_match.series_name = secondary_match.series_name
+            
+            # Merge broadcaster information
+            if secondary_match.broadcasters:
+                for broadcaster in secondary_match.broadcasters:
+                    if broadcaster not in enriched_match.broadcasters:
+                        enriched_match.broadcasters.append(broadcaster)
+            
+            return enriched_match
+            
+        except Exception as e:
+            logger.error(f"❌ Error enriching match: {e}")
+            return primary_match  # Return original on error
+    
+    def _passes_quality_threshold(self, match: Match) -> bool:
+        """Check if match meets minimum quality standards."""
+        quality_score = 0
+        
+        # Basic requirements
+        if match.title and len(match.title) > 5:
+            quality_score += 20
+        
+        if match.team1.name and match.team2.name:
+            quality_score += 20
+        
+        # Status should be valid
+        if match.status in [MatchStatus.LIVE, MatchStatus.UPCOMING, MatchStatus.COMPLETED]:
+            quality_score += 15
+        
+        # Venue information
+        if match.venue and match.venue != "Venue TBD":
+            quality_score += 10
+        
+        return quality_score >= 50  # Minimum 50% quality score
+    
+    def _identify_data_sources(self, match: Match) -> List[str]:
+        """Identify which data sources contributed to this match."""
+        sources = []
+        
+        # Identify by match ID pattern
+        if match.match_id.startswith('cb_'):
+            sources.append('Cricbuzz')
+        elif match.match_id.startswith('espn_'):
+            sources.append('ESPN Cricinfo')
+        
+        # Default if no clear identification
+        if not sources:
+            sources.append('Multi-source')
+        
+        return sources
+    
+    def _log_aggregation_stats(self, primary_count: int, secondary_count: int, final_count: int, processing_time: float):
+        """Log detailed aggregation statistics for monitoring."""
+        enrichment_rate = ((primary_count + secondary_count - final_count) / max(1, primary_count)) * 100 if primary_count > 0 else 0
+        processing_speed = final_count / max(0.001, processing_time)  # matches per second
+        
+        stats = {
+            'primary_matches': primary_count,
+            'secondary_matches': secondary_count,
+            'final_matches': final_count,
+            'enrichment_rate_percent': round(enrichment_rate, 2),
+            'processing_time_seconds': round(processing_time, 3),
+            'processing_speed_matches_per_second': round(processing_speed, 2),
+            'data_quality_improvement': 'enabled',
+            'multi_source_aggregation': 'active'
+        }
+        
+        logger.info(f"📊 Multi-source aggregation stats: {json.dumps(stats)}")
+        
+        # Store stats for performance monitoring
+        if not hasattr(self, '_aggregation_stats'):
+            self._aggregation_stats = []
+        self._aggregation_stats.append(stats)
+        
+        # Keep only recent stats (last 10 aggregations)
+        if len(self._aggregation_stats) > 10:
+            self._aggregation_stats = self._aggregation_stats[-10:]
     
     def _create_fallback_matches(self) -> List[Match]:
         """Create fallback matches when scraping fails."""
@@ -2111,7 +2696,9 @@ class RealCricketScraper:
         # Cache the results
         self._cache_schedule(cache_key, filtered_matches)
         
-        return filtered_matches[:20]  # Return max 20 upcoming matches
+        # Apply intelligent filtering instead of arbitrary limits
+        prioritized_matches = self._apply_schedule_priority_filtering(filtered_matches)
+        return prioritized_matches
     
     def _parse_cricbuzz_schedule_enhanced(self, html: str, days: int) -> List[Match]:
         """Parse upcoming matches from Cricbuzz schedule with enhanced data extraction."""
@@ -2135,7 +2722,7 @@ class RealCricketScraper:
                     schedule_items.extend(items)
                     break
             
-            for i, item in enumerate(schedule_items[:15]):  # Limit to 15 matches for better data
+            for i, item in enumerate(schedule_items):  # Process all available schedule items
                 try:
                     # Extract match title with multiple strategies
                     match_title = self._extract_match_title(item)
@@ -2431,7 +3018,9 @@ class RealCricketScraper:
         # Cache the results for 30 minutes
         self._cache_tournaments(cache_key, unique_tournaments)
         
-        return unique_tournaments[:15]  # Return max 15 tournaments
+        # Apply intelligent filtering instead of arbitrary limits
+        prioritized_tournaments = self._apply_tournament_priority_filtering(unique_tournaments)
+        return prioritized_tournaments
     
     async def get_tournament_standings(self, tournament_id: str) -> Optional[Standing]:
         """Get standings/points table for a specific tournament."""
