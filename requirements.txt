@@ -20,3 +20,11 @@ psutil>=5.9.0
 
 # File I/O for user preferences
 aiofiles>=24.1.0
+
+# Performance optimization dependencies (pinned for stability)
+cachetools>=5.3.0
+lz4>=4.3.2
+orjson>=3.10.0
+xxhash>=3.4.1
+
+# Note: python-telegram-bot already provides telegram functionality

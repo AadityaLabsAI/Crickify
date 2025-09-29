@@ -10,12 +10,39 @@ Implements intelligent caching and prevents duplicate API calls.
 import asyncio
 import logging
 import time
-import statistics
-from typing import Dict, List, Optional, Any, Set
+
+# Import performance dependencies with fallbacks
+try:
+    import statistics
+except ImportError:
+    # Minimal fallback for statistics
+    class statistics:
+        @staticmethod
+        def mean(data):
+            return sum(data) / len(data) if data else 0.0
+    logging.warning("⚠️ statistics module not available, using fallback")
+
+try:
+    import xxhash
+    HAS_XXHASH = True
+except ImportError:
+    import hashlib
+    HAS_XXHASH = False
+    logging.warning("⚠️ xxhash not available, falling back to hashlib")
+
+try:
+    import orjson
+    HAS_ORJSON = True
+except ImportError:
+    import json as orjson
+    HAS_ORJSON = False
+    logging.warning("⚠️ orjson not available, falling back to standard json")
+from typing import Dict, List, Optional, Any, Set, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import threading
 import weakref
+from collections import deque, defaultdict
 
 from cricket_scraper import Match, get_live_matches, get_match_schedule, get_tournaments, data_source_config
 from performance_cache import performance_cache
@@ -37,11 +64,19 @@ class FetchRequest:
         self.requesters.add(requester_id)
     
     def get_cache_key(self) -> str:
-        """Generate cache key for this request."""
-        import hashlib
-        import json
-        param_str = json.dumps(self.parameters, sort_keys=True)
-        return f"{self.data_type}_{hashlib.md5(param_str.encode()).hexdigest()[:8]}"
+        """Generate cache key for this request using fast hashing with fallbacks."""
+        if HAS_ORJSON:
+            param_str = orjson.dumps(self.parameters, option=orjson.OPT_SORT_KEYS).decode()
+        else:
+            import json
+            param_str = json.dumps(self.parameters, sort_keys=True)
+        
+        if HAS_XXHASH:
+            hash_digest = xxhash.xxh64(param_str.encode()).hexdigest()[:8]
+        else:
+            hash_digest = hashlib.md5(param_str.encode()).hexdigest()[:8]
+        
+        return f"{self.data_type}_{hash_digest}"
 
 @dataclass
 class FetchResult:
@@ -71,10 +106,24 @@ class CentralizedFetcher:
     """
     
     def __init__(self):
-        """Initialize the centralized fetcher."""
+        """Initialize the ultra-fast centralized fetcher with batching and prioritization."""
         self.active_requests: Dict[str, FetchRequest] = {}  # cache_key -> FetchRequest
         self.pending_results: Dict[str, asyncio.Future] = {}  # cache_key -> Future
         self.request_callbacks: Dict[str, List[asyncio.Future]] = {}  # cache_key -> List[Future]
+        
+        # Request batching and prioritization
+        self.request_queue: Dict[int, deque] = defaultdict(deque)  # priority -> deque[FetchRequest]
+        self.batch_size = 5  # Process up to 5 requests in parallel
+        self.batch_timeout = 0.1  # 100ms batch timeout for ultra-fast processing
+        self.processing_batch = False
+        
+        # Fast hash function for deduplication with fallback
+        if HAS_XXHASH:
+            self._hash_func = xxhash.xxh64_intdigest
+        else:
+            def _fallback_hash(data):
+                return int(hashlib.md5(data).hexdigest()[:8], 16)
+            self._hash_func = _fallback_hash
         
         # Thread safety
         self._lock = threading.RLock()
@@ -94,15 +143,146 @@ class CentralizedFetcher:
         self.cache_hit_rates: Dict[str, Dict[str, int]] = {}  # data_type -> {hits, misses}
         self.max_latency_history = 100  # Keep last 100 measurements for p50/p95
         
-        # Cache warming configuration
+        # Cache warming configuration - ULTRA-FAST INTERVALS
         self.cache_warming_active = False
         self.cache_warming_task: Optional[asyncio.Task] = None
         self.active_requesters_count = 0
-        self.cache_warming_interval = 1.25  # 1.25s interval for cache warming
+        self.cache_warming_interval = 0.8  # Aggressive 0.8s interval for sub-2s response times
+        
+        # Priority processing optimization
+        self.priority_processing_task: Optional[asyncio.Task] = None
+        self._start_priority_processor()
         
         # Background cleanup
         self._cleanup_task: Optional[asyncio.Task] = None
         self._start_cleanup_task()
+    
+    def _start_priority_processor(self):
+        """Start priority-based batch request processor."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                self.priority_processing_task = loop.create_task(self._priority_processing_worker())
+        except RuntimeError:
+            pass
+    
+    async def _priority_processing_worker(self):
+        """Ultra-fast priority-based batch processing worker."""
+        while True:
+            try:
+                await asyncio.sleep(self.batch_timeout)
+                if not self.processing_batch:
+                    await self._process_request_batches()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Priority processor error: {e}")
+    
+    async def _process_request_batches(self):
+        """Process batched requests by priority for maximum throughput."""
+        if self.processing_batch:
+            return
+        
+        self.processing_batch = True
+        try:
+            # Process high priority requests first (priority 1)
+            for priority in sorted(self.request_queue.keys()):
+                queue = self.request_queue[priority]
+                if not queue:
+                    continue
+                
+                # Batch process up to batch_size requests
+                batch_requests = []
+                for _ in range(min(self.batch_size, len(queue))):
+                    if queue:
+                        batch_requests.append(queue.popleft())
+                
+                if batch_requests:
+                    # Process batch in parallel
+                    await self._execute_request_batch(batch_requests)
+        finally:
+            self.processing_batch = False
+    
+    async def _execute_request_batch(self, requests: List[FetchRequest]):
+        """Execute batch of requests in parallel for maximum speed."""
+        batch_tasks = []
+        for request in requests:
+            task = asyncio.create_task(self._execute_single_request(request))
+            batch_tasks.append(task)
+        
+        # Execute all requests in parallel with timeout
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*batch_tasks, return_exceptions=True),
+                timeout=3.0  # 3s timeout for ultra-fast processing
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"⏰ Batch processing timeout for {len(requests)} requests")
+    
+    async def _execute_single_request(self, request: FetchRequest):
+        """Execute a single fetch request with optimized performance."""
+        cache_key = request.get_cache_key()
+        
+        # Get the future for this request
+        future = self.pending_results.get(cache_key)
+        if not future:
+            logger.error(f"❌ No future found for request {cache_key}")
+            return
+        
+        try:
+            # Check cache first with ultra-fast lookup
+            cached_result = performance_cache.live_matches_cache.get(cache_key)
+            if cached_result:
+                result = FetchResult(
+                    request_id=request.request_id,
+                    data=cached_result,
+                    success=True,
+                    cache_hit=True
+                )
+                
+                # Set the future result and broadcast
+                if not future.done():
+                    future.set_result(result)
+                await self._broadcast_result(result, request.requesters)
+                return
+            
+            # Fetch fresh data
+            fetch_start = time.time()
+            if request.data_type == 'live_matches':
+                from cricket_json_extractor import get_live_matches_json
+                data = await get_live_matches_json()
+            else:
+                # Fallback to regular scraping for other data types
+                data = await self._fetch_data_by_type(request.data_type, request.parameters)
+            
+            fetch_duration = time.time() - fetch_start
+            
+            # Cache the result
+            if data:
+                performance_cache.set(cache_key, data, ttl=30.0)  # 30s TTL for fresh data
+                
+            result = FetchResult(
+                request_id=request.request_id,
+                data=data,
+                success=data is not None,
+                cache_hit=False
+            )
+            
+            # Track performance metrics
+            self._update_performance_metrics(request.data_type, fetch_duration, result.success)
+            
+            # Broadcast to all requesters
+            await self._broadcast_result(result, request.requesters)
+            
+        except Exception as e:
+            logger.error(f"❌ Single request execution failed: {e}")
+            error_result = FetchResult(
+                request_id=request.request_id,
+                data=None,
+                success=False,
+                error=str(e)
+            )
+            await self._broadcast_result(error_result, request.requesters)
     
     def _start_cleanup_task(self):
         """Start background cleanup task."""
@@ -229,7 +409,7 @@ class CentralizedFetcher:
     
     async def _execute_fetch_request(self, request: FetchRequest) -> FetchResult:
         """
-        Execute fetch request with deduplication and caching.
+        Execute fetch request with deduplication, caching, and priority queue processing.
         
         Args:
             request: The fetch request to execute
@@ -249,103 +429,32 @@ class CentralizedFetcher:
                 if existing_request:
                     existing_request.add_requester(request.requesters.pop() if request.requesters else "unknown")
                     self.stats['deduplicated_requests'] += 1
-                    logger.debug(f"🔄 Deduplicating request: {cache_key}")
-                
+                    logger.debug(f"🔄 [QUEUE] Deduplicated request for {request.data_type}")
+                    
                 # Wait for the existing request to complete
                 return await self.pending_results[cache_key]
-            
-            # Check cache first
-            cache = performance_cache.get_cache_for_type(request.data_type)
-            cached_data = cache.get(cache_key)
-            
-            if cached_data:
-                self.stats['cache_hits'] += 1
-                self._record_cache_hit_rate(request.data_type, True)  # Record cache hit
-                logger.debug(f"⚡ Cache hit for: {cache_key}")
-                return FetchResult(
-                    request_id=request.request_id,
-                    data=cached_data,
-                    success=True,
-                    cache_hit=True
-                )
-            
-            # Record cache miss
-            self._record_cache_hit_rate(request.data_type, False)
             
             # Create future for this request
             future = asyncio.Future()
             self.pending_results[cache_key] = future
             self.active_requests[cache_key] = request
-        
-        # Execute the actual fetch
-        result = None  # Initialize result to prevent unbound variable
+            
+            # ADD REQUEST TO PRIORITY QUEUE FOR BATCH PROCESSING
+            self.request_queue[request.priority].append(request)
+            
+            logger.debug(
+                f"🎯 [QUEUE] Added {request.data_type} request to priority {request.priority} queue "
+                f"(queue size: {len(self.request_queue[request.priority])})"
+            )
+            
+        # Wait for the request to be processed by the priority queue system
         try:
-            start_time = time.time()
-            logger.info(f"🚀 Executing centralized fetch: {request.data_type} for {len(request.requesters)} requesters")
-            
-            # Perform the actual fetch based on data type
-            data = await self._perform_fetch(request)
-            
-            fetch_time = time.time() - start_time
-            self.stats['total_fetch_time'] += fetch_time
-            
-            # Cache the result
-            if data:
-                # Aggressive caching strategy for sub-2s updates
-                cache = performance_cache.get_cache_for_type(request.data_type)
-                ttl = self._get_ttl_for_data_type(request.data_type)
-                
-                # Smart TTL adjustment based on data freshness and request frequency
-                if request.data_type == 'live_matches':
-                    # For live matches, use even shorter TTL if we have multiple active requesters
-                    if len(request.requesters) > 2:
-                        ttl = min(ttl, 1.0)  # Even more aggressive for high-demand scenarios
-                    logger.info(f"⚡ Caching live matches with TTL {ttl}s for {len(request.requesters)} requesters")
-                
-                cache.set(cache_key, data, ttl)
-                logger.debug(f"💾 Cached {request.data_type} data for {ttl}s")
-            
-            # Create successful result
-            result = FetchResult(
-                request_id=request.request_id,
-                data=data,
-                success=True,
-                fetch_time=fetch_time
-            )
-            
-            logger.info(f"✅ Centralized fetch completed in {fetch_time:.2f}s, broadcasting to {len(request.requesters)} requesters")
-            self.stats['broadcasts_sent'] += len(request.requesters)
-            
-        except Exception as e:
-            logger.error(f"❌ Centralized fetch failed: {e}")
-            self.stats['fetch_failures'] += 1
-            
-            result = FetchResult(
-                request_id=request.request_id,
-                data=None,
-                success=False,
-                error=str(e)
-            )
-        
+            return await future
         finally:
-            # Complete the future and cleanup
+            # Cleanup
             with self._lock:
-                if cache_key in self.pending_results:
-                    future = self.pending_results[cache_key]
-                    if not future.done():
-                        # Ensure we always have a valid result
-                        if result is None:
-                            result = FetchResult(
-                                request_id=request.request_id,
-                                data=None,
-                                success=False,
-                                error="Unknown error occurred"
-                            )
-                        future.set_result(result)
-                    del self.pending_results[cache_key]
-                
-                if cache_key in self.active_requests:
-                    del self.active_requests[cache_key]
+                self.pending_results.pop(cache_key, None)
+                self.active_requests.pop(cache_key, None)
         
         # Ensure we always return a valid FetchResult
         if result is None:

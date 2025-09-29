@@ -14,10 +14,15 @@ import logging
 import re
 import time
 import statistics
-from typing import Dict, List, Optional, Any, Union, cast
+import orjson
+import xxhash
+import lz4.frame
+import concurrent.futures
+from typing import Dict, List, Optional, Any, Union, cast, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
+import threading
 
 from cricket_scraper import Match, Team, Commentary, MatchStatus
 from session_manager import session_manager
@@ -132,11 +137,44 @@ class CricketJSONExtractor:
         self.endpoint_health = {}  # Track endpoint health
         self.last_successful_endpoints = {}  # Cache successful endpoints
         
-        # Ultra-fast optimization settings
-        self.max_concurrent_requests = 3  # Concurrent endpoint requests
+        # ULTRA-FAST concurrent optimization settings
+        self.max_concurrent_requests = 8  # Increased concurrent endpoint requests
+        self.concurrent_semaphore = asyncio.Semaphore(8)  # Control concurrent requests
         self.priority_endpoints = {}  # Track fastest responding endpoints
         self.response_time_cache = {}  # Cache response times for optimization
-        self.data_change_hashes = {}  # Track data changes to avoid redundant processing
+        self.data_change_hashes = {}  # Track data changes with fast hashing (xxhash)
+        self.endpoint_pools = {}  # Connection pools per endpoint
+        
+        # Concurrent request processing
+        self._request_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=6, thread_name_prefix="json_extract"
+        )
+        
+        # Fast JSON parsing optimization
+        self.use_fast_json = True  # Use orjson for faster parsing
+        
+        # Response streaming and partial parsing
+        self.enable_streaming = True
+        self.partial_parse_threshold = 1024  # Start parsing after 1KB received
+        
+        # Predictive endpoint selection
+        self.endpoint_health_window = 10  # Track last 10 requests per endpoint
+        self.health_decay_factor = 0.95  # Decay older health scores
+        
+        # Request batching and pipeline optimization
+        self.batch_requests = True
+        self.batch_size = 5
+        self.request_pipeline = asyncio.Queue(maxsize=20)
+        
+        # Performance monitoring
+        self.concurrent_metrics = {
+            'concurrent_requests_active': 0,
+            'successful_parallel_calls': 0,
+            'failed_parallel_calls': 0,
+            'average_concurrent_latency': 0.0,
+            'endpoint_health_scores': {},
+            'fast_json_parsing_time': 0.0
+        }
         
         # Enhanced operational metrics tracking
         self.operational_metrics = OperationalMetrics()
@@ -590,16 +628,21 @@ class CricketJSONExtractor:
             self.response_time_cache[url_key] = response_time
     
     def _get_data_hash(self, data: Dict[str, Any]) -> str:
-        """Generate hash of data to detect changes efficiently."""
-        import hashlib
-        import json
+        """Generate ultra-fast hash of data using xxhash for change detection."""
         try:
-            # Create a stable hash of the essential data
-            essential_data = self._extract_essential_data(data)
-            data_str = json.dumps(essential_data, sort_keys=True)
-            return hashlib.md5(data_str.encode()).hexdigest()[:12]  # Short hash for efficiency
-        except:
-            return str(hash(str(data)))  # Fallback hash
+            if self.use_fast_json and data:
+                # Create a stable hash of the essential data using fast algorithms
+                essential_data = self._extract_essential_data(data)
+                # Use orjson for faster serialization + xxhash for ultra-fast hashing
+                data_bytes = orjson.dumps(essential_data, option=orjson.OPT_SORT_KEYS)
+                return xxhash.xxh64(data_bytes).hexdigest()[:12]  # Short hash for efficiency
+            else:
+                # Fallback to standard JSON + xxhash (still faster than md5)
+                essential_data = self._extract_essential_data(data)
+                data_str = json.dumps(essential_data, sort_keys=True)
+                return xxhash.xxh64(data_str.encode()).hexdigest()[:12]
+        except Exception:
+            return xxhash.xxh64(str(data).encode()).hexdigest()[:12]  # Ultra-fast fallback
     
     def _extract_essential_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Extract only the essential data for change detection."""
@@ -1735,6 +1778,124 @@ class CricketJSONExtractor:
         if health['attempts'] > 20:
             health['attempts'] = 20
             health['successes'] = min(health['successes'], 20)
+    
+    async def _parse_json_with_orjson(self, response_text: str) -> Optional[Dict[str, Any]]:
+        """Ultra-fast JSON parsing using orjson for performance optimization."""
+        parse_start = time.time()
+        try:
+            if self.use_fast_json:
+                # Use orjson for 2-3x faster JSON parsing
+                parsed_data = orjson.loads(response_text)
+                parse_time = time.time() - parse_start
+                self.concurrent_metrics['fast_json_parsing_time'] += parse_time
+                return parsed_data
+            else:
+                # Fallback to standard JSON parsing
+                return json.loads(response_text)
+        except Exception as e:
+            logger.debug(f"⚠️ Fast JSON parsing failed: {e}")
+            # Fallback to standard JSON parsing
+            try:
+                return json.loads(response_text)
+            except Exception:
+                return None
+    
+    async def _concurrent_fetch_with_semaphore(self, endpoint: JSONEndpoint, **params) -> Optional[Dict[str, Any]]:
+        """Fetch data from endpoint with concurrent request control."""
+        async with self.concurrent_semaphore:
+            self.concurrent_metrics['concurrent_requests_active'] += 1
+            try:
+                result = await self._fetch_json_data_optimized(endpoint, **params)
+                if result:
+                    self.concurrent_metrics['successful_parallel_calls'] += 1
+                else:
+                    self.concurrent_metrics['failed_parallel_calls'] += 1
+                return result
+            finally:
+                self.concurrent_metrics['concurrent_requests_active'] -= 1
+    
+    async def _fetch_json_data_optimized(self, endpoint: JSONEndpoint, **format_params) -> Optional[Dict[str, Any]]:
+        """Ultra-optimized JSON data fetching with fast parsing and concurrent processing."""
+        try:
+            # Format URL with parameters if needed
+            url = endpoint.url.format(**format_params) if format_params else endpoint.url
+            
+            # Get optimized session from session manager
+            async with session_manager.request_session(url) as session:
+                headers = endpoint.headers or {}
+                
+                async with session.request(endpoint.method, url, headers=headers) as response:
+                    if response.status == 200:
+                        response_text = await response.text()
+                        
+                        # Use ultra-fast orjson parsing
+                        data = await self._parse_json_with_orjson(response_text)
+                        
+                        if data:
+                            logger.debug(f"✅ Fast JSON fetch successful: {endpoint.parser}")
+                            return data
+                        else:
+                            logger.warning(f"⚠️ Failed to parse JSON from {endpoint.parser}")
+                            return None
+                    else:
+                        logger.warning(f"⚠️ HTTP {response.status} from {endpoint.parser}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"❌ Optimized fetch failed for {endpoint.parser}: {e}")
+            # Fallback to original method
+            return await self._fetch_json_data(endpoint, **format_params)
+    
+    async def _parallel_endpoint_requests(self, endpoints: List[JSONEndpoint], **params) -> List[Optional[Dict[str, Any]]]:
+        """Execute multiple endpoint requests in parallel for maximum speed."""
+        if not endpoints:
+            return []
+        
+        # Limit concurrent requests to prevent overwhelming
+        max_parallel = min(len(endpoints), self.max_concurrent_requests)
+        selected_endpoints = endpoints[:max_parallel]
+        
+        # Create concurrent tasks
+        tasks = []
+        for endpoint in selected_endpoints:
+            task = asyncio.create_task(self._concurrent_fetch_with_semaphore(endpoint, **params))
+            tasks.append(task)
+        
+        # Execute with timeout
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=1.5  # 1.5s timeout for aggressive performance
+            )
+            
+            # Process results
+            valid_results = []
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.debug(f"Parallel request {i} failed: {result}")
+                elif result:
+                    valid_results.append(result)
+            
+            return valid_results
+            
+        except asyncio.TimeoutError:
+            logger.warning("⏰ Parallel endpoint requests timed out")
+            return []
+    
+    def get_performance_metrics(self) -> Dict[str, Any]:
+        """Get comprehensive performance metrics for monitoring."""
+        return {
+            'operational_metrics': self.operational_metrics.to_dict(),
+            'concurrent_metrics': self.concurrent_metrics,
+            'endpoint_health': {
+                endpoint.parser: {
+                    'health_score': self.endpoint_health.get(endpoint.url, {}).get('successes', 0) / max(1, self.endpoint_health.get(endpoint.url, {}).get('attempts', 1)),
+                    'response_time_avg': self.response_time_cache.get(f"{endpoint.parser}_avg", 0.0),
+                    'circuit_breaker_state': self.circuit_breaker_states.get(endpoint.parser, {}).get('state', 'CLOSED')
+                }
+                for endpoint in self.endpoints.get('live_matches', [])
+            }
+        }
 
 # Global JSON extractor instance
 json_extractor = CricketJSONExtractor()

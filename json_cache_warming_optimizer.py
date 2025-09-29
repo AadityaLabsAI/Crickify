@@ -21,7 +21,29 @@ from typing import Dict, List, Any, Optional, Set
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
-import statistics
+
+# Import statistics with fallback
+try:
+    import statistics
+except ImportError:
+    # Fallback implementation for basic stats
+    class statistics:
+        @staticmethod
+        def mean(data):
+            return sum(data) / len(data) if data else 0.0
+        
+        @staticmethod
+        def median(data):
+            sorted_data = sorted(data)
+            n = len(sorted_data)
+            if n == 0:
+                return 0.0
+            elif n % 2 == 0:
+                return (sorted_data[n//2-1] + sorted_data[n//2]) / 2.0
+            else:
+                return sorted_data[n//2]
+    
+    logging.warning("⚠️ statistics module not available, using fallback implementation")
 
 from cricket_json_extractor import json_extractor
 from performance_cache import performance_cache
@@ -89,11 +111,16 @@ class JSONCacheWarmingOptimizer:
         self.user_activity = UserActivity()
         self.warming_stats = WarmingStats()
         
-        # Warming configuration
+        # ULTRA-AGGRESSIVE Warming configuration for sub-2s performance
         self.warming_active = False
         self.warming_task = None
-        self.warming_interval = 30  # Warm every 30 seconds when users active
-        self.warming_timeout = 5   # Max 5s per warming cycle
+        
+        # ADAPTIVE WARMING RATE CONTROL
+        self.base_warming_interval = 0.8  # Ultra-aggressive base interval
+        self.warming_interval = 0.8  # Current dynamic interval
+        self.min_warming_interval = 0.5  # Minimum interval (500ms)
+        self.max_warming_interval = 5.0  # Maximum interval (5s) for back-off
+        self.warming_timeout = 2.0   # Max 2s per warming cycle for speed
         
         # Performance targets
         self.target_cache_hit_rate = 0.8  # 80% cache hit rate
@@ -101,6 +128,16 @@ class JSONCacheWarmingOptimizer:
         
         # User activity tracking
         self.active_user_timeout = 300  # 5 minutes user timeout
+        
+        # ADAPTIVE RATE CONTROL METRICS
+        self.error_count = 0
+        self.consecutive_errors = 0
+        self.last_cache_hit_rate = 0.0
+        self.rate_limit_detected = False
+        self.api_response_times = deque(maxlen=10)  # Track recent response times
+        self.back_off_factor = 1.0  # Current back-off multiplier
+        self.back_off_recovery_threshold = 3  # Successful cycles to start recovery
+        self.successful_cycles_since_error = 0
         
         logger.info("🔥 [CACHE-WARMING] JSON Cache Warming Optimizer initialized")
     
@@ -180,7 +217,10 @@ class JSONCacheWarmingOptimizer:
                 warming_duration = time.time() - warming_start
                 self.warming_stats.total_warming_time += warming_duration
                 
-                # Wait for next cycle
+                # ADAPTIVE INTERVAL ADJUSTMENT
+                self._adjust_warming_interval(warming_duration)
+                
+                # Wait for next cycle with adaptive interval
                 await asyncio.sleep(self.warming_interval)
                 
         except asyncio.CancelledError:
@@ -234,7 +274,90 @@ class JSONCacheWarmingOptimizer:
                 
         except Exception as e:
             self.warming_stats.failed_warms += 1
-            logger.error(f"❌ [WARMING-CYCLE] Failed: {e}")
+            self.consecutive_errors += 1
+            self.error_count += 1
+            
+            # Detect rate limiting
+            if "rate limit" in str(e).lower() or "429" in str(e) or "too many requests" in str(e).lower():
+                self.rate_limit_detected = True
+                logger.warning(f"🚫 [RATE-LIMIT] API rate limit detected: {e}")
+            else:
+                logger.error(f"❌ [WARMING-CYCLE] Failed: {e}")
+    
+    def _adjust_warming_interval(self, cycle_duration: float):
+        """Adaptively adjust warming interval based on performance metrics."""
+        # Record API response time
+        self.api_response_times.append(cycle_duration)
+        
+        # Get current cache performance
+        try:
+            cache_stats = self.cache.get_performance_report()
+            current_hit_rate = cache_stats.get('overall_hit_rate', 0.0)
+            self.last_cache_hit_rate = current_hit_rate
+        except Exception:
+            current_hit_rate = self.last_cache_hit_rate
+        
+        # Calculate active user count
+        active_user_count = len(self.user_activity.active_users)
+        
+        # Base interval adjustment factors
+        user_factor = 1.0
+        performance_factor = 1.0
+        error_factor = 1.0
+        
+        # ACTIVE USER SCALING: More users = more aggressive warming
+        if active_user_count > 0:
+            # Scale down interval for more users (0.5x to 1.0x)
+            user_factor = max(0.5, 1.0 - (active_user_count - 1) * 0.1)
+        else:
+            # No users: slow down warming
+            user_factor = 2.0
+        
+        # CACHE HIT RATE SCALING: Low hit rate = more aggressive warming
+        if current_hit_rate < self.target_cache_hit_rate:
+            # Poor hit rate: speed up warming (0.7x to 1.0x)
+            hit_rate_deficit = self.target_cache_hit_rate - current_hit_rate
+            performance_factor = max(0.7, 1.0 - hit_rate_deficit)
+        else:
+            # Good hit rate: can slow down slightly (1.0x to 1.3x)
+            performance_factor = min(1.3, 1.0 + (current_hit_rate - self.target_cache_hit_rate) * 0.5)
+        
+        # ERROR-BASED BACK-OFF
+        if self.consecutive_errors > 0:
+            # Exponential back-off for consecutive errors
+            self.back_off_factor = min(4.0, 1.5 ** self.consecutive_errors)
+            error_factor = self.back_off_factor
+            
+            # Extra back-off for rate limiting
+            if self.rate_limit_detected:
+                error_factor *= 2.0
+        else:
+            # Successful cycle: gradually recover from back-off
+            self.successful_cycles_since_error += 1
+            if self.successful_cycles_since_error >= self.back_off_recovery_threshold:
+                self.back_off_factor = max(1.0, self.back_off_factor * 0.8)  # Recovery
+                if self.back_off_factor <= 1.1:
+                    self.rate_limit_detected = False  # Clear rate limit flag
+                    self.consecutive_errors = 0  # Reset error count
+                    self.successful_cycles_since_error = 0
+        
+        # Calculate new interval
+        combined_factor = user_factor * performance_factor * error_factor
+        new_interval = self.base_warming_interval * combined_factor
+        
+        # Clamp to min/max bounds
+        self.warming_interval = max(
+            self.min_warming_interval,
+            min(self.max_warming_interval, new_interval)
+        )
+        
+        # Log adaptive adjustments
+        if abs(new_interval - self.base_warming_interval) > 0.1:
+            logger.info(
+                f"🎛️ [ADAPTIVE-WARMING] Interval: {self.warming_interval:.2f}s "
+                f"(users: {active_user_count}, hit_rate: {current_hit_rate:.1%}, "
+                f"errors: {self.consecutive_errors}, factor: {combined_factor:.2f})"
+            )
     
     async def _warm_live_matches(self):
         """Warm live matches cache."""

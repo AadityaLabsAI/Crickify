@@ -11,6 +11,32 @@ import asyncio
 import time
 import json
 import logging
+import cachetools
+
+# Import performance dependencies with fallbacks
+try:
+    import orjson
+    HAS_ORJSON = True
+except ImportError:
+    import json as orjson
+    HAS_ORJSON = False
+    logging.warning("⚠️ orjson not available, falling back to standard json (slower)")
+
+try:
+    import xxhash
+    HAS_XXHASH = True
+except ImportError:
+    import hashlib
+    HAS_XXHASH = False
+    logging.warning("⚠️ xxhash not available, falling back to hashlib (slower)")
+
+try:
+    import lz4.frame
+    HAS_LZ4 = True
+except ImportError:
+    import gzip
+    HAS_LZ4 = False
+    logging.warning("⚠️ lz4 not available, falling back to gzip compression (slower)")
 from typing import Dict, Any, Optional, Union, List, Callable, TypeVar, Generic
 from dataclasses import dataclass, field
 from collections import OrderedDict, defaultdict
@@ -18,6 +44,8 @@ from enum import Enum
 import threading
 from datetime import datetime, timedelta
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
+import weakref
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -114,34 +142,62 @@ class CacheStats:
             'total_size_mb': round(self.total_size / (1024 * 1024), 2)
         }
 
-class LRUCache:
+class ShardedLRUCache:
     """
-    Thread-safe LRU Cache with TTL, size limits, and performance monitoring.
+    Ultra-fast sharded LRU Cache with multi-level caching, compression, and concurrency optimization.
+    Implements cache sharding for better concurrent access and reduced lock contention.
     """
     
     def __init__(self, 
                  max_size: int = 1000,
                  max_memory_mb: float = 50.0,
                  default_ttl: float = 300.0,
-                 cleanup_interval: float = 60.0):
+                 cleanup_interval: float = 60.0,
+                 num_shards: int = 8,
+                 enable_compression: bool = True,
+                 enable_disk_cache: bool = True):
         """
-        Initialize LRU Cache.
+        Initialize Ultra-fast Sharded LRU Cache with multi-level caching.
         
         Args:
             max_size: Maximum number of entries
             max_memory_mb: Maximum memory usage in MB
             default_ttl: Default TTL in seconds
             cleanup_interval: Cleanup interval in seconds
+            num_shards: Number of cache shards for concurrency
+            enable_compression: Enable LZ4 compression for large objects
+            enable_disk_cache: Enable disk-based L2 cache
         """
         self.max_size = max_size
         self.max_memory_bytes = int(max_memory_mb * 1024 * 1024)
         self.default_ttl = default_ttl
         self.cleanup_interval = cleanup_interval
+        self.num_shards = num_shards
+        self.enable_compression = enable_compression
+        self.enable_disk_cache = enable_disk_cache
         
-        # Thread-safe storage
-        self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
-        self._lock = threading.RLock()
-        self._stats = CacheStats()
+        # Sharded storage for better concurrency
+        self._shards: List[OrderedDict[str, CacheEntry]] = [OrderedDict() for _ in range(num_shards)]
+        self._shard_locks: List[threading.RLock] = [threading.RLock() for _ in range(num_shards)]
+        self._shard_stats: List[CacheStats] = [CacheStats() for _ in range(num_shards)]
+        
+        # Fast hashing for shard selection with fallback
+        if HAS_XXHASH:
+            self._shard_hash_func = xxhash.xxh64_intdigest
+        else:
+            def _fallback_hash(data):
+                return int(hashlib.md5(data).hexdigest()[:8], 16)
+            self._shard_hash_func = _fallback_hash
+        
+        # Compression settings
+        self._compression_threshold = 1024  # Compress objects > 1KB
+        
+        # Multi-level cache components
+        self._l1_cache = {}  # Fast in-memory cache
+        self._l2_disk_cache = None  # Optional disk cache
+        
+        # Performance optimizations
+        self._thread_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="cache_opt")
         
         # Event callbacks for monitoring
         self._event_callbacks: Dict[CacheEventType, List[Callable]] = defaultdict(list)
@@ -149,6 +205,16 @@ class LRUCache:
         # Cache warming and prefetch strategies
         self._warming_strategies: Dict[str, Callable] = {}
         self._prefetch_patterns: Dict[str, List[str]] = defaultdict(list)
+        
+        # Performance metrics
+        self._performance_metrics = {
+            'compression_ratio': 0.0,
+            'shard_distribution': [0] * num_shards,
+            'l1_hits': 0,
+            'l2_hits': 0,
+            'compression_time': 0.0,
+            'decompression_time': 0.0
+        }
         
         # Start background cleanup
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -176,41 +242,104 @@ class LRUCache:
                 logger.error(f"Cache cleanup error: {e}")
     
     def _cleanup_expired(self):
-        """Remove expired entries."""
-        with self._lock:
-            expired_keys = [
-                key for key, entry in self._cache.items() 
-                if entry.is_expired()
-            ]
+        """Remove expired entries from all shards."""
+        total_expired = 0
+        
+        # Process each shard independently for better concurrency
+        for shard_index in range(self.num_shards):
+            shard = self._shards[shard_index]
+            shard_lock = self._shard_locks[shard_index]
+            shard_stats = self._shard_stats[shard_index]
             
-            for key in expired_keys:
-                del self._cache[key]
-                self._stats.expirations += 1
-                self._fire_event(CacheEventType.EXPIRED, key, None)
-            
-            self._update_stats()
+            try:
+                with shard_lock:
+                    expired_keys = [
+                        key for key, entry in shard.items() 
+                        if entry.is_expired()
+                    ]
+                    
+                    for key in expired_keys:
+                        del shard[key]
+                        shard_stats.expirations += 1
+                        self._fire_event(CacheEventType.EXPIRED, key, None)
+                        total_expired += 1
+            except Exception as e:
+                logger.error(f"Shard {shard_index} cleanup error: {e}")
+        
+        if total_expired > 0:
+            logger.debug(f"Cleaned up {total_expired} expired entries across {self.num_shards} shards")
+        
+        self._update_stats()
     
     def _evict_if_needed(self):
-        """Evict entries if cache limits are exceeded."""
-        # Size-based eviction
-        while len(self._cache) > self.max_size:
-            key, _ = self._cache.popitem(last=False)  # Remove LRU
-            self._stats.evictions += 1
-            self._fire_event(CacheEventType.EVICTED, key, "size_limit")
+        """Evict entries if cache limits are exceeded across all shards."""
+        # Calculate current totals across all shards
+        total_entries = sum(len(shard) for shard in self._shards)
+        total_memory = 0
         
-        # Memory-based eviction
-        current_memory = sum(entry.size for entry in self._cache.values())
-        while current_memory > self.max_memory_bytes and self._cache:
-            key, entry = self._cache.popitem(last=False)  # Remove LRU
-            current_memory -= entry.size
-            self._stats.evictions += 1
-            self._fire_event(CacheEventType.EVICTED, key, "memory_limit")
+        # Calculate total memory usage
+        for shard in self._shards:
+            for entry in shard.values():
+                total_memory += entry.size
+        
+        # Global size-based eviction - distribute evictions across shards
+        if total_entries > self.max_size:
+            excess_entries = total_entries - self.max_size
+            evictions_per_shard = excess_entries // self.num_shards + 1
+            
+            for shard_index in range(self.num_shards):
+                self._evict_from_shard(shard_index, evictions_per_shard, "size_limit")
+        
+        # Global memory-based eviction
+        if total_memory > self.max_memory_bytes:
+            # Evict from largest shards first
+            shard_sizes = [(i, sum(entry.size for entry in self._shards[i].values())) 
+                          for i in range(self.num_shards)]
+            shard_sizes.sort(key=lambda x: x[1], reverse=True)
+            
+            for shard_index, _ in shard_sizes:
+                if total_memory <= self.max_memory_bytes:
+                    break
+                total_memory -= self._evict_from_shard(shard_index, 5, "memory_limit")
     
     def _update_stats(self):
-        """Update cache statistics."""
-        with self._lock:
-            self._stats.entry_count = len(self._cache)
-            self._stats.total_size = sum(entry.size for entry in self._cache.values())
+        """Update cache statistics by aggregating across all shards."""
+        total_entries = 0
+        total_size = 0
+        total_hits = 0
+        total_misses = 0
+        total_sets = 0
+        total_evictions = 0
+        total_expirations = 0
+        total_invalidations = 0
+        
+        # Aggregate stats from all shards
+        for shard_index in range(self.num_shards):
+            shard = self._shards[shard_index]
+            shard_stats = self._shard_stats[shard_index]
+            
+            with self._shard_locks[shard_index]:
+                total_entries += len(shard)
+                total_size += sum(entry.size for entry in shard.values())
+                total_hits += shard_stats.hits
+                total_misses += shard_stats.misses
+                total_sets += shard_stats.sets
+                total_evictions += shard_stats.evictions
+                total_expirations += shard_stats.expirations
+                total_invalidations += shard_stats.invalidations
+        
+        # Update global stats (create if doesn't exist)
+        if not hasattr(self, '_global_stats'):
+            self._global_stats = CacheStats()
+        
+        self._global_stats.entry_count = total_entries
+        self._global_stats.total_size = total_size
+        self._global_stats.hits = total_hits
+        self._global_stats.misses = total_misses
+        self._global_stats.sets = total_sets
+        self._global_stats.evictions = total_evictions
+        self._global_stats.expirations = total_expirations
+        self._global_stats.invalidations = total_invalidations
     
     def _fire_event(self, event_type: CacheEventType, key: str, data: Any):
         """Fire cache event callbacks."""
@@ -221,58 +350,207 @@ class LRUCache:
             except Exception as e:
                 logger.error(f"Cache event callback error: {e}")
     
+    def _get_shard_index(self, key: str) -> int:
+        """Get shard index for key using fast hash function."""
+        return self._shard_hash_func(key.encode()) % self.num_shards
+    
+    def _compress_data(self, data: Any) -> Union[bytes, Any]:
+        """Compress data if it's large enough and compression is enabled."""
+        if not self.enable_compression:
+            return data
+            
+        try:
+            # Serialize with orjson or fallback to json
+            if HAS_ORJSON and not isinstance(data, (str, bytes)):
+                serialized = orjson.dumps(data)
+            elif isinstance(data, str):
+                serialized = data.encode()
+            elif isinstance(data, bytes):
+                serialized = data
+            else:
+                serialized = json.dumps(data).encode()
+            
+            if len(serialized) > self._compression_threshold:
+                compress_start = time.time()
+                if HAS_LZ4:
+                    compressed = lz4.frame.compress(serialized)
+                else:
+                    compressed = gzip.compress(serialized)
+                self._performance_metrics['compression_time'] += time.time() - compress_start
+                self._performance_metrics['compression_ratio'] = len(compressed) / len(serialized)
+                return compressed
+            return data
+        except Exception:
+            return data
+    
+    def _decompress_data(self, data: Any) -> Any:
+        """Decompress data if it's compressed."""
+        if not self.enable_compression or not isinstance(data, bytes):
+            return data
+            
+        try:
+            decompress_start = time.time()
+            if HAS_LZ4:
+                decompressed = lz4.frame.decompress(data)
+            else:
+                decompressed = gzip.decompress(data)
+            self._performance_metrics['decompression_time'] += time.time() - decompress_start
+            
+            # Try to deserialize with orjson or fallback to json
+            if HAS_ORJSON:
+                return orjson.loads(decompressed)
+            else:
+                return json.loads(decompressed.decode())
+        except Exception:
+            # Return as-is if decompression/deserialization fails
+            return data
+    
     def get(self, key: str) -> Optional[Any]:
-        """Get value from cache."""
-        with self._lock:
-            entry = self._cache.get(key)
+        """Get value from sharded cache with multi-level lookup."""
+        shard_index = self._get_shard_index(key)
+        shard = self._shards[shard_index]
+        shard_lock = self._shard_locks[shard_index]
+        shard_stats = self._shard_stats[shard_index]
+        
+        with shard_lock:
+            entry = shard.get(key)
             
             if entry is None:
-                self._stats.misses += 1
+                shard_stats.misses += 1
                 self._fire_event(CacheEventType.MISS, key, None)
+                
+                # Check L2 cache if enabled
+                if self.enable_disk_cache and self._l2_disk_cache:
+                    l2_value = self._get_from_l2_cache(key)
+                    if l2_value is not None:
+                        # Promote to L1 cache
+                        self.set(key, l2_value, self.default_ttl * 0.5)  # Shorter TTL for promoted items
+                        self._performance_metrics['l2_hits'] += 1
+                        return l2_value
                 
                 # Check for prefetch opportunities
                 self._maybe_prefetch(key)
                 return None
             
             if entry.is_expired():
-                del self._cache[key]
-                self._stats.misses += 1
-                self._stats.expirations += 1
+                del shard[key]
+                shard_stats.misses += 1
+                shard_stats.expirations += 1
                 self._fire_event(CacheEventType.EXPIRED, key, None)
                 self._fire_event(CacheEventType.MISS, key, None)
                 return None
             
             # Move to end (most recently used)
-            self._cache.move_to_end(key)
+            shard.move_to_end(key)
             entry.touch()
             
-            self._stats.hits += 1
+            shard_stats.hits += 1
+            self._performance_metrics['l1_hits'] += 1
             self._fire_event(CacheEventType.HIT, key, entry.data)
-            return entry.data
+            
+            # Decompress data if needed
+            return self._decompress_data(entry.data)
     
     def set(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
-        """Set value in cache."""
+        """Set value in sharded cache with compression and L2 storage."""
         ttl = ttl or self.default_ttl
+        shard_index = self._get_shard_index(key)
+        shard = self._shards[shard_index]
+        shard_lock = self._shard_locks[shard_index]
+        shard_stats = self._shard_stats[shard_index]
         
-        with self._lock:
+        with shard_lock:
             # Remove existing entry if present
-            if key in self._cache:
-                del self._cache[key]
+            if key in shard:
+                del shard[key]
+            
+            # Compress data if needed
+            compressed_value = self._compress_data(value)
             
             # Create new entry
             entry = CacheEntry(
-                data=value,
+                data=compressed_value,
                 timestamp=time.time(),
                 ttl=ttl
             )
             
-            self._cache[key] = entry
-            self._stats.sets += 1
+            shard[key] = entry
+            shard_stats.sets += 1
+            self._performance_metrics['shard_distribution'][shard_index] += 1
             self._fire_event(CacheEventType.SET, key, value)
             
             # Evict if necessary
-            self._evict_if_needed()
-            self._update_stats()
+            self._evict_shard_if_needed(shard_index)
+            
+            # Store in L2 cache if enabled and value is large enough
+            if self.enable_disk_cache and self._should_store_in_l2(value):
+                self._store_in_l2_cache(key, value)
+    
+    def _should_store_in_l2(self, value: Any) -> bool:
+        """Determine if value should be stored in L2 cache."""
+        try:
+            size = len(orjson.dumps(value)) if not isinstance(value, (str, bytes)) else len(value)
+            return size > 512  # Store objects > 512 bytes in L2
+        except Exception:
+            return False
+    
+    def _store_in_l2_cache(self, key: str, value: Any) -> None:
+        """Store value in L2 disk cache (placeholder implementation)."""
+        # In a real implementation, this would store to disk
+        # For now, we'll use a simple in-memory L2 cache
+        if not hasattr(self, '_l2_memory_cache'):
+            self._l2_memory_cache = cachetools.LRUCache(maxsize=200)
+        self._l2_memory_cache[key] = value
+    
+    def _get_from_l2_cache(self, key: str) -> Optional[Any]:
+        """Get value from L2 disk cache (placeholder implementation)."""
+        if not hasattr(self, '_l2_memory_cache'):
+            return None
+        return self._l2_memory_cache.get(key)
+    
+    def _evict_from_shard(self, shard_index: int, max_evictions: int, reason: str) -> int:
+        """Evict up to max_evictions entries from specific shard."""
+        shard = self._shards[shard_index]
+        shard_lock = self._shard_locks[shard_index]
+        shard_stats = self._shard_stats[shard_index]
+        evicted_size = 0
+        evicted_count = 0
+        
+        try:
+            with shard_lock:
+                for _ in range(max_evictions):
+                    if not shard:
+                        break
+                    key, entry = shard.popitem(last=False)  # Remove LRU
+                    evicted_size += entry.size
+                    evicted_count += 1
+                    shard_stats.evictions += 1
+                    self._fire_event(CacheEventType.EVICTED, key, reason)
+        except Exception as e:
+            logger.error(f"Shard {shard_index} eviction error: {e}")
+        
+        return evicted_size
+
+    def _evict_shard_if_needed(self, shard_index: int):
+        """Evict entries from specific shard if limits are exceeded."""
+        shard = self._shards[shard_index]
+        shard_stats = self._shard_stats[shard_index]
+        max_shard_size = self.max_size // self.num_shards
+        
+        # Size-based eviction
+        while len(shard) > max_shard_size:
+            key, _ = shard.popitem(last=False)  # Remove LRU
+            shard_stats.evictions += 1
+            self._fire_event(CacheEventType.EVICTED, key, "size_limit")
+        
+        # Memory-based eviction (approximate per shard)
+        max_shard_memory = self.max_memory_bytes // self.num_shards
+        current_memory = sum(entry.size for entry in shard.values())
+        while current_memory > max_shard_memory and shard:
+            key, entry = shard.popitem(last=False)  # Remove LRU
+            current_memory -= entry.size
+            shard_stats.evictions += 1
+            self._fire_event(CacheEventType.EVICTED, key, "memory_limit")
     
     def delete(self, key: str) -> bool:
         """Delete key from cache."""
@@ -312,9 +590,32 @@ class LRUCache:
             self._update_stats()
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
-        with self._lock:
-            return self._stats.to_dict()
+        """Get aggregated cache statistics from all shards."""
+        # Ensure stats are up to date
+        self._update_stats()
+        
+        # Return global stats if available
+        if hasattr(self, '_global_stats'):
+            return self._global_stats.to_dict()
+        
+        # Fallback: calculate on demand
+        total_stats = CacheStats()
+        for shard_stats in self._shard_stats:
+            total_stats.hits += shard_stats.hits
+            total_stats.misses += shard_stats.misses
+            total_stats.sets += shard_stats.sets
+            total_stats.evictions += shard_stats.evictions
+            total_stats.expirations += shard_stats.expirations
+            total_stats.invalidations += shard_stats.invalidations
+        
+        # Calculate current totals
+        total_stats.entry_count = sum(len(shard) for shard in self._shards)
+        total_stats.total_size = sum(
+            sum(entry.size for entry in shard.values()) 
+            for shard in self._shards
+        )
+        
+        return total_stats.to_dict()
     
     def add_event_listener(self, event_type: CacheEventType, callback: Callable):
         """Add event listener for cache events."""
@@ -371,28 +672,28 @@ class PerformanceCacheManager:
     def __init__(self):
         """Initialize cache manager with multiple specialized caches."""
         # ULTRA-FAST specialized caches for different data types optimized for sub-2-second updates
-        self.live_matches_cache = LRUCache(
+        self.live_matches_cache = ShardedLRUCache(
             max_size=300,  # Increased for better hit rate
             max_memory_mb=25.0,  # Increased memory for ultra-fast performance
             default_ttl=1.0,  # 1.0 second for maximum speed (faster than Cricbuzz)
             cleanup_interval=2.0  # Ultra-frequent cleanup for real-time
         )
         
-        self.schedule_cache = LRUCache(
+        self.schedule_cache = ShardedLRUCache(
             max_size=400,  # Increased size
             max_memory_mb=30.0,  # Increased memory
             default_ttl=120.0,  # 2 minutes for faster schedule refresh
             cleanup_interval=30.0  # More frequent cleanup
         )
         
-        self.tournament_cache = LRUCache(
+        self.tournament_cache = ShardedLRUCache(
             max_size=150,  # Increased size
             max_memory_mb=15.0,  # Increased memory
             default_ttl=600.0,  # 10 minutes for faster tournament data
             cleanup_interval=120.0  # More frequent cleanup
         )
         
-        self.standings_cache = LRUCache(
+        self.standings_cache = ShardedLRUCache(
             max_size=200,  # Increased size
             max_memory_mb=20.0,  # Increased memory
             default_ttl=300.0,  # 5 minutes for faster standings refresh
@@ -400,7 +701,7 @@ class PerformanceCacheManager:
         )
         
         # ULTRA-FAST HOT CACHE for most critical live data (sub-second updates)
-        self.hot_live_cache = LRUCache(
+        self.hot_live_cache = ShardedLRUCache(
             max_size=50,  # Small but ultra-fast
             max_memory_mb=5.0,  # Minimal memory for speed
             default_ttl=0.5,  # 500ms TTL for instant updates
@@ -408,7 +709,7 @@ class PerformanceCacheManager:
         )
         
         # PREDICTIVE CACHE for anticipated data requests
-        self.predictive_cache = LRUCache(
+        self.predictive_cache = ShardedLRUCache(
             max_size=100,  # Medium size for predictions
             max_memory_mb=10.0,  # Moderate memory
             default_ttl=5.0,  # 5 seconds for predictions
@@ -486,7 +787,7 @@ class PerformanceCacheManager:
         # When accessing a specific tournament, prefetch its standings
         # This will be set dynamically when tournament IDs are known
     
-    def get_cache_for_type(self, data_type: str, priority: str = 'normal') -> LRUCache:
+    def get_cache_for_type(self, data_type: str, priority: str = 'normal') -> ShardedLRUCache:
         """Get appropriate cache for data type with ultra-fast priority support."""
         # Ultra-fast hot cache for critical live data
         if priority == 'ultra_fast' or (data_type in ['live_matches', 'live_scores'] and self.ultra_fast_mode):
