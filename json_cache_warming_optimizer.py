@@ -27,7 +27,7 @@ try:
     import statistics
 except ImportError:
     # Fallback implementation for basic stats
-    class statistics:
+    class _StatisticsFallback:
         @staticmethod
         def mean(data):
             return sum(data) / len(data) if data else 0.0
@@ -43,6 +43,7 @@ except ImportError:
             else:
                 return sorted_data[n//2]
     
+    statistics = _StatisticsFallback()
     logging.warning("⚠️ statistics module not available, using fallback implementation")
 
 from cricket_json_extractor import json_extractor
@@ -81,6 +82,7 @@ class UserActivity:
     peak_hours: List[int] = field(default_factory=lambda: [9, 10, 11, 17, 18, 19, 20])  # Default peak hours
     last_activity: float = field(default_factory=time.time)
     activity_history: deque = field(default_factory=lambda: deque(maxlen=100))  # Track recent activity
+    active_user_periods: int = 0  # Track number of active user periods
     
     def is_peak_hour(self) -> bool:
         """Check if current time is peak hour."""
@@ -364,7 +366,8 @@ class JSONCacheWarmingOptimizer:
         cache_key = "live_matches_warm"
         
         # Check if already cached and fresh
-        cached = self.cache.get(cache_key)
+        live_cache = self.cache.get_cache_for_type('live_matches')
+        cached = live_cache.get(cache_key)
         if cached is not None:
             logger.debug("🎯 [WARM-LIVE] Using cached data")
             return cached
@@ -377,7 +380,8 @@ class JSONCacheWarmingOptimizer:
             
             if matches:
                 # Cache with short TTL for warming
-                self.cache.set(cache_key, matches, ttl=60)  # 1 minute TTL
+                live_cache = self.cache.get_cache_for_type('live_matches')
+                live_cache.set(cache_key, matches, ttl=60)  # 1 minute TTL
                 self.warming_stats.cache_hits_generated += 1
                 
                 warm_duration = (time.time() - warm_start) * 1000
@@ -397,7 +401,8 @@ class JSONCacheWarmingOptimizer:
         cache_key = "schedule_warm"
         
         # Check if already cached and fresh
-        cached = self.cache.get(cache_key)
+        schedule_cache = self.cache.get_cache_for_type('schedule')
+        cached = schedule_cache.get(cache_key)
         if cached is not None:
             logger.debug("🎯 [WARM-SCHEDULE] Using cached data")
             return cached
@@ -410,7 +415,8 @@ class JSONCacheWarmingOptimizer:
             
             if schedule:
                 # Cache with longer TTL for schedule
-                self.cache.set(cache_key, schedule, ttl=180)  # 3 minutes TTL
+                schedule_cache = self.cache.get_cache_for_type('schedule')
+                schedule_cache.set(cache_key, schedule, ttl=180)  # 3 minutes TTL
                 self.warming_stats.cache_hits_generated += 1
                 
                 warm_duration = (time.time() - warm_start) * 1000

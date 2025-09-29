@@ -375,6 +375,10 @@ class ComprehensiveSystemTest:
         # Simulate real-world usage scenario
         steps_completed = []
         
+        # Initialize variables to avoid unbound variable errors
+        extraction_time = 2000  # Default timeout value
+        matches = None
+        
         try:
             # Step 1: Start monitoring
             start_monitoring()

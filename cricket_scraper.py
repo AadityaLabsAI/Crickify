@@ -3671,24 +3671,6 @@ class RealCricketScraper:
         else:
             return 'Cricket'
     
-    def _generate_short_name(self, team_name: str) -> str:
-        """Generate short name for team."""
-        if not team_name:
-            return "TBD"
-        
-        # Handle common team abbreviations
-        team_abbrevs = {
-            'India': 'IND', 'Pakistan': 'PAK', 'Australia': 'AUS',
-            'England': 'ENG', 'South Africa': 'RSA', 'New Zealand': 'NZ',
-            'West Indies': 'WI', 'Sri Lanka': 'SL', 'Bangladesh': 'BAN',
-            'Afghanistan': 'AFG', 'Zimbabwe': 'ZIM', 'Ireland': 'IRE'
-        }
-        
-        if team_name in team_abbrevs:
-            return team_abbrevs[team_name]
-        
-        # Generate abbreviation from first 3 letters
-        return team_name[:3].upper()
     
     def _parse_cricbuzz_fallback(self, soup) -> List[Match]:
         """Fallback parsing method for Cricbuzz when main method fails."""
@@ -3726,24 +3708,6 @@ class RealCricketScraper:
         
         return matches
     
-    def _create_fallback_matches(self) -> List[Match]:
-        """Create basic fallback matches when all scraping fails."""
-        try:
-            match = Match(
-                match_id=f"fallback_emergency_{int(time.time())}",
-                title="Cricket Updates Resuming Soon",
-                team1=Team(name="Cricket", short_name="CRI"),
-                team2=Team(name="Updates", short_name="UPD"),
-                status=MatchStatus.UPCOMING,
-                venue="Multiple Venues",
-                date=datetime.now().strftime("%d %b %Y"),
-                format="Cricket",
-                match_status_detail="Real-time cricket data will resume shortly. Our servers are syncing with live sources."
-            )
-            return [match]
-        except Exception as e:
-            logger.error(f"❌ Error creating fallback matches: {e}")
-            return []
     
     async def get_live_matches_with_resilience(self) -> List[Match]:
         """
@@ -3892,7 +3856,7 @@ class RealCricketScraper:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=self.fast_timeout)) as response:
                     if response.status == 200:
                         html = await response.text()
-                        matches = await self._parse_cricbuzz_live_matches(html)
+                        matches = self._parse_cricbuzz_live_matches(html)
                         if matches:
                             return matches
                     else:
@@ -3919,7 +3883,7 @@ class RealCricketScraper:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=self.default_timeout)) as response:
                     if response.status == 200:
                         html = await response.text()
-                        matches = await self._parse_cricbuzz_upcoming_matches(html)
+                        matches = self._parse_cricbuzz_schedule_enhanced(html, 7)
                         # Apply filtering if needed
                         if match_format:
                             matches = [m for m in matches if match_format.lower() in m.format.lower()]
@@ -3946,6 +3910,10 @@ async def get_live_matches() -> List[Match]:
     data_source = "unknown"  # Track data source for observability
     
     try:
+        # Initialize timing variables to avoid unbound variable errors
+        json_start = 0.0
+        html_start = 0.0
+        
         # Primary: Try JSON extraction (fast) with strict timeout
         if data_source_config.use_json_primary:
             try:
@@ -3983,7 +3951,7 @@ async def get_live_matches() -> List[Match]:
                 logger.warning("⏰ JSON extraction timed out after 1.0s, falling back to HTML")
                 data_source_config.update_health_score('json', 'live_matches', False, 1.0)
             except Exception as e:
-                json_time = time.time() - json_start if 'json_start' in locals() else 0.0
+                json_time = time.time() - json_start if json_start > 0 else 0.0
                 logger.warning(f"⚠️ JSON extraction failed: {e}, falling back to HTML")
                 data_source_config.update_health_score('json', 'live_matches', False, json_time)
         
@@ -4013,7 +3981,7 @@ async def get_live_matches() -> List[Match]:
                     data_source_config.update_health_score('html', 'cricbuzz', False, html_time)
                     
             except Exception as e:
-                html_time = time.time() - html_start if 'html_start' in locals() else 0.0
+                html_time = time.time() - html_start if html_start > 0 else 0.0
                 logger.error(f"❌ HTML fallback failed: {e}")
                 data_source_config.update_health_score('html', 'cricbuzz', False, html_time)
         
@@ -4042,6 +4010,10 @@ async def get_match_schedule(days: Union[int, str] = 3, match_format: Optional[s
     data_source = "unknown"  # Track data source for observability
     
     try:
+        # Initialize timing variables to avoid unbound variable errors
+        json_start = 0.0
+        html_start = 0.0
+        
         # Primary: Try JSON extraction (fast) with strict timeout
         if data_source_config.use_json_primary:
             try:
@@ -4079,7 +4051,7 @@ async def get_match_schedule(days: Union[int, str] = 3, match_format: Optional[s
                 logger.warning("⏰ JSON schedule extraction timed out after 1.0s, falling back to HTML")
                 data_source_config.update_health_score('json', 'schedule', False, 1.0)
             except Exception as e:
-                json_time = time.time() - json_start if 'json_start' in locals() else 0.0
+                json_time = time.time() - json_start if json_start > 0 else 0.0
                 logger.warning(f"⚠️ JSON schedule extraction failed: {e}, falling back to HTML")
                 data_source_config.update_health_score('json', 'schedule', False, json_time)
         
@@ -4109,7 +4081,7 @@ async def get_match_schedule(days: Union[int, str] = 3, match_format: Optional[s
                     data_source_config.update_health_score('html', 'cricbuzz', False, html_time)
                     
             except Exception as e:
-                html_time = time.time() - html_start if 'html_start' in locals() else 0.0
+                html_time = time.time() - html_start if html_start > 0 else 0.0
                 logger.error(f"❌ HTML schedule fallback failed: {e}")
                 data_source_config.update_health_score('html', 'cricbuzz', False, html_time)
         

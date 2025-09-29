@@ -1595,6 +1595,46 @@ class PerformanceCacheManager:
             
         except Exception as e:
             logger.error(f"❌ Tournament invalidation setup failed: {e}")
+    
+    def get_stats(self) -> 'CacheStats':
+        """
+        Get comprehensive cache statistics compatible with the warming optimizer.
+        
+        This method is required by the json_cache_warming_optimizer.py and other
+        components that expect a get_stats() method returning an object with to_dict().
+        """
+        # Aggregate stats from all caches
+        total_stats = CacheStats()
+        
+        # Collect stats from all individual caches
+        for cache in [self.live_matches_cache, self.schedule_cache, 
+                     self.tournament_cache, self.standings_cache, 
+                     self.hot_live_cache, self.predictive_cache]:
+            cache_stats = cache.get_stats()
+            
+            # Since get_stats() returns Dict[str, Any], always handle as dictionary
+            if isinstance(cache_stats, dict):
+                # Dictionary response (this is the actual return type)
+                total_stats.hits += cache_stats.get('hits', 0)
+                total_stats.misses += cache_stats.get('misses', 0)
+                total_stats.sets += cache_stats.get('sets', 0)
+                total_stats.evictions += cache_stats.get('evictions', 0)
+                total_stats.expirations += cache_stats.get('expirations', 0)
+                total_stats.invalidations += cache_stats.get('invalidations', 0)
+                total_stats.total_size += cache_stats.get('total_size', 0)
+                total_stats.entry_count += cache_stats.get('entry_count', 0)
+            elif hasattr(cache_stats, 'hits'):
+                # CacheStats object (fallback case if needed)
+                total_stats.hits += getattr(cache_stats, 'hits', 0)
+                total_stats.misses += getattr(cache_stats, 'misses', 0)
+                total_stats.sets += getattr(cache_stats, 'sets', 0)
+                total_stats.evictions += getattr(cache_stats, 'evictions', 0)
+                total_stats.expirations += getattr(cache_stats, 'expirations', 0)
+                total_stats.invalidations += getattr(cache_stats, 'invalidations', 0)
+                total_stats.total_size += getattr(cache_stats, 'total_size', 0)
+                total_stats.entry_count += getattr(cache_stats, 'entry_count', 0)
+        
+        return total_stats
 
 # Global cache manager instance
 performance_cache = PerformanceCacheManager()

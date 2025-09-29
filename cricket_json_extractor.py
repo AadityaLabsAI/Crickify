@@ -797,17 +797,39 @@ class CricketJSONExtractor:
                     timeout=aiohttp.ClientTimeout(total=endpoint.timeout)
                 )
                 
-                if response and response.status == 200:
-                    content = await response.text()
+                if response:
+                    # Handle successful responses
+                    if response.status == 200:
+                        content = await response.text()
+                        
+                        # Handle different response types
+                        if response.headers.get('content-type', '').startswith('application/json'):
+                            return json.loads(content)
+                        elif 'json' in content[:100].lower():  # Check if it's JSON-like
+                            return json.loads(content)
+                        else:
+                            # Some endpoints return JSONP or other formats
+                            return self._extract_json_from_response(content)
                     
-                    # Handle different response types
-                    if response.headers.get('content-type', '').startswith('application/json'):
-                        return json.loads(content)
-                    elif 'json' in content[:100].lower():  # Check if it's JSON-like
-                        return json.loads(content)
-                    else:
-                        # Some endpoints return JSONP or other formats
-                        return self._extract_json_from_response(content)
+                    # Handle specific error statuses that indicate API issues
+                    elif response.status in [402, 403, 429, 503]:  # Payment, Forbidden, Rate limit, Service unavailable
+                        error_msg = await response.text() if response else "No response"
+                        logger.warning(f"🚨 [API-ERROR] {endpoint.url} returned {response.status}: {error_msg[:100]}")
+                        
+                        # Mark endpoint as temporarily unhealthy for circuit breaker
+                        self._mark_endpoint_unhealthy_temporarily(endpoint, response.status)
+                        
+                        # Trigger HTML fallback immediately for these errors
+                        return await self._trigger_html_fallback(endpoint, format_params)
+                    
+                    # Handle other client/server errors
+                    elif response.status >= 400:
+                        error_msg = await response.text() if response else "No response"
+                        logger.warning(f"⚠️ [HTTP-ERROR] {endpoint.url} returned {response.status}: {error_msg[:50]}")
+                        
+                        # Still mark as unhealthy but don't necessarily trigger fallback
+                        self._mark_endpoint_unhealthy_temporarily(endpoint, response.status)
+                        return None
                 
         except json.JSONDecodeError as e:
             logger.warning(f"⚠️ Invalid JSON from {endpoint.url}: {e}")
@@ -2337,6 +2359,106 @@ class CricketJSONExtractor:
                 breaker['state'] = 'open'
                 self.operational_metrics.circuit_breaker_activations += 1
                 logger.warning(f"🚨 [CIRCUIT-BREAKER] {endpoint_name} opened due to {breaker['failures']} failures")
+    
+    def _mark_endpoint_unhealthy_temporarily(self, endpoint: JSONEndpoint, status_code: int):
+        """Mark endpoint as temporarily unhealthy due to API errors."""
+        endpoint_name = f"{endpoint.parser}_{endpoint.url}"
+        
+        # Reduce health score more severely for payment/auth errors
+        penalty = 50 if status_code in [402, 403] else 30
+        
+        if endpoint_name in self.operational_metrics.endpoint_health_scores:
+            self.operational_metrics.endpoint_health_scores[endpoint_name] -= penalty
+        else:
+            self.operational_metrics.endpoint_health_scores[endpoint_name] = 50  # Start low for failing endpoints
+        
+        # Ensure health score doesn't go negative
+        self.operational_metrics.endpoint_health_scores[endpoint_name] = max(
+            0, self.operational_metrics.endpoint_health_scores[endpoint_name]
+        )
+        
+        # Update circuit breaker
+        self._update_circuit_breaker(endpoint_name, False)
+        
+        logger.info(f"🔻 [HEALTH] {endpoint_name} health reduced to {self.operational_metrics.endpoint_health_scores[endpoint_name]} due to {status_code}")
+    
+    async def _trigger_html_fallback(self, endpoint: JSONEndpoint, format_params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """Trigger HTML fallback when JSON API fails with specific errors."""
+        try:
+            logger.info(f"🔄 [FALLBACK] Triggering HTML scraping fallback for {endpoint.parser}")
+            
+            # Import cricket_scraper here to avoid circular imports
+            from cricket_scraper import get_live_matches, get_match_details
+            
+            # Update fallback stats
+            self.data_source_stats['html_fallback_attempts'] += 1
+            
+            # Determine what type of data to fallback to
+            if 'live' in endpoint.parser.lower():
+                # Fallback to HTML scraping for live matches
+                matches = await get_live_matches()
+                if matches:
+                    self.data_source_stats['html_fallback_successes'] += 1
+                    logger.info(f"✅ [FALLBACK] HTML scraping successful: {len(matches)} matches")
+                    
+                    # Convert matches to JSON-like format for consistency
+                    return self._convert_matches_to_json_format(matches)
+                else:
+                    logger.warning("⚠️ [FALLBACK] HTML scraping returned no matches")
+            
+            elif 'score' in endpoint.parser.lower() and format_params and 'match_id' in format_params:
+                # Fallback to HTML scraping for match details
+                match_details = await get_match_details(format_params['match_id'])
+                if match_details:
+                    self.data_source_stats['html_fallback_successes'] += 1
+                    logger.info(f"✅ [FALLBACK] HTML scraping successful for match {format_params['match_id']}")
+                    # Convert Match object to Dict format for consistency
+                    return self._convert_matches_to_json_format([match_details])
+            
+            # No suitable fallback available
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ [FALLBACK] HTML fallback failed: {e}")
+            return None
+    
+    def _convert_matches_to_json_format(self, matches: List) -> Dict[str, Any]:
+        """Convert Match objects from HTML scraper to JSON format for consistency."""
+        try:
+            match_list = []
+            for match in matches:
+                if hasattr(match, 'to_dict'):
+                    match_list.append(match.to_dict())
+                else:
+                    # Create basic JSON structure from match object
+                    match_dict = {
+                        'id': getattr(match, 'match_id', ''),
+                        'title': getattr(match, 'title', ''),
+                        'team1': {
+                            'name': getattr(match.team1, 'name', '') if hasattr(match, 'team1') else '',
+                            'score': getattr(match.team1, 'score', 0) if hasattr(match, 'team1') else 0,
+                            'wickets': getattr(match.team1, 'wickets', 0) if hasattr(match, 'team1') else 0,
+                            'overs': getattr(match.team1, 'overs', '0.0') if hasattr(match, 'team1') else '0.0'
+                        },
+                        'team2': {
+                            'name': getattr(match.team2, 'name', '') if hasattr(match, 'team2') else '',
+                            'score': getattr(match.team2, 'score', 0) if hasattr(match, 'team2') else 0,
+                            'wickets': getattr(match.team2, 'wickets', 0) if hasattr(match, 'team2') else 0,
+                            'overs': getattr(match.team2, 'overs', '0.0') if hasattr(match, 'team2') else '0.0'
+                        },
+                        'status': str(getattr(match, 'status', '')),
+                        'venue': getattr(match, 'venue', ''),
+                        'date': getattr(match, 'date', ''),
+                        'format': getattr(match, 'format', ''),
+                        'tournament': getattr(match, 'tournament', '')
+                    }
+                    match_list.append(match_dict)
+            
+            return {'data': match_list, 'source': 'html_fallback'}
+            
+        except Exception as e:
+            logger.error(f"❌ Error converting matches to JSON format: {e}")
+            return {'data': [], 'source': 'html_fallback', 'error': str(e)}
     
     def get_comprehensive_metrics(self) -> Dict[str, Any]:
         """Get comprehensive operational metrics for monitoring dashboard."""
