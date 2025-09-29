@@ -13,9 +13,11 @@ import json
 import logging
 import re
 import time
+import statistics
 from typing import Dict, List, Optional, Any, Union, cast
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from collections import defaultdict, deque
 
 from cricket_scraper import Match, Team, Commentary, MatchStatus
 from session_manager import session_manager
@@ -41,6 +43,83 @@ class JSONEndpoint:
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
 
+@dataclass
+class OperationalMetrics:
+    """Comprehensive operational metrics for JSON extractor performance."""
+    json_attempts: int = 0
+    json_successes: int = 0
+    json_failures: int = 0
+    html_fallback_triggered: int = 0
+    total_matches_extracted: int = 0
+    response_times: List[float] = field(default_factory=list)
+    endpoint_health_scores: Dict[str, float] = field(default_factory=dict)
+    circuit_breaker_activations: int = 0
+    data_freshness_scores: Dict[str, float] = field(default_factory=dict)
+    
+    @property
+    def json_success_rate(self) -> float:
+        """Calculate JSON success rate percentage."""
+        if self.json_attempts == 0:
+            return 0.0
+        return (self.json_successes / self.json_attempts) * 100
+    
+    @property
+    def html_fallback_rate(self) -> float:
+        """Calculate HTML fallback rate percentage."""
+        if self.json_attempts == 0:
+            return 0.0
+        return (self.html_fallback_triggered / self.json_attempts) * 100
+    
+    @property
+    def p50_latency_ms(self) -> float:
+        """Calculate p50 latency in milliseconds."""
+        if not self.response_times:
+            return 0.0
+        sorted_times = sorted(self.response_times)
+        return sorted_times[len(sorted_times) // 2] * 1000
+    
+    @property
+    def p95_latency_ms(self) -> float:
+        """Calculate p95 latency in milliseconds."""
+        if not self.response_times:
+            return 0.0
+        sorted_times = sorted(self.response_times)
+        p95_index = int(len(sorted_times) * 0.95)
+        return sorted_times[min(p95_index, len(sorted_times) - 1)] * 1000
+    
+    @property
+    def avg_latency_ms(self) -> float:
+        """Calculate average latency in milliseconds."""
+        if not self.response_times:
+            return 0.0
+        return statistics.mean(self.response_times) * 1000
+    
+    def record_response_time(self, response_time: float):
+        """Record response time and maintain a rolling window."""
+        self.response_times.append(response_time)
+        # Keep only last 100 measurements for p95 accuracy
+        if len(self.response_times) > 100:
+            self.response_times.pop(0)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert metrics to dictionary for logging."""
+        return {
+            'json_attempts': self.json_attempts,
+            'json_successes': self.json_successes,
+            'json_failures': self.json_failures,
+            'json_success_rate_percent': round(self.json_success_rate, 2),
+            'html_fallback_triggered': self.html_fallback_triggered,
+            'html_fallback_rate_percent': round(self.html_fallback_rate, 2),
+            'total_matches_extracted': self.total_matches_extracted,
+            'p50_latency_ms': round(self.p50_latency_ms, 1),
+            'p95_latency_ms': round(self.p95_latency_ms, 1),
+            'avg_latency_ms': round(self.avg_latency_ms, 1),
+            'response_time_samples': len(self.response_times),
+            'endpoint_health_scores': self.endpoint_health_scores,
+            'circuit_breaker_activations': self.circuit_breaker_activations,
+            'data_freshness_scores': self.data_freshness_scores
+        }
+
 class CricketJSONExtractor:
     """
     High-performance JSON data extractor for cricket APIs.
@@ -59,55 +138,73 @@ class CricketJSONExtractor:
         self.response_time_cache = {}  # Cache response times for optimization
         self.data_change_hashes = {}  # Track data changes to avoid redundant processing
         
+        # Enhanced operational metrics tracking
+        self.operational_metrics = OperationalMetrics()
+        self.endpoint_metrics = defaultdict(OperationalMetrics)  # Per-endpoint metrics
+        self.circuit_breaker_states = {}  # endpoint -> {failures, last_failure, state}
+        self.performance_thresholds = {
+            'max_acceptable_latency_ms': 2000,  # 2s max for sub-2s updates
+            'min_success_rate_percent': 80,     # 80% minimum success rate
+            'max_circuit_breaker_failures': 3   # Max failures before circuit breaker
+        }
+        
+        # Enhanced monitoring for operational insights
+        self.data_source_stats = {
+            'json_first_attempts': 0,
+            'json_first_successes': 0,
+            'html_fallback_attempts': 0,
+            'html_fallback_successes': 0,
+            'concurrent_extraction_cycles': 0,
+            'matches_per_cycle': deque(maxlen=50)  # Track recent match counts
+        }
+        
     def _initialize_endpoints(self) -> Dict[str, List[JSONEndpoint]]:
         """Initialize all JSON endpoints with fallback priorities."""
         return {
             'live_matches': [
-                # Primary Cricbuzz JSON endpoints (fastest) - Optimized for 1.5s updates
+                # Primary working Cricket APIs - Updated 2025
                 JSONEndpoint(
-                    url="https://www.cricbuzz.com/api/cricket-match/live-scores",
-                    parser="cricbuzz",
-                    timeout=1,  # Ultra-fast timeout for 1.5s updates
-                    rate_limit=0.05
+                    url="https://cricketdata.org/api/matches",
+                    parser="cricketdata_org",
+                    timeout=2,  # Reliable free API
+                    rate_limit=0.1
                 ),
                 JSONEndpoint(
-                    url="https://www.cricbuzz.com/api/cricket/live",
-                    parser="cricbuzz",
-                    timeout=1,
-                    rate_limit=0.05
+                    url="https://api.cricapi.com/v1/currentMatches?apikey=demo&offset=0",
+                    parser="cricapi",
+                    timeout=2,
+                    rate_limit=0.1
                 ),
+                # RapidAPI alternatives (backup)
                 JSONEndpoint(
-                    url="https://m.cricbuzz.com/api/cricket-match/live-scores",
-                    parser="cricbuzz_mobile",
-                    timeout=1,  # Mobile endpoints are typically faster
-                    rate_limit=0.03
+                    url="https://cricket-api-free-data.rapidapi.com/matches",
+                    parser="rapidapi_cricket",
+                    timeout=3,
+                    rate_limit=0.2,
+                    headers={
+                        'Accept': 'application/json',
+                        'X-RapidAPI-Key': 'demo',  # Use demo or configure with real key
+                        'X-RapidAPI-Host': 'cricket-api-free-data.rapidapi.com',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    }
                 ),
-                
-                # ESPN JSON endpoints (good fallback) - Optimized
+                # Self-hosted option as fallback
                 JSONEndpoint(
-                    url="https://hs-consumer-api.espncricinfo.com/v1/pages/matches",
-                    parser="espn",
-                    timeout=2,  # Reduced timeout for faster response
-                    rate_limit=0.08
-                ),
-                
-                # Backup endpoints
-                JSONEndpoint(
-                    url="https://www.cricbuzz.com/cricket-scores-feeds/live",
-                    parser="generic",
+                    url="https://api.github.com/repos/sanwebinfo/cricket-api",  # GitHub API as test endpoint
+                    parser="github_test",
                     timeout=5
                 ),
             ],
             
             'match_details': [
                 JSONEndpoint(
-                    url="https://www.cricbuzz.com/api/cricket-match/{match_id}",
-                    parser="cricbuzz",
+                    url="https://cricketdata.org/api/match/{match_id}",
+                    parser="cricketdata_org",
                     timeout=3
                 ),
                 JSONEndpoint(
-                    url="https://hs-consumer-api.espncricinfo.com/v1/pages/match/details/{match_id}",
-                    parser="espn",
+                    url="https://api.cricapi.com/v1/match_info?apikey=demo&id={match_id}",
+                    parser="cricapi",
                     timeout=4
                 ),
             ],
@@ -127,13 +224,13 @@ class CricketJSONExtractor:
             
             'schedule': [
                 JSONEndpoint(
-                    url="https://www.cricbuzz.com/api/cricket-schedule/live-matches",
-                    parser="cricbuzz",
+                    url="https://cricketdata.org/api/fixtures",
+                    parser="cricketdata_org",
                     timeout=4
                 ),
                 JSONEndpoint(
-                    url="https://hs-consumer-api.espncricinfo.com/v1/pages/schedule",
-                    parser="espn",
+                    url="https://api.cricapi.com/v1/matches?apikey=demo&offset=0",
+                    parser="cricapi",
                     timeout=5
                 ),
             ]
@@ -251,67 +348,138 @@ class CricketJSONExtractor:
 
     async def extract_live_matches(self) -> List[Match]:
         """Extract live matches using concurrent JSON endpoints for maximum speed."""
-        logger.info("🚀 Starting ultra-fast concurrent JSON extraction for live matches...")
-        
-        start_time = time.time()
+        extraction_start = time.time()
         matches = []
         
-        # Get priority-sorted endpoints for fastest response
-        sorted_endpoints = self._get_priority_sorted_endpoints('live_matches')
+        # Track extraction cycle
+        self.data_source_stats['concurrent_extraction_cycles'] += 1
+        self.operational_metrics.json_attempts += 1
         
-        # Use concurrent requests for ultra-fast extraction
-        if len(sorted_endpoints) > 1:
-            matches = await self._concurrent_fetch_matches(sorted_endpoints[:self.max_concurrent_requests])
-        else:
-            # Fallback to sequential for single endpoint
-            matches = await self._sequential_fetch_matches(sorted_endpoints)
+        logger.info("🚀 [OPERATIONAL] Starting ultra-fast JSON extraction cycle for live matches...")
         
-        # Quick data enhancement if we have time budget
-        if matches and time.time() - start_time < 0.8:  # Even tighter time budget for 1.5s updates
-            matches = await self._enhance_matches_with_details(matches[:3])
-        
-        total_time = time.time() - start_time
-        logger.info(f"⚡ Ultra-fast JSON extraction: {len(matches)} matches in {total_time:.3f}s")
-        
-        return matches[:5]  # Return max 5 for optimal performance
+        try:
+            # Get priority-sorted endpoints for fastest response
+            sorted_endpoints = self._get_priority_sorted_endpoints('live_matches')
+            
+            # Track JSON-first attempt
+            self.data_source_stats['json_first_attempts'] += 1
+            
+            # Use concurrent requests for ultra-fast extraction
+            if len(sorted_endpoints) > 1:
+                matches = await self._concurrent_fetch_matches(sorted_endpoints[:self.max_concurrent_requests])
+            else:
+                # Fallback to sequential for single endpoint
+                matches = await self._sequential_fetch_matches(sorted_endpoints)
+            
+            # Record successful extraction
+            if matches:
+                self.operational_metrics.json_successes += 1
+                self.data_source_stats['json_first_successes'] += 1
+                self.operational_metrics.total_matches_extracted += len(matches)
+                
+                # Track matches per cycle for operational insights
+                self.data_source_stats['matches_per_cycle'].append(len(matches))
+                
+                # Quick data enhancement if we have time budget
+                if time.time() - extraction_start < 0.8:  # Even tighter time budget for 1.5s updates
+                    matches = await self._enhance_matches_with_details(matches[:3])
+            else:
+                # Empty result - might trigger fallback later
+                self.operational_metrics.json_failures += 1
+            
+            total_time = time.time() - extraction_start
+            self.operational_metrics.record_response_time(total_time)
+            
+            # Log comprehensive operational metrics
+            self._log_operational_metrics("live_matches", total_time, len(matches))
+            
+            return matches[:5]  # Return max 5 for optimal performance
+            
+        except Exception as e:
+            total_time = time.time() - extraction_start
+            self.operational_metrics.json_failures += 1
+            self.operational_metrics.record_response_time(total_time)
+            
+            logger.error(f"❌ [OPERATIONAL] JSON extraction failed in {total_time:.3f}s: {e}")
+            self._log_operational_metrics("live_matches", total_time, 0, error=str(e))
+            
+            return []
     
     async def _concurrent_fetch_matches(self, endpoints: List[JSONEndpoint]) -> List[Match]:
-        """Fetch matches from multiple endpoints concurrently for ultra-fast response."""
-        logger.info(f"🚀 Starting concurrent fetch from {len(endpoints)} endpoints...")
+        """Fetch matches from multiple endpoints concurrently with circuit breaker protection."""
+        logger.info(f"🚀 [CONCURRENT] Starting fetch from {len(endpoints)} endpoints...")
         
-        # Create concurrent tasks for all endpoints
-        tasks = []
+        # Filter endpoints based on circuit breaker and health status
+        viable_endpoints = []
         for endpoint in endpoints:
-            if self._is_endpoint_healthy(endpoint):
-                task = asyncio.create_task(self._fetch_and_parse_endpoint(endpoint))
-                tasks.append(task)
+            if self._check_circuit_breaker(endpoint.parser):
+                viable_endpoints.append(endpoint)
+            else:
+                logger.debug(f"🚨 [CIRCUIT-BREAKER] Skipping {endpoint.parser} - circuit breaker OPEN")
+        
+        if not viable_endpoints:
+            logger.warning(f"⚠️ [CIRCUIT-BREAKER] All endpoints circuit breakers OPEN - attempting fallback")
+            # Try one endpoint anyway as a recovery mechanism
+            if endpoints:
+                viable_endpoints = [endpoints[0]]  # Try the first endpoint
+        
+        # Create concurrent tasks for viable endpoints
+        tasks = []
+        for endpoint in viable_endpoints:
+            task = asyncio.create_task(self._fetch_and_parse_endpoint(endpoint))
+            tasks.append((task, endpoint.parser))
         
         if not tasks:
+            logger.error(f"❌ [CONCURRENT] No viable endpoints available")
             return []
         
-        # Wait for first successful response or timeout after 1s for ultra-fast updates
+        # Wait for first successful response or timeout after 1.2s for ultra-fast updates
         matches = []
+        successful_endpoint = None
+        
         try:
-            done, pending = await asyncio.wait(tasks, timeout=1.0, return_when=asyncio.FIRST_COMPLETED)
+            task_list = [task for task, _ in tasks]
+            done, pending = await asyncio.wait(task_list, timeout=1.2, return_when=asyncio.FIRST_COMPLETED)
             
-            # Process completed tasks
+            # Process completed tasks in order of completion (fastest first)
             for task in done:
                 try:
                     result = await task
                     if result:
+                        # Find which endpoint this task belongs to
+                        for task_ref, endpoint_name in tasks:
+                            if task_ref == task:
+                                successful_endpoint = endpoint_name
+                                break
+                        
                         matches.extend(result)
-                        # If we get good data quickly, we can return immediately
+                        logger.info(f"⚡ [CONCURRENT] First success from {successful_endpoint}: {len(result)} matches")
+                        
+                        # If we get good data quickly, we can return immediately for speed
                         if len(matches) >= 2:
                             break
                 except Exception as e:
-                    logger.debug(f"Task failed: {e}")
+                    logger.debug(f"❌ [CONCURRENT] Task failed: {e}")
             
             # Cancel pending tasks to save resources
             for task in pending:
                 task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
                 
         except asyncio.TimeoutError:
-            logger.warning("⚠️ Concurrent fetch timeout - falling back to cached data")
+            logger.warning(f"⏰ [CONCURRENT] Timeout after 1.2s - attempting fallback")
+            
+            # Cancel all tasks on timeout
+            for task, _ in tasks:
+                task.cancel()
+            
+        if matches:
+            logger.info(f"✅ [CONCURRENT] Retrieved {len(matches)} matches from {successful_endpoint or 'unknown'}")
+        else:
+            logger.warning(f"⚠️ [CONCURRENT] No matches retrieved from any endpoint")
             
         return matches
     
@@ -333,18 +501,33 @@ class CricketJSONExtractor:
         return matches
     
     async def _fetch_and_parse_endpoint(self, endpoint: JSONEndpoint) -> List[Match]:
-        """Fetch and parse data from a single endpoint with timing."""
+        """Fetch and parse data from a single endpoint with timing and circuit breaker protection."""
         start_time = time.time()
+        endpoint_name = endpoint.parser
+        
+        # Check circuit breaker before attempting request
+        if not self._check_circuit_breaker(endpoint_name):
+            logger.warning(f"🚨 [CIRCUIT-BREAKER] {endpoint_name} is OPEN - skipping request")
+            return []
+        
+        # Check endpoint health before attempting request
+        if not self._is_endpoint_healthy(endpoint):
+            logger.debug(f"⚠️ [HEALTH-CHECK] {endpoint_name} marked unhealthy - attempting anyway")
         
         try:
             match_data = await self._fetch_json_data(endpoint)
+            response_time = time.time() - start_time
+            
             if match_data:
                 # Check if data has changed to avoid redundant parsing
                 data_hash = self._get_data_hash(match_data)
                 cache_key = f"{endpoint.parser}_{endpoint.url}"
                 
                 if cache_key in self.data_change_hashes and self.data_change_hashes[cache_key] == data_hash:
-                    logger.debug(f"📊 No data changes detected for {endpoint.parser}")
+                    logger.debug(f"📊 [DATA-CACHE] No changes detected for {endpoint.parser}")
+                    # Still count as success for circuit breaker
+                    self._mark_endpoint_healthy(endpoint, True)
+                    self._update_endpoint_metrics(endpoint_name, True, 0, response_time)
                     return []  # Return empty to indicate no changes
                 
                 # Parse new data
@@ -352,18 +535,33 @@ class CricketJSONExtractor:
                 if parsed_matches:
                     # Cache the data hash and update response time tracking
                     self.data_change_hashes[cache_key] = data_hash
-                    response_time = time.time() - start_time
                     self._update_endpoint_performance(endpoint, response_time)
                     
+                    # Record successful extraction
                     self._mark_endpoint_healthy(endpoint, True)
-                    logger.info(f"✅ {endpoint.parser} SUCCESS: {len(parsed_matches)} matches in {response_time:.3f}s")
+                    self._update_endpoint_metrics(endpoint_name, True, len(parsed_matches), response_time)
+                    
+                    logger.info(f"✅ [SUCCESS] {endpoint.parser}: {len(parsed_matches)} matches in {response_time*1000:.1f}ms")
                     return parsed_matches
                 else:
+                    # Parsing failed - consider this a partial failure
                     self._mark_endpoint_healthy(endpoint, False)
+                    self._update_endpoint_metrics(endpoint_name, False, 0, response_time)
+                    logger.warning(f"⚠️ [PARSE-FAIL] {endpoint.parser}: No matches parsed from response")
+            else:
+                # No data received - consider this a failure
+                self._mark_endpoint_healthy(endpoint, False)
+                self._update_endpoint_metrics(endpoint_name, False, 0, response_time)
+                logger.warning(f"⚠️ [NO-DATA] {endpoint.parser}: No data received in {response_time*1000:.1f}ms")
             
         except Exception as e:
-            logger.warning(f"⚠️ Endpoint {endpoint.url} failed: {e}")
+            response_time = time.time() - start_time
+            
+            # Record failure
             self._mark_endpoint_healthy(endpoint, False)
+            self._update_endpoint_metrics(endpoint_name, False, 0, response_time)
+            
+            logger.warning(f"❌ [ERROR] {endpoint.parser} failed in {response_time*1000:.1f}ms: {e}")
         
         return []
     
@@ -908,7 +1106,22 @@ class CricketJSONExtractor:
         return commentary
     
     def _is_endpoint_healthy(self, endpoint: JSONEndpoint) -> bool:
-        """Check if endpoint is healthy based on recent performance."""
+        """Check if endpoint is healthy based on recent performance and circuit breaker state."""
+        endpoint_name = endpoint.parser
+        
+        # First check circuit breaker state
+        if not self._check_circuit_breaker(endpoint_name):
+            return False
+        
+        # Check endpoint health metrics
+        endpoint_metrics = self.endpoint_metrics.get(endpoint_name)
+        if endpoint_metrics:
+            success_rate = endpoint_metrics.json_success_rate
+            if success_rate < 30:  # Less than 30% success rate
+                logger.debug(f"🏥 [HEALTH] {endpoint_name} unhealthy - {success_rate:.1f}% success rate")
+                return False
+        
+        # Check legacy health data
         health_data = self.endpoint_health.get(endpoint.url, {})
         
         # Consider healthy if:
@@ -927,8 +1140,215 @@ class CricketJSONExtractor:
         successes = health_data.get('successes', 0)
         if attempts > 0 and (successes / attempts) > 0.5:
             return True
-            
+        
+        logger.debug(f"🏥 [HEALTH] {endpoint_name} marked unhealthy - last success {time.time() - last_success:.0f}s ago")
         return False
+    
+    def _log_operational_metrics(self, operation_type: str, duration: float, match_count: int, 
+                                error: Optional[str] = None, additional_data: Optional[Dict] = None):
+        """Log comprehensive operational metrics for monitoring and analysis."""
+        metrics_data = {
+            'operation': operation_type,
+            'duration_ms': round(duration * 1000, 1),
+            'match_count': match_count,
+            'success': error is None,
+            'timestamp': time.time(),
+            **self.operational_metrics.to_dict()
+        }
+        
+        if error:
+            metrics_data['error'] = error
+        
+        if additional_data:
+            metrics_data.update(additional_data)
+        
+        # Calculate fallback rates for enhanced monitoring
+        fallback_rate = self.operational_metrics.html_fallback_rate
+        json_success_rate = self.operational_metrics.json_success_rate
+        
+        # Log with enhanced operational context
+        if error:
+            logger.error(f"🔍 [OPERATIONAL-METRICS] {operation_type.upper()} FAILED | "
+                        f"Duration: {duration*1000:.1f}ms | Error: {error} | "
+                        f"JSON Success Rate: {json_success_rate:.1f}% | "
+                        f"HTML Fallback Rate: {fallback_rate:.1f}% | "
+                        f"P95 Latency: {self.operational_metrics.p95_latency_ms:.1f}ms")
+        else:
+            logger.info(f"📊 [OPERATIONAL-METRICS] {operation_type.upper()} SUCCESS | "
+                       f"Duration: {duration*1000:.1f}ms | Matches: {match_count} | "
+                       f"JSON Success Rate: {json_success_rate:.1f}% | "
+                       f"HTML Fallback Rate: {fallback_rate:.1f}% | "
+                       f"P95 Latency: {self.operational_metrics.p95_latency_ms:.1f}ms | "
+                       f"Total Extracted: {self.operational_metrics.total_matches_extracted}")
+        
+        # Log detailed performance thresholds
+        if self.operational_metrics.p95_latency_ms > self.performance_thresholds['max_acceptable_latency_ms']:
+            logger.warning(f"⚠️ [PERFORMANCE-ALERT] P95 latency {self.operational_metrics.p95_latency_ms:.1f}ms exceeds threshold "
+                          f"of {self.performance_thresholds['max_acceptable_latency_ms']}ms")
+        
+        if json_success_rate < self.performance_thresholds['min_success_rate_percent']:
+            logger.warning(f"⚠️ [RELIABILITY-ALERT] JSON success rate {json_success_rate:.1f}% below threshold "
+                          f"of {self.performance_thresholds['min_success_rate_percent']}%")
+    
+    def _update_endpoint_metrics(self, endpoint_name: str, success: bool, match_count: int, response_time: float = 0.0):
+        """Update per-endpoint operational metrics."""
+        endpoint_metrics = self.endpoint_metrics[endpoint_name]
+        endpoint_metrics.json_attempts += 1
+        
+        if success:
+            endpoint_metrics.json_successes += 1
+            endpoint_metrics.total_matches_extracted += match_count
+        else:
+            endpoint_metrics.json_failures += 1
+        
+        if response_time > 0:
+            endpoint_metrics.record_response_time(response_time)
+        
+        # Update endpoint health score
+        self.operational_metrics.endpoint_health_scores[endpoint_name] = endpoint_metrics.json_success_rate
+        
+        # Update circuit breaker state
+        self._update_circuit_breaker(endpoint_name, success)
+        
+        # Log endpoint-specific metrics for detailed monitoring
+        logger.debug(f"📈 [ENDPOINT-METRICS] {endpoint_name} | "
+                    f"Success Rate: {endpoint_metrics.json_success_rate:.1f}% | "
+                    f"P95: {endpoint_metrics.p95_latency_ms:.1f}ms | "
+                    f"Matches: {match_count}")
+    
+    def _check_circuit_breaker(self, endpoint_name: str) -> bool:
+        """Check and update circuit breaker state for an endpoint."""
+        if endpoint_name not in self.circuit_breaker_states:
+            self.circuit_breaker_states[endpoint_name] = {
+                'failures': 0,
+                'last_failure': 0,
+                'state': 'closed'  # closed, open, half-open
+            }
+        
+        breaker = self.circuit_breaker_states[endpoint_name]
+        current_time = time.time()
+        
+        # Circuit breaker logic
+        if breaker['state'] == 'open':
+            # Check if we should attempt half-open
+            if current_time - breaker['last_failure'] > 30:  # 30 second timeout
+                breaker['state'] = 'half-open'
+                logger.info(f"🔄 [CIRCUIT-BREAKER] {endpoint_name} attempting half-open state")
+                return True
+            return False
+        
+        elif breaker['state'] == 'half-open':
+            # Allow one attempt
+            return True
+        
+        else:  # closed state
+            return True
+    
+    def _update_circuit_breaker(self, endpoint_name: str, success: bool):
+        """Update circuit breaker state based on request result."""
+        if endpoint_name not in self.circuit_breaker_states:
+            return
+        
+        breaker = self.circuit_breaker_states[endpoint_name]
+        
+        if success:
+            # Reset on success
+            breaker['failures'] = 0
+            if breaker['state'] == 'half-open':
+                breaker['state'] = 'closed'
+                logger.info(f"✅ [CIRCUIT-BREAKER] {endpoint_name} recovered - state: CLOSED")
+        else:
+            # Increment failures
+            breaker['failures'] += 1
+            breaker['last_failure'] = time.time()
+            
+            if breaker['failures'] >= self.performance_thresholds['max_circuit_breaker_failures']:
+                breaker['state'] = 'open'
+                self.operational_metrics.circuit_breaker_activations += 1
+                logger.warning(f"🚨 [CIRCUIT-BREAKER] {endpoint_name} opened due to {breaker['failures']} failures")
+    
+    def get_comprehensive_metrics(self) -> Dict[str, Any]:
+        """Get comprehensive operational metrics for monitoring dashboard."""
+        # Calculate recent matches per cycle average
+        recent_matches = list(self.data_source_stats['matches_per_cycle'])
+        avg_matches_per_cycle = statistics.mean(recent_matches) if recent_matches else 0
+        
+        # Calculate endpoint health summary
+        healthy_endpoints = sum(1 for score in self.operational_metrics.endpoint_health_scores.values() if score > 70)
+        total_endpoints = len(self.operational_metrics.endpoint_health_scores)
+        
+        return {
+            'timestamp': time.time(),
+            'overall_metrics': self.operational_metrics.to_dict(),
+            'data_source_performance': {
+                'json_first_attempts': self.data_source_stats['json_first_attempts'],
+                'json_first_successes': self.data_source_stats['json_first_successes'],
+                'json_first_success_rate': (self.data_source_stats['json_first_successes'] / 
+                                          max(1, self.data_source_stats['json_first_attempts'])) * 100,
+                'html_fallback_attempts': self.data_source_stats['html_fallback_attempts'],
+                'html_fallback_successes': self.data_source_stats['html_fallback_successes'],
+                'concurrent_extraction_cycles': self.data_source_stats['concurrent_extraction_cycles'],
+                'avg_matches_per_cycle': round(avg_matches_per_cycle, 1)
+            },
+            'endpoint_health': {
+                'healthy_endpoints': healthy_endpoints,
+                'total_endpoints': total_endpoints,
+                'health_percentage': (healthy_endpoints / max(1, total_endpoints)) * 100,
+                'individual_scores': self.operational_metrics.endpoint_health_scores
+            },
+            'circuit_breaker_status': {
+                endpoint: state['state'] for endpoint, state in self.circuit_breaker_states.items()
+            },
+            'performance_thresholds': self.performance_thresholds,
+            'alerts': self._generate_performance_alerts()
+        }
+    
+    def _generate_performance_alerts(self) -> List[Dict[str, Any]]:
+        """Generate performance alerts based on current metrics."""
+        alerts = []
+        
+        # P95 latency alert
+        if self.operational_metrics.p95_latency_ms > self.performance_thresholds['max_acceptable_latency_ms']:
+            alerts.append({
+                'type': 'latency_high',
+                'severity': 'warning',
+                'message': f"P95 latency {self.operational_metrics.p95_latency_ms:.1f}ms exceeds {self.performance_thresholds['max_acceptable_latency_ms']}ms threshold",
+                'value': self.operational_metrics.p95_latency_ms,
+                'threshold': self.performance_thresholds['max_acceptable_latency_ms']
+            })
+        
+        # JSON success rate alert
+        if self.operational_metrics.json_success_rate < self.performance_thresholds['min_success_rate_percent']:
+            alerts.append({
+                'type': 'json_success_rate_low',
+                'severity': 'error',
+                'message': f"JSON success rate {self.operational_metrics.json_success_rate:.1f}% below {self.performance_thresholds['min_success_rate_percent']}% threshold",
+                'value': self.operational_metrics.json_success_rate,
+                'threshold': self.performance_thresholds['min_success_rate_percent']
+            })
+        
+        # High fallback rate alert
+        if self.operational_metrics.html_fallback_rate > 20:  # More than 20% fallback is concerning
+            alerts.append({
+                'type': 'fallback_rate_high',
+                'severity': 'warning',
+                'message': f"HTML fallback rate {self.operational_metrics.html_fallback_rate:.1f}% is high, indicating JSON reliability issues",
+                'value': self.operational_metrics.html_fallback_rate,
+                'threshold': 20.0
+            })
+        
+        # Circuit breaker alerts
+        open_breakers = [endpoint for endpoint, state in self.circuit_breaker_states.items() if state['state'] == 'open']
+        if open_breakers:
+            alerts.append({
+                'type': 'circuit_breaker_open',
+                'severity': 'critical',
+                'message': f"Circuit breakers open for endpoints: {', '.join(open_breakers)}",
+                'value': len(open_breakers),
+                'threshold': 0
+            })
+        
+        return alerts
     
     def _mark_endpoint_healthy(self, endpoint: JSONEndpoint, success: bool):
         """Mark endpoint health status."""
