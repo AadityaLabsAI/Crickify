@@ -1,1 +1,3 @@
+# Railway Python Runtime Configuration
+# Specifies the exact Python version for consistent deployment
 python-3.11.10
