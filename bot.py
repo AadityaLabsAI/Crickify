@@ -1174,16 +1174,20 @@ class ProfessionalCricketBot:
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 # Update the user's message with fresh data (with timeout)
-                await asyncio.wait_for(
-                    self.bot_instance.edit_message_text(
-                        text=live_text,
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        parse_mode='Markdown',
-                        reply_markup=reply_markup
-                    ),
-                    timeout=2.0  # 2-second timeout per user update
-                )
+                if self.bot_instance:
+                    await asyncio.wait_for(
+                        self.bot_instance.edit_message_text(
+                            text=live_text,
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            parse_mode='Markdown',
+                            reply_markup=reply_markup
+                        ),
+                        timeout=2.0  # 2-second timeout per user update
+                    )
+                else:
+                    logger.error(f"❌ Bot instance not available for user {user_id} update")
+                    return False
                 
                 # Update last update time and activity
                 self.live_users[user_id]['last_update'] = current_time
