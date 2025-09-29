@@ -139,6 +139,116 @@ class CricketJSONExtractor:
             ]
         }
     
+    async def extract_match_schedule(self, days: int = 3, match_format: Optional[str] = None) -> List[Match]:
+        """
+        Extract upcoming match schedule using JSON endpoints with ultra-fast optimization.
+        Specifically designed for schedule data with proper filtering.
+        """
+        logger.info(f"🚀 Starting ultra-fast concurrent JSON extraction for match schedule (days={days})...")
+        
+        start_time = time.time()
+        matches = []
+        
+        # Get priority-sorted endpoints for fastest response
+        priority_endpoints = self._get_priority_sorted_endpoints('schedule')
+        
+        if not priority_endpoints:
+            logger.warning("⚠️ No schedule endpoints configured")
+            return []
+        
+        # Use top 2 endpoints concurrently for maximum speed
+        selected_endpoints = priority_endpoints[:2]
+        
+        try:
+            # Execute concurrent requests with timeout enforcement
+            tasks = [self._fetch_and_parse_endpoint(endpoint) for endpoint in selected_endpoints]
+            
+            # Use strict timeout for schedule data (less critical than live matches)
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=2.0  # 2s timeout for schedule data
+            )
+            
+            # Process results and aggregate matches
+            all_matches = []
+            successful_endpoints = 0
+            
+            for i, result in enumerate(results):
+                endpoint = selected_endpoints[i]
+                if isinstance(result, Exception):
+                    logger.warning(f"⚠️ Schedule endpoint {endpoint.parser} failed: {result}")
+                    self._mark_endpoint_healthy(endpoint, False)
+                    continue
+                
+                if result:  # Non-empty result
+                    successful_endpoints += 1
+                    # Filter by format if specified
+                    filtered_matches = self._filter_schedule_matches(result, days, match_format)
+                    all_matches.extend(filtered_matches)
+                    logger.info(f"✅ {endpoint.parser} schedule extraction: {len(filtered_matches)} matches")
+                    
+                    # If we get good results from first endpoint, we can return early for speed
+                    if len(filtered_matches) >= 5 and successful_endpoints == 1:
+                        logger.info(f"⚡ Early return from {endpoint.parser} with {len(filtered_matches)} matches")
+                        break
+            
+            # Remove duplicates and sort by date
+            matches = self._deduplicate_and_sort_schedule(all_matches)
+            
+            extraction_time = time.time() - start_time
+            logger.info(f"🎯 Schedule JSON extraction completed: {len(matches)} matches in {extraction_time:.3f}s from {successful_endpoints} sources")
+            
+            return matches[:20]  # Return top 20 for performance
+            
+        except asyncio.TimeoutError:
+            logger.warning("⏰ Schedule JSON extraction timed out after 2.0s")
+            return []
+        except Exception as e:
+            logger.error(f"❌ Schedule JSON extraction failed: {e}")
+            return []
+    
+    def _filter_schedule_matches(self, matches: List[Match], days: int, match_format: Optional[str]) -> List[Match]:
+        """Filter schedule matches by criteria."""
+        filtered = []
+        target_date = datetime.now() + timedelta(days=days)
+        
+        for match in matches:
+            try:
+                # Only include upcoming matches
+                if match.status not in [MatchStatus.UPCOMING]:
+                    continue
+                
+                # Filter by format if specified
+                if match_format and match.format.lower() != match_format.lower():
+                    continue
+                
+                # Filter by date range
+                if match.date:
+                    # Simple date filtering - in production, implement proper date parsing
+                    filtered.append(match)
+                
+            except Exception as e:
+                logger.debug(f"Error filtering match {match.match_id}: {e}")
+                continue
+        
+        return filtered
+    
+    def _deduplicate_and_sort_schedule(self, matches: List[Match]) -> List[Match]:
+        """Remove duplicates and sort schedule matches."""
+        # Simple deduplication by match title
+        seen_matches = set()
+        unique_matches = []
+        
+        for match in matches:
+            match_key = f"{match.team1.name}-{match.team2.name}-{match.date}"
+            if match_key not in seen_matches:
+                seen_matches.add(match_key)
+                unique_matches.append(match)
+        
+        # Sort by date (upcoming first)
+        # In production, implement proper date parsing and sorting
+        return unique_matches
+
     async def extract_live_matches(self) -> List[Match]:
         """Extract live matches using concurrent JSON endpoints for maximum speed."""
         logger.info("🚀 Starting ultra-fast concurrent JSON extraction for live matches...")

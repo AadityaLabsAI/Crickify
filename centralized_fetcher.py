@@ -10,13 +10,14 @@ Implements intelligent caching and prevents duplicate API calls.
 import asyncio
 import logging
 import time
+import statistics
 from typing import Dict, List, Optional, Any, Set
 from dataclasses import dataclass, field
 from datetime import datetime
 import threading
 import weakref
 
-from cricket_scraper import Match, get_live_matches, get_match_schedule, get_tournaments
+from cricket_scraper import Match, get_live_matches, get_match_schedule, get_tournaments, data_source_config
 from performance_cache import performance_cache
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ class CentralizedFetcher:
         # Thread safety
         self._lock = threading.RLock()
         
-        # Statistics
+        # Statistics with enhanced performance tracking
         self.stats = {
             'total_requests': 0,
             'deduplicated_requests': 0,  # Requests that were consolidated
@@ -87,6 +88,17 @@ class CentralizedFetcher:
             'total_fetch_time': 0.0,
             'broadcasts_sent': 0
         }
+        
+        # Performance instrumentation for p50/p95 latency tracking
+        self.latency_measurements: Dict[str, List[float]] = {}  # data_type -> [latencies]
+        self.cache_hit_rates: Dict[str, Dict[str, int]] = {}  # data_type -> {hits, misses}
+        self.max_latency_history = 100  # Keep last 100 measurements for p50/p95
+        
+        # Cache warming configuration
+        self.cache_warming_active = False
+        self.cache_warming_task: Optional[asyncio.Task] = None
+        self.active_requesters_count = 0
+        self.cache_warming_interval = 1.25  # 1.25s interval for cache warming
         
         # Background cleanup
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -248,6 +260,7 @@ class CentralizedFetcher:
             
             if cached_data:
                 self.stats['cache_hits'] += 1
+                self._record_cache_hit_rate(request.data_type, True)  # Record cache hit
                 logger.debug(f"⚡ Cache hit for: {cache_key}")
                 return FetchResult(
                     request_id=request.request_id,
@@ -255,6 +268,9 @@ class CentralizedFetcher:
                     success=True,
                     cache_hit=True
                 )
+            
+            # Record cache miss
+            self._record_cache_hit_rate(request.data_type, False)
             
             # Create future for this request
             future = asyncio.Future()
@@ -275,8 +291,17 @@ class CentralizedFetcher:
             
             # Cache the result
             if data:
+                # Aggressive caching strategy for sub-2s updates
                 cache = performance_cache.get_cache_for_type(request.data_type)
                 ttl = self._get_ttl_for_data_type(request.data_type)
+                
+                # Smart TTL adjustment based on data freshness and request frequency
+                if request.data_type == 'live_matches':
+                    # For live matches, use even shorter TTL if we have multiple active requesters
+                    if len(request.requesters) > 2:
+                        ttl = min(ttl, 1.0)  # Even more aggressive for high-demand scenarios
+                    logger.info(f"⚡ Caching live matches with TTL {ttl}s for {len(request.requesters)} requesters")
+                
                 cache.set(cache_key, data, ttl)
                 logger.debug(f"💾 Cached {request.data_type} data for {ttl}s")
             
@@ -334,7 +359,8 @@ class CentralizedFetcher:
     
     async def _perform_fetch(self, request: FetchRequest) -> Any:
         """
-        Perform the actual data fetch based on request type.
+        Perform the actual data fetch based on request type with performance instrumentation.
+        Now leverages JSON-first, HTML-fallback architecture with comprehensive monitoring.
         
         Args:
             request: The fetch request
@@ -342,26 +368,57 @@ class CentralizedFetcher:
         Returns:
             Fetched data
         """
-        if request.data_type == "live_matches":
-            # Use the main scraper's get_live_matches function
-            return await get_live_matches()
-            
-        elif request.data_type == "schedule":
-            # Use the main scraper's get_match_schedule function
-            params = request.parameters
-            return await get_match_schedule(
-                days=params.get('days', 3),
-                match_format=params.get('match_format'),
-                team_filter=params.get('team_filter'),
-                tournament_filter=params.get('tournament_filter')
-            )
-            
-        elif request.data_type == "tournaments":
-            # Use the main scraper's get_tournaments function
-            return await get_tournaments()
+        fetch_start_time = time.time()
         
-        else:
-            raise ValueError(f"Unknown data type: {request.data_type}")
+        try:
+            # Track active requesters for cache warming decision
+            self.active_requesters_count = len(request.requesters)
+            
+            if request.data_type == "live_matches":
+                # Use the enhanced get_live_matches function with JSON-first, HTML-fallback
+                logger.info(f"🎯 Centralized fetch: live_matches (requesters: {len(request.requesters)})")
+                data = await get_live_matches()
+                
+                # Start cache warming if we have multiple active requesters
+                if len(request.requesters) >= 1 and not self.cache_warming_active:
+                    self._start_cache_warming()
+                    
+            elif request.data_type == "schedule":
+                # Use the enhanced get_match_schedule function with JSON-first, HTML-fallback
+                params = request.parameters
+                logger.info(f"🎯 Centralized fetch: schedule (requesters: {len(request.requesters)})")
+                data = await get_match_schedule(
+                    days=params.get('days', 3),
+                    match_format=params.get('match_format'),
+                    team_filter=params.get('team_filter'),
+                    tournament_filter=params.get('tournament_filter')
+                )
+                
+            elif request.data_type == "tournaments":
+                # Use the main scraper's get_tournaments function
+                logger.info(f"🎯 Centralized fetch: tournaments (requesters: {len(request.requesters)})")
+                data = await get_tournaments()
+            
+            else:
+                raise ValueError(f"Unknown data type: {request.data_type}")
+            
+            fetch_time = time.time() - fetch_start_time
+            
+            # Record performance metrics for p50/p95 tracking
+            self._record_latency_measurement(request.data_type, fetch_time)
+            
+            logger.info(f"✅ Centralized fetch completed: {request.data_type} in {fetch_time:.3f}s, {len(data) if data else 0} items")
+            
+            return data
+            
+        except Exception as e:
+            fetch_time = time.time() - fetch_start_time
+            
+            # Record failed fetch latency as well
+            self._record_latency_measurement(request.data_type, fetch_time)
+            
+            logger.error(f"❌ Centralized fetch failed: {request.data_type} in {fetch_time:.3f}s - {e}")
+            raise
     
     def _get_ttl_for_data_type(self, data_type: str) -> float:
         """
@@ -374,17 +431,132 @@ class CentralizedFetcher:
         Returns:
             TTL in seconds
         """
-        # Fix: Align TTL with cache warming intervals to prevent premature expiration
+        # Optimized for sub-2-second updates with aggressive caching
         ttl_mapping = {
-            'live_matches': 5.0,   # 5 seconds (matches cache warming interval × 1.7)
-            'schedule': 180.0,     # 3 minutes (matches cache warming 120s × 1.5)
-            'tournaments': 450.0   # 7.5 minutes (matches cache warming 300s × 1.5)
+            'live_matches': 1.5,   # 1.5 seconds for sub-2s perceived updates
+            'schedule': 60.0,      # 1 minute for schedule data (faster refresh)
+            'tournaments': 300.0   # 5 minutes for tournament data
         }
         
         return ttl_mapping.get(data_type, 60.0)  # Default 1 minute
     
+    def _record_latency_measurement(self, data_type: str, latency: float):
+        """Record latency measurement for p50/p95 calculation."""
+        if data_type not in self.latency_measurements:
+            self.latency_measurements[data_type] = []
+        
+        self.latency_measurements[data_type].append(latency)
+        
+        # Keep only recent measurements for accurate percentiles
+        if len(self.latency_measurements[data_type]) > self.max_latency_history:
+            self.latency_measurements[data_type].pop(0)
+    
+    def _record_cache_hit_rate(self, data_type: str, is_hit: bool):
+        """Record cache hit/miss for hit rate calculation."""
+        if data_type not in self.cache_hit_rates:
+            self.cache_hit_rates[data_type] = {'hits': 0, 'misses': 0}
+        
+        if is_hit:
+            self.cache_hit_rates[data_type]['hits'] += 1
+        else:
+            self.cache_hit_rates[data_type]['misses'] += 1
+    
+    def _start_cache_warming(self):
+        """Start cache warming loop for live matches when ≥1 active requester."""
+        if self.cache_warming_active:
+            return
+            
+        self.cache_warming_active = True
+        
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                self.cache_warming_task = loop.create_task(self._cache_warming_worker())
+                logger.info(f"🔥 Started cache warming loop at {self.cache_warming_interval}s intervals")
+        except RuntimeError:
+            logger.warning("⚠️ Cannot start cache warming - no event loop running")
+    
+    def _stop_cache_warming(self):
+        """Stop cache warming loop."""
+        if self.cache_warming_task and not self.cache_warming_task.done():
+            self.cache_warming_task.cancel()
+            logger.info("🛑 Stopped cache warming loop")
+        
+        self.cache_warming_active = False
+    
+    async def _cache_warming_worker(self):
+        """Background worker for cache warming."""
+        while self.cache_warming_active:
+            try:
+                await asyncio.sleep(self.cache_warming_interval)
+                
+                # Only warm cache if we still have active requesters
+                if self.active_requesters_count >= 1:
+                    logger.debug(f"🔥 Cache warming: pre-fetching live_matches for {self.active_requesters_count} active requesters")
+                    
+                    # Create a synthetic request for cache warming
+                    warm_request = FetchRequest(
+                        request_id=f"cache_warm_{int(time.time())}",
+                        data_type="live_matches",
+                        parameters={},
+                        priority=1
+                    )
+                    warm_request.add_requester("cache_warmer")
+                    
+                    # Execute cache warming fetch
+                    try:
+                        result = await self._execute_fetch_request(warm_request)
+                        if result.success:
+                            logger.debug(f"🔥 Cache warming successful: {len(result.data) if result.data else 0} items cached")
+                        else:
+                            logger.debug("🔥 Cache warming failed but will retry")
+                    except Exception as e:
+                        logger.debug(f"🔥 Cache warming error (will retry): {e}")
+                else:
+                    # No active requesters, stop cache warming
+                    logger.info("🛑 No active requesters, stopping cache warming")
+                    self.cache_warming_active = False
+                    break
+                    
+            except asyncio.CancelledError:
+                logger.info("🛑 Cache warming worker cancelled")
+                break
+            except Exception as e:
+                logger.error(f"❌ Cache warming worker error: {e}")
+                await asyncio.sleep(5)  # Wait before retrying
+    
+    def get_performance_metrics(self) -> Dict[str, Any]:
+        """Get comprehensive performance metrics including p50/p95 latencies."""
+        metrics = {}
+        
+        for data_type, latencies in self.latency_measurements.items():
+            if latencies:
+                sorted_latencies = sorted(latencies)
+                n = len(sorted_latencies)
+                
+                metrics[data_type] = {
+                    'p50_latency_ms': sorted_latencies[int(n * 0.5)] * 1000,
+                    'p95_latency_ms': sorted_latencies[int(n * 0.95)] * 1000,
+                    'avg_latency_ms': sum(sorted_latencies) / n * 1000,
+                    'min_latency_ms': min(sorted_latencies) * 1000,
+                    'max_latency_ms': max(sorted_latencies) * 1000,
+                    'sample_count': n
+                }
+                
+                # Add cache hit rate if available
+                if data_type in self.cache_hit_rates:
+                    hits = self.cache_hit_rates[data_type]['hits']
+                    misses = self.cache_hit_rates[data_type]['misses']
+                    total = hits + misses
+                    if total > 0:
+                        metrics[data_type]['cache_hit_rate'] = (hits / total) * 100
+                        metrics[data_type]['cache_hits'] = hits
+                        metrics[data_type]['cache_misses'] = misses
+        
+        return metrics
+    
     def get_statistics(self) -> Dict[str, Any]:
-        """Get fetcher statistics."""
+        """Get comprehensive fetcher statistics including data source health."""
         with self._lock:
             total_requests = self.stats['total_requests']
             deduplication_rate = 0.0
@@ -399,6 +571,9 @@ class CentralizedFetcher:
             if successful_fetches > 0:
                 avg_fetch_time = self.stats['total_fetch_time'] / successful_fetches
             
+            # Get data source health metrics
+            health_metrics = data_source_config.get_health_metrics()
+            
             return {
                 **self.stats,
                 'active_requests': len(self.active_requests),
@@ -406,7 +581,14 @@ class CentralizedFetcher:
                 'deduplication_rate_percent': deduplication_rate,
                 'cache_hit_rate_percent': cache_hit_rate,
                 'average_fetch_time_seconds': avg_fetch_time,
-                'efficiency_score': (deduplication_rate + cache_hit_rate) / 2
+                'efficiency_score': (deduplication_rate + cache_hit_rate) / 2,
+                'data_source_health': health_metrics,
+                'performance_summary': {
+                    'total_requests': total_requests,
+                    'successful_fetches': successful_fetches,
+                    'deduplication_savings': self.stats['deduplicated_requests'],
+                    'cache_efficiency': cache_hit_rate
+                }
             }
 
 # Global centralized fetcher instance

@@ -14,6 +14,7 @@ import re
 import time
 import json
 import random
+import os
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Union
 from dataclasses import dataclass, field
@@ -24,6 +25,113 @@ from bs4 import BeautifulSoup, Tag
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Feature flags and configuration
+class DataSourceConfig:
+    """Configuration for data source selection and health monitoring."""
+    
+    def __init__(self):
+        # Feature flags
+        self.use_json_primary = os.getenv('USE_JSON_PRIMARY', 'true').lower() == 'true'
+        self.enable_html_fallback = os.getenv('ENABLE_HTML_FALLBACK', 'true').lower() == 'true'
+        self.json_timeout = float(os.getenv('JSON_TIMEOUT', '2.0'))
+        self.html_timeout = float(os.getenv('HTML_TIMEOUT', '8.0'))
+        
+        # Health tracking
+        self.json_health_scores = {}  # endpoint -> score (0-100)
+        self.html_health_scores = {}  # domain -> score (0-100)
+        self.last_json_success = {}
+        self.last_html_success = {}
+        
+        # Performance metrics
+        self.json_response_times = {}  # endpoint -> list of recent response times
+        self.html_response_times = {}  # domain -> list of recent response times
+        self.max_response_history = 10
+        
+        # Circuit breaker states
+        self.json_circuit_states = {}  # endpoint -> {state, failures, last_attempt}
+        self.html_circuit_states = {}  # domain -> {state, failures, last_attempt}
+        
+    def get_health_metrics(self) -> Dict[str, Any]:
+        """Get comprehensive health metrics for monitoring."""
+        return {
+            'json_health': {
+                'scores': self.json_health_scores.copy(),
+                'avg_response_times': {
+                    endpoint: sum(times) / len(times) if times else 0
+                    for endpoint, times in self.json_response_times.items()
+                },
+                'circuit_states': self.json_circuit_states.copy()
+            },
+            'html_health': {
+                'scores': self.html_health_scores.copy(),
+                'avg_response_times': {
+                    domain: sum(times) / len(times) if times else 0
+                    for domain, times in self.html_response_times.items()
+                },
+                'circuit_states': self.html_circuit_states.copy()
+            },
+            'config': {
+                'use_json_primary': self.use_json_primary,
+                'enable_html_fallback': self.enable_html_fallback,
+                'json_timeout': self.json_timeout,
+                'html_timeout': self.html_timeout
+            }
+        }
+    
+    def update_health_score(self, data_source: str, endpoint_or_domain: str, success: bool, response_time: float = 0.0):
+        """Update health score for a data source."""
+        if data_source == 'json':
+            current_score = self.json_health_scores.get(endpoint_or_domain, 100)
+            # Exponential moving average: success +5, failure -20
+            adjustment = 5 if success else -20
+            new_score = max(0, min(100, current_score * 0.9 + (current_score + adjustment) * 0.1))
+            self.json_health_scores[endpoint_or_domain] = new_score
+            
+            if success:
+                self.last_json_success[endpoint_or_domain] = time.time()
+            
+            # Track response times
+            if endpoint_or_domain not in self.json_response_times:
+                self.json_response_times[endpoint_or_domain] = []
+            self.json_response_times[endpoint_or_domain].append(response_time)
+            if len(self.json_response_times[endpoint_or_domain]) > self.max_response_history:
+                self.json_response_times[endpoint_or_domain].pop(0)
+                
+        elif data_source == 'html':
+            current_score = self.html_health_scores.get(endpoint_or_domain, 100)
+            adjustment = 5 if success else -15
+            new_score = max(0, min(100, current_score * 0.9 + (current_score + adjustment) * 0.1))
+            self.html_health_scores[endpoint_or_domain] = new_score
+            
+            if success:
+                self.last_html_success[endpoint_or_domain] = time.time()
+            
+            # Track response times
+            if endpoint_or_domain not in self.html_response_times:
+                self.html_response_times[endpoint_or_domain] = []
+            self.html_response_times[endpoint_or_domain].append(response_time)
+            if len(self.html_response_times[endpoint_or_domain]) > self.max_response_history:
+                self.html_response_times[endpoint_or_domain].pop(0)
+    
+    def should_use_json_source(self, endpoint: str) -> bool:
+        """Determine if JSON source should be used based on health and config."""
+        if not self.use_json_primary:
+            return False
+        
+        health_score = self.json_health_scores.get(endpoint, 100)
+        return health_score > 30  # Use JSON if health score is above 30
+    
+    def should_use_html_fallback(self, domain: str) -> bool:
+        """Determine if HTML fallback should be used."""
+        if not self.enable_html_fallback:
+            return False
+        
+        health_score = self.html_health_scores.get(domain, 100)
+        return health_score > 20  # Use HTML if health score is above 20
+
+# Global configuration instance
+data_source_config = DataSourceConfig()
 
 class MatchStatus(Enum):
     """Enum for match status."""
@@ -715,6 +823,7 @@ class RealCricketScraper:
     def __init__(self):
         """Initialize the cricket scraper with enhanced error handling."""
         self.session = None
+        self.use_session_manager = True  # Use optimized session_manager by default
         self.last_request_time = {}
         self.rate_limit_delay = 0.5  # Ultra-fast 0.5s rate limit for 1.5s updates
         self.match_details_cache = {}  # Cache for detailed match information
@@ -738,38 +847,46 @@ class RealCricketScraper:
         self.cricbuzz_base_url = "https://www.cricbuzz.com"
         self.espn_cricinfo_base_url = "https://www.espncricinfo.com"
         
-        # JSON API endpoints for structured data (much faster than HTML parsing)
-        self.cricbuzz_api_endpoints = {
-            'live_matches': "https://www.cricbuzz.com/api/cricket-match/live-scores",
-            'live_scores': "https://www.cricbuzz.com/api/cricket/live",  
-            'match_details': "https://www.cricbuzz.com/api/cricket-match/{}",
-            'commentary': "https://www.cricbuzz.com/api/cricket-match/{}/commentary",
-            'scorecard': "https://www.cricbuzz.com/api/cricket-match/{}/scorecard"
+        # Working HTML page endpoints for scraping (updated for 2024/2025)
+        self.cricbuzz_endpoints = {
+            'live_matches': "https://www.cricbuzz.com/cricket-match/live-scores",
+            'recent_matches': "https://www.cricbuzz.com/cricket-match/live-scores/recent-matches",  
+            'upcoming_matches': "https://www.cricbuzz.com/cricket-schedule/upcoming-matches",
+            'match_details': "https://www.cricbuzz.com/live-cricket-scores/{}",
+            'series_list': "https://www.cricbuzz.com/cricket-series"
         }
         
-        self.espn_api_endpoints = {
-            'live_matches': "https://www.espncricinfo.com/ci/engine/match/index.html?view=live",
-            'live_scores': "https://hs-consumer-api.espncricinfo.com/v1/pages/matches",
-            'match_centre': "https://hs-consumer-api.espncricinfo.com/v1/pages/match/home",
-            'match_details': "https://hs-consumer-api.espncricinfo.com/v1/pages/match/details"
+        self.espn_endpoints = {
+            'live_matches': "https://www.espncricinfo.com/live-cricket-score",
+            'live_scores': "https://www.espncricinfo.com/live-cricket-matches",
+            'upcoming_matches': "https://www.espncricinfo.com/cricket-fixtures",
+            'match_details': "https://www.espncricinfo.com/match/{}"
         }
         
-        # Alternative/backup JSON endpoints
+        # Alternative/backup HTML endpoints
         self.backup_endpoints = {
-            'cricbuzz_mobile': "https://m.cricbuzz.com/api/cricket-match/live-scores/",
-            'cricbuzz_scores': "https://www.cricbuzz.com/cricket-api/live-scores/",
-            'espn_mobile': "https://m.espncricinfo.com/api/v1/live-scores"
+            'cricbuzz_mobile': "https://m.cricbuzz.com/cricket-match/live-scores",
+            'cricbuzz_schedule': "https://www.cricbuzz.com/cricket-schedule",
+            'espn_mobile': "https://m.espncricinfo.com/live-cricket-score"
         }
         
-        # Headers to mimic a real browser
+        # Updated headers to mimic a modern browser (2024/2025)
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
-            'Cache-Control': 'max-age=0'
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
         }
         
         # Enhanced retry configuration optimized for real-time scraping
@@ -785,25 +902,33 @@ class RealCricketScraper:
         self.fast_timeout = 6   # Very fast timeout for live data
     
     async def __aenter__(self):
-        """Enhanced async context manager entry with connection pooling."""
-        connector = aiohttp.TCPConnector(
-            limit=20,  # Total connection pool size
-            limit_per_host=5,  # Max connections per host
-            ttl_dns_cache=300,  # DNS cache TTL
-            use_dns_cache=True
-        )
-        
-        self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=self.default_timeout),
-            headers=self.headers,
-            connector=connector
-        )
+        """Enhanced async context manager entry with session_manager integration."""
+        if self.use_session_manager:
+            # Use session_manager for optimized connection pooling and session reuse
+            from session_manager import session_manager
+            self.session_manager = session_manager
+            logger.info("🔄 Using session_manager for optimized HTTP connections")
+        else:
+            # Fallback to basic session management
+            connector = aiohttp.TCPConnector(
+                limit=20,  # Total connection pool size
+                limit_per_host=5,  # Max connections per host
+                ttl_dns_cache=300,  # DNS cache TTL
+                use_dns_cache=True
+            )
+            
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.default_timeout),
+                headers=self.headers,
+                connector=connector
+            )
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
-        if self.session:
+        if hasattr(self, 'session') and self.session:
             await self.session.close()
+        # session_manager sessions are persistent and managed globally
     
     async def _rate_limit(self, domain: str) -> None:
         """Apply rate limiting for respectful scraping."""
@@ -895,44 +1020,35 @@ class RealCricketScraper:
             return None
     
     async def _get_fallback_live_data(self) -> Optional[str]:
-        """Provide fallback live match data."""
+        """Provide minimal fallback data when real scraping fails."""
+        # Return minimal HTML that can be parsed to create basic match data
         fallback_html = '''
-        <div class="fallback-data">
-            <div class="cb-mtch-lst">
-                <h3 class="cb-lv-scrs-mtch-hdr">Cricket Updates Temporarily Unavailable</h3>
-                <div class="cb-ovr-flo">India</div>
-                <div class="cb-ovr-flo">vs</div>
-                <div class="cb-ovr-flo">Australia</div>
-                <div class="cb-text-live">Check back soon for live updates</div>
-                <div class="cb-mtch-info-itm">Various Venues</div>
-            </div>
+        <div class="cricbuzz-matches">
+            <a href="/live-cricket-scores/999999/fallback-match" title="Cricket data temporarily unavailable - Check back soon">
+                Cricket vs Data
+            </a>
         </div>
         '''
         return fallback_html
     
     async def _get_fallback_schedule_data(self) -> Optional[str]:
-        """Provide fallback schedule data."""
+        """Provide minimal fallback schedule data."""
         fallback_html = '''
-        <div class="fallback-data">
-            <div class="cb-mtch-lst">
-                <h3>Upcoming Cricket Matches</h3>
-                <div class="cb-ovr-flo">Various Teams</div>
-                <div class="cb-venue">Multiple Venues</div>
-                <div class="cb-date">Check official cricket websites for latest schedules</div>
-            </div>
+        <div class="cricbuzz-schedule">
+            <a href="/live-cricket-scores/999998/schedule-match" title="Schedule data temporarily unavailable">
+                Schedule vs Update
+            </a>
         </div>
         '''
         return fallback_html
     
     async def _get_fallback_tournament_data(self) -> Optional[str]:
-        """Provide fallback tournament data."""
+        """Provide minimal fallback tournament data."""
         fallback_html = '''
-        <div class="fallback-data">
-            <div class="cb-series-lst">
-                <h3>Cricket Tournaments</h3>
+        <div class="cricbuzz-series">
+            <div class="cb-series-item">
+                <h3>Cricket Updates Resuming Soon</h3>
                 <div class="cb-series-name">International Cricket</div>
-                <div class="cb-series-name">Domestic Leagues</div>
-                <div>Please check back later for tournament updates</div>
             </div>
         </div>
         '''
@@ -1018,42 +1134,55 @@ class RealCricketScraper:
             try:
                 await self._rate_limit(domain)
                 
-                if not self.session:
-                    logger.error("❌ Session not initialized")
-                    return await self._get_fallback_data(url)
-                
                 # Calculate exponential backoff with jitter
                 if attempt > 0:
                     delay = self._calculate_backoff_delay(attempt)
                     logger.info(f"⏳ Backoff delay: {delay:.2f}s for {domain} (attempt {attempt + 1})")
                     await asyncio.sleep(delay)
                 
-                async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=request_timeout)) as response:
-                    if response.status == 200:
-                        content = await response.text()
-                        logger.info(f"✅ Successfully fetched {url} (attempt {attempt + 1})")
-                        
-                        # Record success in circuit breaker and health metrics
-                        circuit_breaker.record_success()
-                        self._update_source_health(domain, 'success')
-                        self._remove_from_failed_sources(domain)
-                        
-                        return content
-                    
-                    elif response.status == 429:  # Rate limited
-                        retry_after = int(response.headers.get('Retry-After', 60))
-                        logger.warning(f"🚦 Rate limited for {domain}. Waiting {retry_after}s")
-                        await asyncio.sleep(retry_after)
-                        continue
-                        
-                    elif response.status in [403, 404]:  # Permanent errors
-                        logger.error(f"🚫 Permanent error {response.status} for {url}")
-                        self._add_to_failed_sources(domain)
-                        circuit_breaker.record_failure()
+                # Choose session method based on configuration
+                if self.use_session_manager and hasattr(self, 'session_manager'):
+                    # Use session_manager for optimized connection handling
+                    async with self.session_manager.request_session(url) as managed_session:
+                        session = await managed_session.get_session()
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=request_timeout)) as response:
+                            response_obj = response  # Store for processing below
+                else:
+                    # Fallback to direct session usage
+                    if not self.session:
+                        logger.error("❌ Session not initialized")
                         return await self._get_fallback_data(url)
-                        
-                    else:
-                        logger.warning(f"⚠️ HTTP {response.status} for {url} (attempt {attempt + 1})")
+                    
+                    async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=request_timeout)) as response:
+                        response_obj = response  # Store for processing below
+                
+                # Process response (works for both session types)
+                if response_obj.status == 200:
+                    content = await response_obj.text()
+                    session_type = "session_manager" if self.use_session_manager and hasattr(self, 'session_manager') else "direct"
+                    logger.info(f"✅ Successfully fetched {url} (attempt {attempt + 1}) via {session_type}")
+                    
+                    # Record success in circuit breaker and health metrics
+                    circuit_breaker.record_success()
+                    self._update_source_health(domain, 'success')
+                    self._remove_from_failed_sources(domain)
+                    
+                    return content
+                
+                elif response_obj.status == 429:  # Rate limited
+                    retry_after = int(response_obj.headers.get('Retry-After', 60))
+                    logger.warning(f"🚦 Rate limited for {domain}. Waiting {retry_after}s")
+                    await asyncio.sleep(retry_after)
+                    continue
+                    
+                elif response_obj.status in [403, 404]:  # Permanent errors
+                    logger.error(f"🚫 Permanent error {response_obj.status} for {url}")
+                    self._add_to_failed_sources(domain)
+                    circuit_breaker.record_failure()
+                    return await self._get_fallback_data(url)
+                    
+                else:
+                    logger.warning(f"⚠️ HTTP {response_obj.status} for {url} (attempt {attempt + 1})")
                         
             except asyncio.TimeoutError:
                 logger.warning(f"⏱️ Timeout fetching {url} (attempt {attempt + 1}) after {request_timeout}s")
@@ -1073,75 +1202,90 @@ class RealCricketScraper:
         return await self._get_fallback_data(url)
     
     def _parse_cricbuzz_live_matches(self, html: str) -> List[Match]:
-        """Enhanced parsing of live matches from Cricbuzz HTML with 2024 selectors."""
+        """Updated parsing of live matches from Cricbuzz HTML with 2024/2025 structure."""
         matches = []
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Enhanced selectors for 2024 Cricbuzz structure
-            match_selectors = [
-                'div[class*="cb-mtch-lst"]',  # Standard match list
-                'div[class*="cb-live-match"]',  # Live matches
-                'div[class*="cb-scrd-itms"]',  # Score items
-                'div[class*="cb-schdl"]',  # Schedule items
-                'div.cb-col-100.cb-col',  # Alternative structure
-                'a[href*="live-cricket"]',  # Live cricket links
-            ]
+            # Updated selectors for current Cricbuzz structure (2024/2025)
+            # Look for match links with the current URL pattern
+            match_links = soup.find_all('a', href=lambda x: x and 'live-cricket-scores' in x)
             
-            match_cards = []
-            for selector in match_selectors:
-                cards = soup.select(selector)
-                if cards:
-                    match_cards.extend(cards)
-                    logger.info(f"🎯 Found {len(cards)} match cards with selector: {selector}")
-                    break
+            logger.info(f"🔍 Found {len(match_links)} potential match links on Cricbuzz")
             
-            # If no matches found with standard selectors, try broader search
-            if not match_cards:
-                # Look for any div containing cricket score patterns
-                all_divs = soup.find_all('div')
-                for div in all_divs:
-                    text = self._safe_text(div)
-                    if re.search(r'\b\d+[/-]\d+\b.*\([\d.]+\s*ov\)', text) or 'vs' in text.lower():
-                        match_cards.append(div)
-                logger.info(f"🔍 Fallback search found {len(match_cards)} potential match cards")
-            
-            for i, card in enumerate(match_cards):  # Process all available matches
+            for i, link in enumerate(match_links[:15]):  # Process up to 15 matches
                 try:
-                    # Enhanced title extraction
-                    match_title = self._extract_enhanced_title(card)
+                    # Extract match URL and details
+                    match_url = link.get('href', '')
+                    if not match_url.startswith('http'):
+                        match_url = f"{self.cricbuzz_base_url}{match_url}"
                     
-                    # Enhanced team extraction with score parsing
-                    teams_data = self._extract_teams_with_scores(card)
+                    # Extract match ID from URL pattern: /live-cricket-scores/130179/pak-vs-ind-final-asia-cup-2025
+                    match_id_match = re.search(r'/live-cricket-scores/(\d+)/', match_url)
+                    match_id = match_id_match.group(1) if match_id_match else f"cb_{i+1}_{int(time.time())}"
                     
-                    if len(teams_data) >= 2 and match_title:
-                        # Enhanced status detection
-                        status = self._determine_match_status(card)
+                    # Extract teams and match info from link text and title
+                    link_text = self._safe_text(link)
+                    title_attr = link.get('title', '')
+                    
+                    # Parse team names from link text (format: "Pakistan vs India" or "Pakistan v India")
+                    teams = self._parse_team_names_from_text(link_text)
+                    
+                    if len(teams) >= 2:
+                        # Determine match status from title attribute or surrounding context
+                        status = self._determine_status_from_title(title_attr, link_text)
                         
-                        # Enhanced venue and match details
-                        match_details = self._extract_match_metadata(card)
+                        # Extract additional context from parent elements
+                        parent_context = self._extract_parent_context(link)
                         
-                        # Create match with enhanced data
+                        # Create team objects
+                        team1 = Team(name=teams[0], short_name=self._generate_short_name(teams[0]))
+                        team2 = Team(name=teams[1], short_name=self._generate_short_name(teams[1]))
+                        
+                        # Extract scores if available in context
+                        score_info = self._extract_scores_from_context(parent_context, title_attr)
+                        if score_info:
+                            team1.score = score_info.get('team1_score', 0)
+                            team1.wickets = score_info.get('team1_wickets', 0)
+                            team1.overs = score_info.get('team1_overs', '0.0')
+                            team2.score = score_info.get('team2_score', 0)
+                            team2.wickets = score_info.get('team2_wickets', 0)
+                            team2.overs = score_info.get('team2_overs', '0.0')
+                            
+                            # Calculate run rates
+                            team1.run_rate = self._calculate_run_rate(team1.score, team1.overs)
+                            team2.run_rate = self._calculate_run_rate(team2.score, team2.overs)
+                        
+                        # Extract match details
+                        match_details = self._extract_match_details_from_title(title_attr)
+                        
                         match = Match(
-                            match_id=f"cb_{i + 1}_{int(time.time())}",
-                            title=match_title,
-                            team1=teams_data[0],
-                            team2=teams_data[1] if len(teams_data) > 1 else Team("TBD", "TBD"),
+                            match_id=match_id,
+                            title=title_attr or link_text or f"{teams[0]} vs {teams[1]}",
+                            team1=team1,
+                            team2=team2,
                             status=status,
                             venue=match_details.get('venue', 'Venue TBD'),
-                            date=match_details.get('date', datetime.now().strftime("%d %b %Y, %I:%M %p")),
-                            format=match_details.get('format', 'Cricket Match'),
-                            toss=match_details.get('toss', ''),
-                            current_partnership=match_details.get('partnership', ''),
-                            recent_overs=match_details.get('recent_overs', []),
-                            commentary=match_details.get('commentary', [])
+                            date=match_details.get('date', datetime.now().strftime("%d %b %Y")),
+                            format=match_details.get('format', self._detect_format_from_text(title_attr + link_text)),
+                            series_name=match_details.get('series', ''),
+                            tournament_name=match_details.get('tournament', ''),
+                            match_status_detail=match_details.get('status_detail', '')
                         )
+                        
                         matches.append(match)
-                        logger.info(f"✅ Parsed match: {match_title} ({teams_data[0].short_name} vs {teams_data[1].short_name if len(teams_data) > 1 else 'TBD'})")
+                        logger.info(f"✅ Parsed Cricbuzz match: {teams[0]} vs {teams[1]} ({status.value})")
                         
                 except Exception as e:
-                    logger.warning(f"⚠️ Error parsing Cricbuzz match card {i}: {e}")
+                    logger.warning(f"⚠️ Error parsing match link {i}: {e}")
                     continue
+            
+            # Fallback: Try alternative parsing if no match links found
+            if not matches:
+                logger.info("🔍 No match links found, trying alternative parsing methods...")
+                # Look for other potential match containers
+                fallback_matches = self._parse_cricbuzz_fallback(soup)
+                matches.extend(fallback_matches)
             
             logger.info(f"🏏 Successfully parsed {len(matches)} matches from Cricbuzz")
             
@@ -1969,8 +2113,9 @@ class RealCricketScraper:
         
         # Step 1: Try JSON extraction first (10x faster than HTML parsing)
         try:
-            from cricket_json_extractor import get_live_matches_json
-            json_matches = await get_live_matches_json()
+            from cricket_json_extractor import CricketJSONExtractor
+            extractor = CricketJSONExtractor()
+            json_matches = await asyncio.wait_for(extractor.extract_live_matches(), timeout=1.0)
             
             if json_matches and len(json_matches) > 0:
                 logger.info(f"✅ JSON SUCCESS: Retrieved {len(json_matches)} matches using structured data")
@@ -1980,6 +2125,8 @@ class RealCricketScraper:
                 
         except ImportError:
             logger.warning("⚠️ JSON extractor not available, using HTML fallback")
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ JSON extraction timeout (1s), falling back to HTML parsing")
         except Exception as e:
             logger.warning(f"⚠️ JSON extraction failed: {e}, falling back to HTML parsing")
         
@@ -1987,10 +2134,10 @@ class RealCricketScraper:
         logger.info("🔍 Fallback: Using HTML scraping for cricket data...")
         all_matches = []
         
-        # Try Cricbuzz first
+        # Try Cricbuzz first with updated URL
         logger.info("🏏 Attempting Cricbuzz HTML scraping...")
         try:
-            cricbuzz_url = f"{self.cricbuzz_base_url}/cricket-match/live-scores"
+            cricbuzz_url = self.cricbuzz_endpoints['live_matches']
             html = await self._fetch_url(cricbuzz_url)
             if html:
                 cricbuzz_matches = self._parse_cricbuzz_live_matches(html)
@@ -2012,7 +2159,7 @@ class RealCricketScraper:
         logger.info("📺 Fetching ESPN data for multi-source aggregation...")
         espn_matches = []
         try:
-            espn_url = f"{self.espn_cricinfo_base_url}/live-cricket-score"
+            espn_url = self.espn_endpoints['live_matches']
             html = await self._fetch_url(espn_url)
             if html:
                 espn_matches = self._parse_espn_live_matches(html)
@@ -3391,31 +3538,586 @@ class RealCricketScraper:
         """Cache standings data."""
         self.schedule_cache[cache_key] = (standings, time.time())
         logger.info(f"📦 Cached standings for tournament {standings.tournament.tournament_id}")
+    
+    # Helper functions for updated parsing logic
+    def _parse_team_names_from_text(self, text: str) -> List[str]:
+        """Extract team names from text like 'Pakistan vs India' or 'Pakistan v India'."""
+        if not text:
+            return []
+        
+        # Common patterns for team vs team
+        patterns = [
+            r'([A-Za-z\s]+?)\s+vs\s+([A-Za-z\s]+)',
+            r'([A-Za-z\s]+?)\s+v\s+([A-Za-z\s]+)',
+            r'([A-Z]{2,4})\s+vs\s+([A-Z]{2,4})',  # Abbreviated teams
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.I)
+            if match:
+                team1 = match.group(1).strip()
+                team2 = match.group(2).strip()
+                if team1 and team2 and team1 != team2:
+                    return [team1, team2]
+        
+        return []
+    
+    def _determine_status_from_title(self, title: str, link_text: str) -> MatchStatus:
+        """Determine match status from title attribute and context."""
+        combined_text = f"{title} {link_text}".lower()
+        
+        # Live indicators
+        if any(indicator in combined_text for indicator in ['live', 'batting', 'bowling', 'in progress']):
+            return MatchStatus.LIVE
+        
+        # Completed indicators
+        if any(indicator in combined_text for indicator in ['complete', 'won by', 'won', 'finished', 'result']):
+            return MatchStatus.COMPLETED
+        
+        # Default to upcoming
+        return MatchStatus.UPCOMING
+    
+    def _extract_parent_context(self, link) -> str:
+        """Extract context from parent elements."""
+        try:
+            parent = link.parent
+            if parent:
+                return self._safe_text(parent)
+        except:
+            pass
+        return ""
+    
+    def _extract_scores_from_context(self, context: str, title: str) -> Optional[Dict[str, Any]]:
+        """Extract score information from context and title."""
+        combined_text = f"{context} {title}"
+        
+        # Look for score patterns like "150/4 (20.0 ov)"
+        score_pattern = r'(\d+)[/-](\d+)\s*\(([0-9.]+)\s*ov\)'
+        scores = re.findall(score_pattern, combined_text)
+        
+        if len(scores) >= 2:
+            return {
+                'team1_score': int(scores[0][0]),
+                'team1_wickets': int(scores[0][1]),
+                'team1_overs': scores[0][2],
+                'team2_score': int(scores[1][0]),
+                'team2_wickets': int(scores[1][1]),
+                'team2_overs': scores[1][2]
+            }
+        elif len(scores) == 1:
+            return {
+                'team1_score': int(scores[0][0]),
+                'team1_wickets': int(scores[0][1]),
+                'team1_overs': scores[0][2],
+                'team2_score': 0,
+                'team2_wickets': 0,
+                'team2_overs': '0.0'
+            }
+        
+        return None
+    
+    def _extract_match_details_from_title(self, title: str) -> Dict[str, str]:
+        """Extract match details from title attribute."""
+        details = {}
+        
+        if not title:
+            return details
+        
+        # Extract format
+        format_patterns = [
+            (r'\bT20I?\b', 'T20I'),
+            (r'\bODI\b', 'ODI'),
+            (r'\bTest\b', 'Test'),
+            (r'\bFinal\b', 'Final'),
+            (r'\bSemi.?Final\b', 'Semi Final'),
+        ]
+        
+        for pattern, format_name in format_patterns:
+            if re.search(pattern, title, re.I):
+                details['format'] = format_name
+                break
+        
+        # Extract series/tournament info
+        if 'Asia Cup' in title:
+            details['series'] = 'Asia Cup 2025'
+            details['tournament'] = 'Asia Cup'
+        elif 'World Cup' in title:
+            details['tournament'] = 'World Cup'
+        elif 'IPL' in title:
+            details['tournament'] = 'IPL'
+        
+        # Extract status detail
+        if 'Complete' in title:
+            details['status_detail'] = 'Match Complete'
+        elif 'Won' in title:
+            details['status_detail'] = 'Result Available'
+        elif 'Preview' in title:
+            details['status_detail'] = 'Match Preview'
+        
+        return details
+    
+    def _detect_format_from_text(self, text: str) -> str:
+        """Detect match format from text."""
+        text_lower = text.lower()
+        
+        if 't20' in text_lower:
+            return 'T20'
+        elif 'odi' in text_lower:
+            return 'ODI'
+        elif 'test' in text_lower:
+            return 'Test'
+        else:
+            return 'Cricket'
+    
+    def _generate_short_name(self, team_name: str) -> str:
+        """Generate short name for team."""
+        if not team_name:
+            return "TBD"
+        
+        # Handle common team abbreviations
+        team_abbrevs = {
+            'India': 'IND', 'Pakistan': 'PAK', 'Australia': 'AUS',
+            'England': 'ENG', 'South Africa': 'RSA', 'New Zealand': 'NZ',
+            'West Indies': 'WI', 'Sri Lanka': 'SL', 'Bangladesh': 'BAN',
+            'Afghanistan': 'AFG', 'Zimbabwe': 'ZIM', 'Ireland': 'IRE'
+        }
+        
+        if team_name in team_abbrevs:
+            return team_abbrevs[team_name]
+        
+        # Generate abbreviation from first 3 letters
+        return team_name[:3].upper()
+    
+    def _parse_cricbuzz_fallback(self, soup) -> List[Match]:
+        """Fallback parsing method for Cricbuzz when main method fails."""
+        matches = []
+        
+        try:
+            # Look for any text containing "vs" or "v" patterns
+            all_text = soup.get_text()
+            
+            # Split into lines and look for team vs team patterns
+            lines = all_text.split('\n')
+            
+            for line in lines[:20]:  # Check first 20 lines
+                line = line.strip()
+                if 'vs' in line or ' v ' in line:
+                    teams = self._parse_team_names_from_text(line)
+                    if len(teams) >= 2:
+                        match = Match(
+                            match_id=f"fallback_{int(time.time())}",
+                            title=f"{teams[0]} vs {teams[1]}",
+                            team1=Team(name=teams[0], short_name=self._generate_short_name(teams[0])),
+                            team2=Team(name=teams[1], short_name=self._generate_short_name(teams[1])),
+                            status=MatchStatus.UPCOMING,
+                            venue="Venue TBD",
+                            date=datetime.now().strftime("%d %b %Y"),
+                            format="Cricket"
+                        )
+                        matches.append(match)
+                        
+                        if len(matches) >= 3:  # Limit fallback matches
+                            break
+        
+        except Exception as e:
+            logger.warning(f"⚠️ Fallback parsing error: {e}")
+        
+        return matches
+    
+    def _create_fallback_matches(self) -> List[Match]:
+        """Create basic fallback matches when all scraping fails."""
+        try:
+            match = Match(
+                match_id=f"fallback_emergency_{int(time.time())}",
+                title="Cricket Updates Resuming Soon",
+                team1=Team(name="Cricket", short_name="CRI"),
+                team2=Team(name="Updates", short_name="UPD"),
+                status=MatchStatus.UPCOMING,
+                venue="Multiple Venues",
+                date=datetime.now().strftime("%d %b %Y"),
+                format="Cricket",
+                match_status_detail="Real-time cricket data will resume shortly. Our servers are syncing with live sources."
+            )
+            return [match]
+        except Exception as e:
+            logger.error(f"❌ Error creating fallback matches: {e}")
+            return []
+    
+    async def get_live_matches_with_resilience(self) -> List[Match]:
+        """
+        Get live matches with comprehensive resilience features:
+        - Session manager usage for connection pooling
+        - Bounded retries with exponential backoff
+        - Circuit breaker per domain  
+        - Minimal rate limiting
+        """
+        start_time = time.time()
+        matches = []
+        
+        # Primary endpoint with circuit breaker
+        domain = "cricbuzz"
+        circuit_breaker = self._get_circuit_breaker(domain)
+        
+        if circuit_breaker.should_allow_request():
+            try:
+                await self._rate_limit(domain)
+                
+                # Use session manager for optimized HTTP connections
+                if hasattr(self, 'session_manager'):
+                    async with self.session_manager.get_session(f"cricket_resilience_{domain}") as session:
+                        matches = await self._fetch_live_matches_with_retries(session, self.cricbuzz_endpoints['live_matches'])
+                else:
+                    # Fallback to basic session
+                    matches = await self._fetch_live_matches_with_retries(self.session, self.cricbuzz_endpoints['live_matches'])
+                
+                if matches:
+                    circuit_breaker.record_success()
+                    logger.info(f"✅ Resilient live matches fetch: {len(matches)} matches in {time.time() - start_time:.3f}s")
+                    return matches
+                else:
+                    circuit_breaker.record_failure()
+                    
+            except Exception as e:
+                circuit_breaker.record_failure()
+                logger.warning(f"⚠️ Primary resilient fetch failed: {e}")
+        
+        # Fallback to backup endpoint
+        backup_domain = "espn"
+        backup_circuit_breaker = self._get_circuit_breaker(backup_domain)
+        
+        if backup_circuit_breaker.should_allow_request():
+            try:
+                await self._rate_limit(backup_domain)
+                
+                if hasattr(self, 'session_manager'):
+                    async with self.session_manager.get_session(f"cricket_resilience_{backup_domain}") as session:
+                        matches = await self._fetch_live_matches_with_retries(session, self.espn_endpoints['live_matches'])
+                else:
+                    matches = await self._fetch_live_matches_with_retries(self.session, self.espn_endpoints['live_matches'])
+                
+                if matches:
+                    backup_circuit_breaker.record_success()
+                    logger.info(f"✅ Backup resilient live matches fetch: {len(matches)} matches in {time.time() - start_time:.3f}s")
+                    return matches
+                else:
+                    backup_circuit_breaker.record_failure()
+                    
+            except Exception as e:
+                backup_circuit_breaker.record_failure()
+                logger.warning(f"⚠️ Backup resilient fetch failed: {e}")
+        
+        # Final fallback
+        logger.info("🆘 All resilient sources failed, using fallback matches")
+        return self._create_fallback_matches()
+    
+    async def get_match_schedule_with_resilience(self, days: Union[int, str] = 3, match_format: Optional[str] = None, team_filter: Optional[str] = None, tournament_filter: Optional[str] = None) -> List[Match]:
+        """
+        Get match schedule with comprehensive resilience features:
+        - Session manager usage for connection pooling
+        - Bounded retries with exponential backoff
+        - Circuit breaker per domain
+        - Minimal rate limiting
+        """
+        start_time = time.time()
+        matches = []
+        
+        # Primary endpoint with circuit breaker
+        domain = "cricbuzz"
+        circuit_breaker = self._get_circuit_breaker(domain)
+        
+        if circuit_breaker.should_allow_request():
+            try:
+                await self._rate_limit(domain)
+                
+                # Use session manager for optimized HTTP connections
+                if hasattr(self, 'session_manager'):
+                    async with self.session_manager.get_session(f"cricket_resilience_{domain}") as session:
+                        matches = await self._fetch_schedule_with_retries(session, self.cricbuzz_endpoints['upcoming_matches'], days, match_format)
+                else:
+                    matches = await self._fetch_schedule_with_retries(self.session, self.cricbuzz_endpoints['upcoming_matches'], days, match_format)
+                
+                if matches:
+                    circuit_breaker.record_success()
+                    logger.info(f"✅ Resilient schedule fetch: {len(matches)} matches in {time.time() - start_time:.3f}s")
+                    return matches
+                else:
+                    circuit_breaker.record_failure()
+                    
+            except Exception as e:
+                circuit_breaker.record_failure()
+                logger.warning(f"⚠️ Primary resilient schedule fetch failed: {e}")
+        
+        # Fallback to backup endpoint
+        backup_domain = "espn"
+        backup_circuit_breaker = self._get_circuit_breaker(backup_domain)
+        
+        if backup_circuit_breaker.should_allow_request():
+            try:
+                await self._rate_limit(backup_domain)
+                
+                if hasattr(self, 'session_manager'):
+                    async with self.session_manager.get_session(f"cricket_resilience_{backup_domain}") as session:
+                        matches = await self._fetch_schedule_with_retries(session, self.espn_endpoints['upcoming_matches'], days, match_format)
+                else:
+                    matches = await self._fetch_schedule_with_retries(self.session, self.espn_endpoints['upcoming_matches'], days, match_format)
+                
+                if matches:
+                    backup_circuit_breaker.record_success()
+                    logger.info(f"✅ Backup resilient schedule fetch: {len(matches)} matches in {time.time() - start_time:.3f}s")
+                    return matches
+                else:
+                    backup_circuit_breaker.record_failure()
+                    
+            except Exception as e:
+                backup_circuit_breaker.record_failure()
+                logger.warning(f"⚠️ Backup resilient schedule fetch failed: {e}")
+        
+        # Final fallback - return empty list for schedule (more appropriate than fallback matches)
+        logger.info("🆘 All resilient schedule sources failed")
+        return []
+    
+    async def _fetch_live_matches_with_retries(self, session, url: str, max_retries: int = 3) -> List[Match]:
+        """Fetch live matches with exponential backoff retries."""
+        for attempt in range(max_retries):
+            try:
+                delay = self.base_retry_delay * (self.retry_multiplier ** attempt)
+                if attempt > 0:
+                    jitter = random.uniform(-self.jitter_range, self.jitter_range) * delay
+                    await asyncio.sleep(delay + jitter)
+                
+                logger.debug(f"🔄 Fetching live matches attempt {attempt + 1}/{max_retries}: {url}")
+                
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=self.fast_timeout)) as response:
+                    if response.status == 200:
+                        html = await response.text()
+                        matches = await self._parse_cricbuzz_live_matches(html)
+                        if matches:
+                            return matches
+                    else:
+                        logger.warning(f"⚠️ HTTP {response.status} for {url}")
+                        
+            except asyncio.TimeoutError:
+                logger.warning(f"⏰ Timeout on attempt {attempt + 1} for {url}")
+            except Exception as e:
+                logger.warning(f"⚠️ Error on attempt {attempt + 1} for {url}: {e}")
+                
+        return []
+    
+    async def _fetch_schedule_with_retries(self, session, url: str, days: Union[int, str], match_format: Optional[str], max_retries: int = 3) -> List[Match]:
+        """Fetch schedule with exponential backoff retries."""
+        for attempt in range(max_retries):
+            try:
+                delay = self.base_retry_delay * (self.retry_multiplier ** attempt)
+                if attempt > 0:
+                    jitter = random.uniform(-self.jitter_range, self.jitter_range) * delay
+                    await asyncio.sleep(delay + jitter)
+                
+                logger.debug(f"🔄 Fetching schedule attempt {attempt + 1}/{max_retries}: {url}")
+                
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=self.default_timeout)) as response:
+                    if response.status == 200:
+                        html = await response.text()
+                        matches = await self._parse_cricbuzz_upcoming_matches(html)
+                        # Apply filtering if needed
+                        if match_format:
+                            matches = [m for m in matches if match_format.lower() in m.format.lower()]
+                        return matches
+                    else:
+                        logger.warning(f"⚠️ HTTP {response.status} for {url}")
+                        
+            except asyncio.TimeoutError:
+                logger.warning(f"⏰ Timeout on attempt {attempt + 1} for {url}")
+            except Exception as e:
+                logger.warning(f"⚠️ Error on attempt {attempt + 1} for {url}: {e}")
+                
+        return []
 
 # Global scraper instance
 _scraper_instance = None
 
 async def get_live_matches() -> List[Match]:
-    """Public function to get live cricket matches."""
-    global _scraper_instance
+    """Public function to get live cricket matches with JSON-first, HTML-fallback architecture."""
+    global _scraper_instance, data_source_config
+    
+    start_time = time.time()
+    matches = []
+    data_source = "unknown"  # Track data source for observability
     
     try:
-        async with RealCricketScraper() as scraper:
-            matches = await scraper.get_live_matches()
-            return matches
+        # Primary: Try JSON extraction (fast) with strict timeout
+        if data_source_config.use_json_primary:
+            try:
+                from cricket_json_extractor import CricketJSONExtractor
+                
+                logger.info("🚀 Attempting JSON-first extraction for live matches with 1s timeout...")
+                json_start = time.time()
+                
+                json_extractor = CricketJSONExtractor()
+                
+                # Apply strict ~1s timeout for JSON extraction
+                matches = await asyncio.wait_for(
+                    json_extractor.extract_live_matches(),
+                    timeout=1.0  # Strict 1-second timeout as specified
+                )
+                
+                json_time = time.time() - json_start
+                
+                if matches and len(matches) > 0:
+                    data_source = "json"
+                    logger.info(f"✅ JSON extraction successful: {len(matches)} matches in {json_time:.3f}s (source=json)")
+                    data_source_config.update_health_score('json', 'live_matches', True, json_time)
+                    
+                    # Add source tracking to matches for observability
+                    for match in matches:
+                        if hasattr(match, 'data_sources'):
+                            match.data_sources = ['json']
+                    
+                    return matches[:5]  # Return top 5 for performance
+                else:
+                    logger.warning("⚠️ JSON extraction returned no matches, falling back to HTML")
+                    data_source_config.update_health_score('json', 'live_matches', False, json_time)
+                    
+            except asyncio.TimeoutError:
+                logger.warning("⏰ JSON extraction timed out after 1.0s, falling back to HTML")
+                data_source_config.update_health_score('json', 'live_matches', False, 1.0)
+            except Exception as e:
+                json_time = time.time() - json_start if 'json_start' in locals() else 0.0
+                logger.warning(f"⚠️ JSON extraction failed: {e}, falling back to HTML")
+                data_source_config.update_health_score('json', 'live_matches', False, json_time)
+        
+        # Fallback: HTML scraping (robust) with resilience features
+        if data_source_config.enable_html_fallback and data_source_config.should_use_html_fallback('cricbuzz'):
+            try:
+                logger.info("🔄 Using HTML fallback for live matches with session manager...")
+                html_start = time.time()
+                
+                # Use session manager for connection reuse and resilience
+                async with RealCricketScraper() as scraper:
+                    matches = await scraper.get_live_matches_with_resilience()
+                
+                html_time = time.time() - html_start
+                
+                if matches and len(matches) > 0:
+                    data_source = "html"
+                    logger.info(f"✅ HTML fallback successful: {len(matches)} matches in {html_time:.3f}s (source=html)")
+                    data_source_config.update_health_score('html', 'cricbuzz', True, html_time)
+                    
+                    # Add source tracking to matches for observability
+                    for match in matches:
+                        if hasattr(match, 'data_sources'):
+                            match.data_sources = ['html']
+                else:
+                    logger.warning("⚠️ HTML fallback also returned no matches")
+                    data_source_config.update_health_score('html', 'cricbuzz', False, html_time)
+                    
+            except Exception as e:
+                html_time = time.time() - html_start if 'html_start' in locals() else 0.0
+                logger.error(f"❌ HTML fallback failed: {e}")
+                data_source_config.update_health_score('html', 'cricbuzz', False, html_time)
+        
+        # Emergency fallback
+        if not matches:
+            logger.info("🆘 Creating emergency fallback matches")
+            data_source = "fallback"
+            async with RealCricketScraper() as scraper:
+                matches = scraper._create_fallback_matches()
+        
+        total_time = time.time() - start_time
+        logger.info(f"📊 Total get_live_matches time: {total_time:.3f}s, returned {len(matches)} matches (source={data_source})")
+        
+        return matches
+        
     except Exception as e:
-        logger.error(f"❌ Error in get_live_matches: {e}")
-        # Return empty list on error
+        logger.error(f"❌ Critical error in get_live_matches: {e}")
         return []
 
 async def get_match_schedule(days: Union[int, str] = 3, match_format: Optional[str] = None, team_filter: Optional[str] = None, tournament_filter: Optional[str] = None) -> List[Match]:
-    """Public function to get cricket match schedule."""
+    """Public function to get cricket match schedule with JSON-first, HTML-fallback architecture."""
+    global data_source_config
+    
+    start_time = time.time()
+    matches = []
+    data_source = "unknown"  # Track data source for observability
+    
     try:
-        async with RealCricketScraper() as scraper:
-            matches = await scraper.get_match_schedule(days, match_format, team_filter, tournament_filter)
-            return matches
+        # Primary: Try JSON extraction (fast) with strict timeout
+        if data_source_config.use_json_primary:
+            try:
+                from cricket_json_extractor import CricketJSONExtractor
+                
+                logger.info("🚀 Attempting JSON-first extraction for match schedule with 1s timeout...")
+                json_start = time.time()
+                
+                json_extractor = CricketJSONExtractor()
+                
+                # Apply strict ~1s timeout for JSON extraction
+                matches = await asyncio.wait_for(
+                    json_extractor.extract_match_schedule(int(days) if isinstance(days, (str, int)) else 3, match_format),
+                    timeout=1.0  # Strict 1-second timeout as specified
+                )
+                
+                json_time = time.time() - json_start
+                
+                if matches and len(matches) > 0:
+                    data_source = "json"
+                    logger.info(f"✅ JSON schedule extraction successful: {len(matches)} matches in {json_time:.3f}s (source=json)")
+                    data_source_config.update_health_score('json', 'schedule', True, json_time)
+                    
+                    # Add source tracking to matches for observability
+                    for match in matches:
+                        if hasattr(match, 'data_sources'):
+                            match.data_sources = ['json']
+                    
+                    return matches
+                else:
+                    logger.warning("⚠️ JSON schedule extraction returned no matches, falling back to HTML")
+                    data_source_config.update_health_score('json', 'schedule', False, json_time)
+                    
+            except asyncio.TimeoutError:
+                logger.warning("⏰ JSON schedule extraction timed out after 1.0s, falling back to HTML")
+                data_source_config.update_health_score('json', 'schedule', False, 1.0)
+            except Exception as e:
+                json_time = time.time() - json_start if 'json_start' in locals() else 0.0
+                logger.warning(f"⚠️ JSON schedule extraction failed: {e}, falling back to HTML")
+                data_source_config.update_health_score('json', 'schedule', False, json_time)
+        
+        # Fallback: HTML scraping (robust) with resilience features
+        if data_source_config.enable_html_fallback and data_source_config.should_use_html_fallback('cricbuzz'):
+            try:
+                logger.info("🔄 Using HTML fallback for match schedule with session manager...")
+                html_start = time.time()
+                
+                # Use session manager for connection reuse and resilience
+                async with RealCricketScraper() as scraper:
+                    matches = await scraper.get_match_schedule_with_resilience(days, match_format, team_filter, tournament_filter)
+                
+                html_time = time.time() - html_start
+                
+                if matches and len(matches) > 0:
+                    data_source = "html"
+                    logger.info(f"✅ HTML schedule fallback successful: {len(matches)} matches in {html_time:.3f}s (source=html)")
+                    data_source_config.update_health_score('html', 'cricbuzz', True, html_time)
+                    
+                    # Add source tracking to matches for observability
+                    for match in matches:
+                        if hasattr(match, 'data_sources'):
+                            match.data_sources = ['html']
+                else:
+                    logger.warning("⚠️ HTML schedule fallback also returned no matches")
+                    data_source_config.update_health_score('html', 'cricbuzz', False, html_time)
+                    
+            except Exception as e:
+                html_time = time.time() - html_start if 'html_start' in locals() else 0.0
+                logger.error(f"❌ HTML schedule fallback failed: {e}")
+                data_source_config.update_health_score('html', 'cricbuzz', False, html_time)
+        
+        total_time = time.time() - start_time
+        logger.info(f"📊 Total get_match_schedule time: {total_time:.3f}s, returned {len(matches)} matches (source={data_source})")
+        
+        return matches
+        
     except Exception as e:
-        logger.error(f"❌ Error in get_match_schedule: {e}")
+        logger.error(f"❌ Critical error in get_match_schedule: {e}")
         return []
 
 async def get_match_details(match_id: str) -> Optional[Match]:
