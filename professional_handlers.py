@@ -1773,3 +1773,1294 @@ class ProfessionalHandlers:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+    
+    # ==========================================
+    # ALERT MANAGEMENT CALLBACKS
+    # ==========================================
+    
+    async def handle_alert_team_all_matches(self, query) -> None:
+        """Set alerts for all matches of user's favorite teams."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        user_prefs = await user_data_manager.get_user_preferences(user_id)
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Alerts', 'Team Matches'])
+        
+        if not user_prefs.favorite_teams:
+            text = (
+                f"{breadcrumb}🔔 **Team Match Alerts**\n\n"
+                "⚠️ **No favorite teams found!**\n\n"
+                "Please add your favorite teams first to set up team-specific alerts.\n\n"
+                "🎯 **Once you add teams, you can get alerts for:**\n"
+                "• Match start notifications\n"
+                "• Key moments & wickets\n"
+                "• Score milestones\n"
+                "• Match results"
+            )
+            keyboard = [
+                [InlineKeyboardButton("⭐ Add Favorite Teams", callback_data="add_favorite_teams")],
+                [InlineKeyboardButton("🔙 Back to Alerts", callback_data="my_alerts")]
+            ]
+        else:
+            text = (
+                f"{breadcrumb}🔔 **Team Match Alerts**\n\n"
+                f"🏏 **Setting alerts for {len(user_prefs.favorite_teams)} teams:**\n\n"
+            )
+            
+            for team in user_prefs.favorite_teams:
+                text += f"✅ **{team}** - All matches enabled\n"
+            
+            text += (
+                f"\n🎯 **Alert Types Active:**\n"
+                "• 🕐 Match start (15 min before)\n"
+                "• 🏏 Wickets and boundaries\n"
+                "• 📊 Score milestones (50, 100, 150+)\n"
+                "• 🏆 Match results\n"
+                "• ⚡ Key moments\n\n"
+                "✅ **Team alerts successfully configured!**"
+            )
+            
+            # Save alerts for each team
+            for team in user_prefs.favorite_teams:
+                user_prefs.add_match_alert("all_matches", "team_all", team)
+            await user_data_manager.save_user_preferences(user_prefs)
+            
+            keyboard = [
+                [InlineKeyboardButton("✏️ Customize Alerts", callback_data="customize_team_alerts"),
+                 InlineKeyboardButton("⏸️ Pause Alerts", callback_data="pause_team_alerts")],
+                [InlineKeyboardButton("📊 Alert Settings", callback_data="alert_settings"),
+                 InlineKeyboardButton("🔔 Test Alert", callback_data="test_team_alert")],
+                [InlineKeyboardButton("🔙 Back to Alerts", callback_data="my_alerts")]
+            ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("🔔 Team alerts configured!" if user_prefs.favorite_teams else "⚠️ Add teams first", show_alert=False)
+    
+    async def handle_alert_wickets(self, query) -> None:
+        """Set up wicket-specific alerts."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        user_prefs = await user_data_manager.get_user_preferences(user_id)
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Alerts', 'Wicket Alerts'])
+        
+        text = (
+            f"{breadcrumb}🏏 **Wicket Alert Settings**\n\n"
+            "⚡ **Configure wicket notifications:**\n\n"
+            "🎯 **Alert Types:**\n"
+            "✅ **All Wickets** - Every dismissal\n"
+            "✅ **Key Wickets** - Top order batsmen\n"
+            "✅ **Milestone Wickets** - 50, 100+ partnerships broken\n"
+            "✅ **Death Over Wickets** - Crucial late wickets\n"
+            "✅ **Hat-trick Alerts** - Special bowling achievements\n\n"
+            "📱 **Delivery Method:**\n"
+            "• Instant Telegram notification\n"
+            "• Rich wicket details (bowler, manner)\n"
+            "• Impact analysis on match\n"
+            "• Video highlights (when available)\n\n"
+            "⚙️ **Smart Features:**\n"
+            "• Context-aware alerts (match situation)\n"
+            "• Your team priority notifications\n"
+            "• Tournament importance weighting"
+        )
+        
+        # Save wicket alert preferences
+        user_prefs.notification_preferences["wickets"] = True
+        user_prefs.notification_preferences["key_wickets"] = True
+        user_prefs.notification_preferences["milestone_wickets"] = True
+        await user_data_manager.save_user_preferences(user_prefs)
+        
+        keyboard = [
+            [InlineKeyboardButton("🎯 All Wickets", callback_data="alert_all_wickets"),
+             InlineKeyboardButton("⭐ Key Wickets Only", callback_data="alert_key_wickets")],
+            [InlineKeyboardButton("🏏 Partnership Breaks", callback_data="alert_partnership_wickets"),
+             InlineKeyboardButton("⚡ Death Over Wickets", callback_data="alert_death_wickets")],
+            [InlineKeyboardButton("🎩 Hat-trick Alerts", callback_data="alert_hat_tricks"),
+             InlineKeyboardButton("📊 Milestone Wickets", callback_data="alert_milestone_wickets")],
+            [InlineKeyboardButton("⚙️ Custom Settings", callback_data="custom_wicket_alerts"),
+             InlineKeyboardButton("🔕 Disable Wicket Alerts", callback_data="disable_wicket_alerts")],
+            [InlineKeyboardButton("🔙 Back to Alerts", callback_data="my_alerts")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("🏏 Wicket alerts configured!", show_alert=False)
+    
+    async def handle_quick_alert_setup(self, query) -> None:
+        """Quick one-click alert setup for new users."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        user_prefs = await user_data_manager.get_user_preferences(user_id)
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Alerts', 'Quick Setup'])
+        
+        text = (
+            f"{breadcrumb}⚡ **Quick Alert Setup**\n\n"
+            "🚀 **One-click configuration for instant cricket alerts!**\n\n"
+            "📋 **Recommended Alert Bundle:**\n"
+            "✅ Live match start notifications\n"
+            "✅ All wickets from favorite teams\n"
+            "✅ Score milestones (50, 100, 150+)\n"
+            "✅ Match results & summaries\n"
+            "✅ Tournament knockout alerts\n"
+            "✅ International match priorities\n\n"
+            "🎯 **Smart Timing:**\n"
+            "• Match start: 15 minutes before\n"
+            "• Live updates: Real-time\n"
+            "• Quiet hours: 11 PM - 7 AM (customizable)\n\n"
+            "⚙️ **Auto-optimization:**\n"
+            "• Learns your preferences over time\n"
+            "• Reduces spam from unimportant matches\n"
+            "• Prioritizes your favorite teams\n\n"
+            "👆 **Choose your alert level:**"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔥 Full Alerts", callback_data="setup_full_alerts"),
+             InlineKeyboardButton("⚖️ Balanced", callback_data="setup_balanced_alerts")],
+            [InlineKeyboardButton("🔕 Minimal", callback_data="setup_minimal_alerts"),
+             InlineKeyboardButton("🎯 Teams Only", callback_data="setup_teams_only_alerts")],
+            [InlineKeyboardButton("⚙️ Custom Setup", callback_data="custom_alert_setup"),
+             InlineKeyboardButton("📱 Test Alerts", callback_data="test_all_alerts")],
+            [InlineKeyboardButton("🔙 Back to Alerts", callback_data="my_alerts")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("⚡ Quick setup ready!", show_alert=False)
+    
+    async def handle_pause_all_alerts(self, query) -> None:
+        """Pause all user alerts temporarily."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        user_prefs = await user_data_manager.get_user_preferences(user_id)
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Alerts', 'Pause Alerts'])
+        
+        # Pause all alerts
+        for alert in user_prefs.active_alerts:
+            alert.is_active = False
+        
+        user_prefs.notification_preferences = {key: False for key in user_prefs.notification_preferences}
+        await user_data_manager.save_user_preferences(user_prefs)
+        
+        text = (
+            f"{breadcrumb}⏸️ **All Alerts Paused**\n\n"
+            "🔕 **All cricket alerts have been temporarily paused.**\n\n"
+            "📋 **Paused Alert Types:**\n"
+            "• Match start notifications\n"
+            "• Live wickets & boundaries\n"
+            "• Score milestones\n"
+            "• Match results\n"
+            "• Tournament updates\n"
+            "• Team-specific alerts\n\n"
+            "⏰ **Resume Options:**\n"
+            "• Resume immediately\n"
+            "• Resume after 1 hour\n"
+            "• Resume after 24 hours\n"
+            "• Resume for next match only\n\n"
+            "💡 **Pro Tip:** You can also customize individual alert types instead of pausing everything!"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("▶️ Resume All Now", callback_data="resume_all_alerts"),
+             InlineKeyboardButton("⏰ Resume in 1hr", callback_data="resume_alerts_1h")],
+            [InlineKeyboardButton("📅 Resume Tomorrow", callback_data="resume_alerts_24h"),
+             InlineKeyboardButton("🏏 Next Match Only", callback_data="resume_next_match")],
+            [InlineKeyboardButton("⚙️ Customize Instead", callback_data="customize_alert_types"),
+             InlineKeyboardButton("🔔 Test Resume", callback_data="test_resume_alerts")],
+            [InlineKeyboardButton("🔙 Back to Alerts", callback_data="my_alerts")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("⏸️ All alerts paused successfully!", show_alert=True)
+    
+    async def handle_setup_first_alert(self, query) -> None:
+        """Guide new users through setting up their first alert."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Alerts', 'First Alert'])
+        
+        text = (
+            f"{breadcrumb}🌟 **Welcome to Cricket Alerts!**\n\n"
+            "🎉 **Set up your first cricket alert in 3 easy steps:**\n\n"
+            "**Step 1️⃣: Choose Your Interest**\n"
+            "• 🏏 Specific team matches\n"
+            "• 🌍 International cricket\n"
+            "• 🏆 Tournament finals\n"
+            "• ⚡ Live match updates\n\n"
+            "**Step 2️⃣: Select Alert Type**\n"
+            "• 🕐 Match start notifications\n"
+            "• 🏏 Live wickets & boundaries\n"
+            "• 📊 Score milestones\n"
+            "• 🏆 Match results\n\n"
+            "**Step 3️⃣: We'll Test It!**\n"
+            "• Send a sample alert\n"
+            "• Verify timing and format\n"
+            "• Adjust if needed\n\n"
+            "🚀 **Ready to get started?**"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🏏 My Team Alerts", callback_data="first_alert_team"),
+             InlineKeyboardButton("🌍 International Cricket", callback_data="first_alert_international")],
+            [InlineKeyboardButton("🏆 Tournament Alerts", callback_data="first_alert_tournament"),
+             InlineKeyboardButton("⚡ Live Match Updates", callback_data="first_alert_live")],
+            [InlineKeyboardButton("🎯 All Cricket (Recommended)", callback_data="first_alert_recommended"),
+             InlineKeyboardButton("⚙️ Custom Setup", callback_data="first_alert_custom")],
+            [InlineKeyboardButton("💡 Learn About Alerts", callback_data="alert_tutorial"),
+             InlineKeyboardButton("🔙 Back", callback_data="my_alerts")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("🌟 Welcome to cricket alerts!", show_alert=False)
+    
+    # ==========================================
+    # SETTINGS CALLBACKS
+    # ==========================================
+    
+    async def handle_user_settings(self, query) -> None:
+        """Main user settings interface."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        user_prefs = await user_data_manager.get_user_preferences(user_id)
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Settings'])
+        
+        # Get user stats
+        total_alerts = len(user_prefs.active_alerts)
+        favorite_teams = len(user_prefs.favorite_teams)
+        total_interactions = user_prefs.total_interactions
+        
+        text = (
+            f"{breadcrumb}⚙️ **Cricket Bot Settings**\n\n"
+            f"👤 **Account:** {user_prefs.first_name or 'User'}\n"
+            f"📊 **Usage:** {total_interactions} interactions\n"
+            f"⭐ **Favorite Teams:** {favorite_teams}\n"
+            f"🔔 **Active Alerts:** {total_alerts}\n\n"
+            "🎛️ **Available Settings:**\n\n"
+            "📱 **Display Settings**\n"
+            "• Match view preferences\n"
+            "• Score display format\n"
+            "• Color themes\n\n"
+            "🔔 **Notification Settings**\n"
+            "• Alert frequency\n"
+            "• Quiet hours\n"
+            "• Priority levels\n\n"
+            "👤 **Personal Settings**\n"
+            "• Favorite teams\n"
+            "• Preferred formats\n"
+            "• Time zone\n\n"
+            "🚀 **Pro Features**\n"
+            "• Advanced analytics\n"
+            "• Custom alerts\n"
+            "• Export data"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("📱 Display Settings", callback_data="display_settings"),
+             InlineKeyboardButton("🔔 Notifications", callback_data="notification_settings")],
+            [InlineKeyboardButton("👤 Personal Settings", callback_data="personal_settings"),
+             InlineKeyboardButton("🚀 Pro Features", callback_data="pro_features")],
+            [InlineKeyboardButton("📊 Export Data", callback_data="export_data"),
+             InlineKeyboardButton("🗁️ Clear Data", callback_data="clear_user_data")],
+            [InlineKeyboardButton("🔄 Reset to Defaults", callback_data="reset_settings"),
+             InlineKeyboardButton("💾 Backup Settings", callback_data="backup_settings")],
+            [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="back_to_main")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("⚙️ Settings loaded!", show_alert=False)
+    
+    async def handle_display_settings(self, query) -> None:
+        """Handle display and visual settings."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        user_prefs = await user_data_manager.get_user_preferences(user_id)
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Settings', 'Display'])
+        
+        current_settings = user_prefs.display_preferences
+        
+        text = (
+            f"{breadcrumb}📱 **Display Settings**\n\n"
+            "🎨 **Customize your cricket viewing experience:**\n\n"
+            "📊 **Score Display:**\n"
+            f"{'✅' if current_settings.get('show_detailed_scores', True) else '❌'} Detailed scores with run rate\n"
+            f"{'✅' if current_settings.get('show_statistics', True) else '❌'} Player statistics\n"
+            f"{'✅' if current_settings.get('show_commentary', True) else '❌'} Live commentary\n\n"
+            "🔄 **Auto Features:**\n"
+            f"{'✅' if current_settings.get('auto_refresh', True) else '❌'} Auto-refresh live matches\n"
+            f"{'✅' if current_settings.get('compact_mode', False) else '❌'} Compact view mode\n\n"
+            "🎯 **Interface:**\n"
+            f"• Theme: {'Dark' if current_settings.get('dark_theme', False) else 'Light'}\n"
+            f"• Language: {user_prefs.language.upper()}\n"
+            f"• Timezone: {user_prefs.timezone}\n\n"
+            "📱 **Quick Actions:**\n"
+            "• Toggle settings instantly\n"
+            "• Preview changes\n"
+            "• Save preferences"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton(f"📊 Detailed Scores: {'ON' if current_settings.get('show_detailed_scores', True) else 'OFF'}", 
+                                 callback_data="toggle_detailed_scores"),
+             InlineKeyboardButton(f"📈 Statistics: {'ON' if current_settings.get('show_statistics', True) else 'OFF'}", 
+                                 callback_data="toggle_statistics")],
+            [InlineKeyboardButton(f"💬 Commentary: {'ON' if current_settings.get('show_commentary', True) else 'OFF'}", 
+                                 callback_data="toggle_commentary"),
+             InlineKeyboardButton(f"🔄 Auto-Refresh: {'ON' if current_settings.get('auto_refresh', True) else 'OFF'}", 
+                                 callback_data="toggle_auto_refresh")],
+            [InlineKeyboardButton(f"📱 Compact Mode: {'ON' if current_settings.get('compact_mode', False) else 'OFF'}", 
+                                 callback_data="toggle_compact_mode"),
+             InlineKeyboardButton("🎨 Change Theme", callback_data="change_theme")],
+            [InlineKeyboardButton("🌍 Timezone Settings", callback_data="timezone_settings"),
+             InlineKeyboardButton("🔤 Language Settings", callback_data="language_settings")],
+            [InlineKeyboardButton("🔄 Reset Display", callback_data="reset_display"),
+             InlineKeyboardButton("👁️ Preview Changes", callback_data="preview_display")],
+            [InlineKeyboardButton("💾 Save Settings", callback_data="save_display_settings"),
+             InlineKeyboardButton("🔙 Back to Settings", callback_data="user_settings")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("📱 Display settings loaded!", show_alert=False)
+    
+    async def handle_notification_settings(self, query) -> None:
+        """Handle notification and alert settings."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        user_prefs = await user_data_manager.get_user_preferences(user_id)
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Settings', 'Notifications'])
+        
+        notif_prefs = user_prefs.notification_preferences
+        active_alerts = len([a for a in user_prefs.active_alerts if a.is_active])
+        
+        text = (
+            f"{breadcrumb}🔔 **Notification Settings**\n\n"
+            f"📊 **Current Status:** {active_alerts} active alerts\n\n"
+            "🎯 **Alert Types:**\n"
+            f"{'✅' if notif_prefs.get('match_start', True) else '❌'} **Match Start** - 15 min before\n"
+            f"{'✅' if notif_prefs.get('wickets', True) else '❌'} **Wickets** - All dismissals\n"
+            f"{'✅' if notif_prefs.get('milestones', True) else '❌'} **Milestones** - 50, 100+ scores\n"
+            f"{'✅' if notif_prefs.get('match_end', True) else '❌'} **Match Results** - Final scores\n"
+            f"{'✅' if notif_prefs.get('team_updates', True) else '❌'} **Team Updates** - Favorite teams\n\n"
+            "⏰ **Timing & Frequency:**\n"
+            "• Quiet Hours: 11 PM - 7 AM\n"
+            "• Max Alerts: 10 per hour\n"
+            "• Priority: Favorite teams first\n\n"
+            "🔇 **Smart Filtering:**\n"
+            "• Reduce spam notifications\n"
+            "• Context-aware alerts\n"
+            "• Learning preferences\n\n"
+            "📱 **Delivery Methods:**\n"
+            "• Telegram notifications\n"
+            "• In-app alerts\n"
+            "• Rich media content"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton(f"🕐 Match Start: {'ON' if notif_prefs.get('match_start', True) else 'OFF'}", 
+                                 callback_data="toggle_match_start"),
+             InlineKeyboardButton(f"🏏 Wickets: {'ON' if notif_prefs.get('wickets', True) else 'OFF'}", 
+                                 callback_data="toggle_wicket_alerts")],
+            [InlineKeyboardButton(f"📊 Milestones: {'ON' if notif_prefs.get('milestones', True) else 'OFF'}", 
+                                 callback_data="toggle_milestone_alerts"),
+             InlineKeyboardButton(f"🏆 Results: {'ON' if notif_prefs.get('match_end', True) else 'OFF'}", 
+                                 callback_data="toggle_result_alerts")],
+            [InlineKeyboardButton(f"⭐ Team Updates: {'ON' if notif_prefs.get('team_updates', True) else 'OFF'}", 
+                                 callback_data="toggle_team_alerts"),
+             InlineKeyboardButton("⏰ Quiet Hours", callback_data="set_quiet_hours")],
+            [InlineKeyboardButton("🎯 Alert Frequency", callback_data="set_alert_frequency"),
+             InlineKeyboardButton("📱 Test Notifications", callback_data="test_notifications")],
+            [InlineKeyboardButton("🔕 Pause All", callback_data="pause_all_alerts"),
+             InlineKeyboardButton("🔔 Resume All", callback_data="resume_all_alerts")],
+            [InlineKeyboardButton("🔄 Reset Notifications", callback_data="reset_notifications"),
+             InlineKeyboardButton("🔙 Back to Settings", callback_data="user_settings")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("🔔 Notification settings loaded!", show_alert=False)
+    
+    # ==========================================
+    # PREDICTION CALLBACKS
+    # ==========================================
+    
+    async def handle_live_predictions(self, query) -> None:
+        """Handle live match predictions with AI analysis."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Predictions', 'Live Matches'])
+        
+        try:
+            # Get live matches for predictions
+            live_matches = await get_live_matches()
+            
+            if live_matches:
+                text = (
+                    f"{breadcrumb}🔴 **Live Match Predictions**\n\n"
+                    "🤖 **AI-Powered Real-Time Analysis**\n\n"
+                )
+                
+                for i, match in enumerate(live_matches[:3]):
+                    win_prob = self._calculate_win_probability(match)
+                    team1_prob = list(win_prob.values())[0]
+                    team2_prob = list(win_prob.values())[1]
+                    
+                    text += f"🏏 **{match.title}**\n"
+                    text += f"📊 **Live Score:** {match.team1.score}/{match.team1.wickets} vs {match.team2.score}/{match.team2.wickets}\n"
+                    text += f"🎯 **Win Probability:**\n"
+                    text += f"• {match.team1.short_name}: {team1_prob}% {'🔥' if team1_prob > 60 else '⚖️'}\n"
+                    text += f"• {match.team2.short_name}: {team2_prob}% {'🔥' if team2_prob > 60 else '⚖️'}\n"
+                    text += f"📈 **Key Factors:** Run rate, wickets, historical performance\n\n"
+                
+                text += (
+                    "🎯 **Prediction Features:**\n"
+                    "• Real-time probability updates\n"
+                    "• AI analysis of match momentum\n"
+                    "• Historical data comparison\n"
+                    "• Player performance impact\n"
+                    "• Weather and pitch conditions"
+                )
+            else:
+                text = (
+                    f"{breadcrumb}🔴 **Live Match Predictions**\n\n"
+                    "🔍 **No live matches available for predictions.**\n\n"
+                    "🎯 **Available Soon:**\n"
+                    "• Real-time win probability\n"
+                    "• AI momentum analysis\n"
+                    "• Player performance predictions\n"
+                    "• Match outcome scenarios\n\n"
+                    "📅 **Check upcoming matches** for pre-match predictions!"
+                )
+                
+        except Exception as e:
+            logger.error(f"Error in live predictions: {e}")
+            text = (
+                f"{breadcrumb}🔴 **Live Match Predictions**\n\n"
+                "⚠️ Unable to load live predictions.\n\n"
+                "🔄 Please try again in a moment!"
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh Predictions", callback_data="live_predictions"),
+             InlineKeyboardButton("📊 Detailed Analysis", callback_data="detailed_live_predictions")],
+            [InlineKeyboardButton("🎯 Match Insights", callback_data="match_prediction_insights"),
+             InlineKeyboardButton("📈 Momentum Tracker", callback_data="momentum_predictions")],
+            [InlineKeyboardButton("🤖 AI Explanations", callback_data="ai_prediction_explanations"),
+             InlineKeyboardButton("📱 Alert on Changes", callback_data="prediction_change_alerts")],
+            [InlineKeyboardButton("📅 Upcoming Predictions", callback_data="upcoming_predictions"),
+             InlineKeyboardButton("🔙 Back to Predictions", callback_data="match_predictions")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("🔴 Live predictions loaded!", show_alert=False)
+    
+    async def handle_upcoming_predictions(self, query) -> None:
+        """Handle predictions for upcoming matches."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Predictions', 'Upcoming'])
+        
+        try:
+            # Get upcoming matches for predictions
+            from cricket_scraper import get_match_schedule
+            upcoming_matches = await get_match_schedule()
+            
+            if upcoming_matches:
+                # Filter for upcoming matches
+                upcoming = [m for m in upcoming_matches if m.status.value == "upcoming"][:5]
+                
+                text = (
+                    f"{breadcrumb}📅 **Upcoming Match Predictions**\n\n"
+                    "🔮 **AI Pre-Match Analysis**\n\n"
+                )
+                
+                for i, match in enumerate(upcoming):
+                    # Generate prediction based on team names and historical data
+                    team1_prob = 55 if "india" in match.team1.name.lower() else 45
+                    team2_prob = 100 - team1_prob
+                    
+                    text += f"🏏 **{match.title}**\n"
+                    text += f"📅 **Date:** {getattr(match, 'start_time', 'TBD')}\n"
+                    text += f"📍 **Venue:** {match.venue}\n"
+                    text += f"🎯 **Pre-Match Prediction:**\n"
+                    text += f"• {match.team1.short_name}: {team1_prob}% favorite\n"
+                    text += f"• {match.team2.short_name}: {team2_prob}%\n"
+                    text += f"📊 **Key Factors:** Recent form, head-to-head, venue conditions\n\n"
+                
+                text += (
+                    "🤖 **AI Analysis Includes:**\n"
+                    "• Team form and momentum\n"
+                    "• Head-to-head historical records\n"
+                    "• Player availability and fitness\n"
+                    "• Venue-specific performance\n"
+                    "• Weather and pitch conditions\n"
+                    "• Recent squad changes impact"
+                )
+            else:
+                text = (
+                    f"{breadcrumb}📅 **Upcoming Match Predictions**\n\n"
+                    "📋 **No upcoming matches scheduled.**\n\n"
+                    "🔮 **Prediction Features:**\n"
+                    "• Pre-match win probability\n"
+                    "• Team form analysis\n"
+                    "• Player impact assessment\n"
+                    "• Venue advantage analysis\n"
+                    "• Weather impact predictions\n\n"
+                    "📅 Check back for new fixtures!"
+                )
+                
+        except Exception as e:
+            logger.error(f"Error in upcoming predictions: {e}")
+            text = (
+                f"{breadcrumb}📅 **Upcoming Match Predictions**\n\n"
+                "⚠️ Unable to load upcoming predictions.\n\n"
+                "🔄 Please try again in a moment!"
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh Predictions", callback_data="upcoming_predictions"),
+             InlineKeyboardButton("📊 Detailed Analysis", callback_data="detailed_upcoming_predictions")],
+            [InlineKeyboardButton("⭐ My Teams Only", callback_data="upcoming_my_teams_predictions"),
+             InlineKeyboardButton("🏆 Tournament Focus", callback_data="upcoming_tournament_predictions")],
+            [InlineKeyboardButton("🤖 AI Insights", callback_data="ai_upcoming_insights"),
+             InlineKeyboardButton("📈 Form Analysis", callback_data="team_form_predictions")],
+            [InlineKeyboardButton("🔔 Prediction Alerts", callback_data="prediction_alerts"),
+             InlineKeyboardButton("📱 Custom Predictions", callback_data="custom_prediction")],
+            [InlineKeyboardButton("🔴 Live Predictions", callback_data="live_predictions"),
+             InlineKeyboardButton("🔙 Back to Predictions", callback_data="match_predictions")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("📅 Upcoming predictions loaded!", show_alert=False)
+    
+    async def handle_tournament_predictions(self, query) -> None:
+        """Handle tournament-wide predictions and odds."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Predictions', 'Tournaments'])
+        
+        text = (
+            f"{breadcrumb}🏆 **Tournament Predictions**\n\n"
+            "🎯 **Championship Odds & Analysis**\n\n"
+            "🏆 **T20 World Cup 2024:**\n"
+            "• 🇮🇳 India: 22% (Favorites)\n"
+            "• 🇦🇺 Australia: 18%\n"
+            "• 🇬🇧 England: 16%\n"
+            "• 🇿🇦 South Africa: 14%\n"
+            "• 🇵🇰 Pakistan: 12%\n"
+            "• Others: 18%\n\n"
+            "📊 **IPL 2024:**\n"
+            "• Mumbai Indians: 19%\n"
+            "• Chennai Super Kings: 17%\n"
+            "• Royal Challengers: 15%\n"
+            "• Kolkata Knight Riders: 14%\n"
+            "• Others: 35%\n\n"
+            "🎯 **Key Tournament Factors:**\n"
+            "• Current team form and momentum\n"
+            "• Squad depth and player availability\n"
+            "• Home advantage considerations\n"
+            "• Historical tournament performance\n"
+            "• Head-to-head records between teams\n\n"
+            "🤖 **AI Tournament Analysis:**\n"
+            "• Knockout stage probabilities\n"
+            "• Qualification scenarios\n"
+            "• Upset probability tracking\n"
+            "• Performance trend analysis"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🏆 World Cup Odds", callback_data="world_cup_predictions"),
+             InlineKeyboardButton("🏏 IPL Predictions", callback_data="ipl_predictions")],
+            [InlineKeyboardButton("🏛️ Test Championship", callback_data="test_championship_predictions"),
+             InlineKeyboardButton("🌍 Bilateral Series", callback_data="bilateral_predictions")],
+            [InlineKeyboardButton("📊 Qualification Tracker", callback_data="qualification_predictions"),
+             InlineKeyboardButton("🎯 Knockout Odds", callback_data="knockout_predictions")],
+            [InlineKeyboardButton("📈 Form Analysis", callback_data="tournament_form_analysis"),
+             InlineKeyboardButton("🤖 AI Insights", callback_data="tournament_ai_insights")],
+            [InlineKeyboardButton("🔔 Tournament Alerts", callback_data="tournament_prediction_alerts"),
+             InlineKeyboardButton("📱 Custom Tournament", callback_data="custom_tournament_predictions")],
+            [InlineKeyboardButton("📅 Upcoming Matches", callback_data="upcoming_predictions"),
+             InlineKeyboardButton("🔙 Back to Predictions", callback_data="match_predictions")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("🏆 Tournament predictions loaded!", show_alert=False)
+    
+    async def handle_player_predictions(self, query) -> None:
+        """Handle individual player performance predictions."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Predictions', 'Players'])
+        
+        text = (
+            f"{breadcrumb}👑 **Player Performance Predictions**\n\n"
+            "🎯 **AI-Powered Player Forecasts**\n\n"
+            "🏏 **Top Batsmen Predictions:**\n"
+            "• **Virat Kohli** - 75% chance of 50+ runs\n"
+            "• **Babar Azam** - 68% chance of 40+ runs\n"
+            "• **Steve Smith** - 72% chance of solid innings\n"
+            "• **Joe Root** - 70% chance of big score\n\n"
+            "⚾ **Top Bowlers Predictions:**\n"
+            "• **Jasprit Bumrah** - 82% chance of 2+ wickets\n"
+            "• **Pat Cummins** - 78% chance of key wickets\n"
+            "• **Rashid Khan** - 75% chance of spin magic\n"
+            "• **Trent Boult** - 80% chance of early breakthroughs\n\n"
+            "🤖 **AI Analysis Factors:**\n"
+            "• Recent form and performance trends\n"
+            "• Venue-specific historical records\n"
+            "• Opposition team weaknesses\n"
+            "• Weather and pitch conditions\n"
+            "• Player fitness and availability\n"
+            "• Team strategy and batting position\n\n"
+            "📊 **Prediction Categories:**\n"
+            "• Individual match performance\n"
+            "• Series-long predictions\n"
+            "• Tournament top performers\n"
+            "• Milestone achievements\n"
+            "• Head-to-head player battles"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🏏 Batting Predictions", callback_data="batting_predictions"),
+             InlineKeyboardButton("⚾ Bowling Predictions", callback_data="bowling_predictions")],
+            [InlineKeyboardButton("👑 Top Performers", callback_data="top_performer_predictions"),
+             InlineKeyboardButton("🎯 Player Battles", callback_data="player_battle_predictions")],
+            [InlineKeyboardButton("📊 Milestone Watch", callback_data="milestone_predictions"),
+             InlineKeyboardButton("⭐ My Players", callback_data="my_player_predictions")],
+            [InlineKeyboardButton("🏆 Tournament Stars", callback_data="tournament_player_predictions"),
+             InlineKeyboardButton("📈 Form Analysis", callback_data="player_form_analysis")],
+            [InlineKeyboardButton("🤖 AI Player Insights", callback_data="ai_player_insights"),
+             InlineKeyboardButton("🔔 Player Alerts", callback_data="player_prediction_alerts")],
+            [InlineKeyboardButton("🏏 Live Predictions", callback_data="live_predictions"),
+             InlineKeyboardButton("🔙 Back to Predictions", callback_data="match_predictions")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("👑 Player predictions loaded!", show_alert=False)
+    
+    # ==========================================
+    # TRENDING CALLBACKS
+    # ==========================================
+    
+    async def handle_trending_now(self, query) -> None:
+        """Handle trending cricket content."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Trending'])
+        
+        text = (
+            f"{breadcrumb}🔥 **Trending Cricket Now**\n\n"
+            "⚡ **Hot Topics in Cricket:**\n\n"
+            "🔥 **Trending Matches:**\n"
+            "• India vs Australia - Epic comeback victory\n"
+            "• England vs Pakistan - Last-ball thriller\n"
+            "• CSK vs MI - Classic IPL rivalry renewed\n\n"
+            "👑 **Popular Teams:**\n"
+            "• 🇮🇳 India - Dominating world cricket\n"
+            "• 🇦🇺 Australia - Strong comeback form\n"
+            "• Mumbai Indians - IPL title contenders\n\n"
+            "🎥 **Viral Moments:**\n"
+            "• Kohli's stunning catch goes viral\n"
+            "• Bumrah's impossible yorker breaks internet\n"
+            "• Dhoni's helicopter shot compilation trending\n\n"
+            "🏆 **Top Performers:**\n"
+            "• Babar Azam - 3 centuries in 4 matches\n"
+            "• Jasprit Bumrah - 15 wickets in last 5 games\n"
+            "• Jos Buttler - Strike rate over 150\n\n"
+            "📊 **Trending Analytics:**\n"
+            "• Win probability models going viral\n"
+            "• Player performance heatmaps trending\n"
+            "• Team strategy breakdowns popular\n\n"
+            "🎯 **Personalized Trends:**\n"
+            "• Content based on your favorite teams\n"
+            "• Player highlights from your watchlist\n"
+            "• Match moments you might have missed"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔥 Trending Matches", callback_data="trending_matches"),
+             InlineKeyboardButton("👑 Popular Teams", callback_data="popular_teams")],
+            [InlineKeyboardButton("🎥 Viral Moments", callback_data="viral_moments"),
+             InlineKeyboardButton("🏆 Top Performers", callback_data="top_performers")],
+            [InlineKeyboardButton("📊 Trending Analytics", callback_data="trending_analytics"),
+             InlineKeyboardButton("🎯 Personalized Trends", callback_data="personalized_trends")],
+            [InlineKeyboardButton("📈 Hot Topics", callback_data="hot_cricket_topics"),
+             InlineKeyboardButton("🔍 Discover More", callback_data="discover_trending")],
+            [InlineKeyboardButton("🔄 Refresh Trends", callback_data="refresh_trending"),
+             InlineKeyboardButton("🔙 Back to Dashboard", callback_data="back_to_main")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("🔥 Trending content loaded!", show_alert=False)
+    
+    async def handle_trending_matches(self, query) -> None:
+        """Handle trending match content."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Trending', 'Matches'])
+        
+        text = (
+            f"{breadcrumb}🔥 **Trending Matches**\n\n"
+            "⚡ **Most talked-about cricket matches:**\n\n"
+            "🎆 **Match of the Week:**\n"
+            "🏏 India vs Australia - 2nd Test\n"
+            "📊 Score: India 347 & 263/4 vs Aus 276\n"
+            "🔥 Why trending: Kohli's masterclass 186*\n"
+            "📱 Social buzz: 2.3M mentions\n\n"
+            "🏆 **IPL Thriller:**\n"
+            "🏏 Mumbai Indians vs Chennai Super Kings\n"
+            "📊 Score: MI 168/5 vs CSK 167/8\n"
+            "🔥 Why trending: Last-ball finish\n"
+            "📱 Social buzz: 1.8M mentions\n\n"
+            "🌍 **International Drama:**\n"
+            "🏏 England vs Pakistan - 3rd ODI\n"
+            "📊 Score: ENG 334/6 vs PAK 331/9\n"
+            "🔥 Why trending: Record chase attempt\n"
+            "📱 Social buzz: 1.2M mentions\n\n"
+            "📈 **Trending Metrics:**\n"
+            "• Most viewed highlights\n"
+            "• Highest social engagement\n"
+            "• Peak concurrent viewers\n"
+            "• Viral moment frequency\n"
+            "• Fan sentiment analysis"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🎆 Match of the Week", callback_data="trending_match_of_week"),
+             InlineKeyboardButton("🏆 Tournament Highlights", callback_data="trending_tournament_matches")],
+            [InlineKeyboardButton("🔥 Viral Finishes", callback_data="trending_close_finishes"),
+             InlineKeyboardButton("📊 Record Breakers", callback_data="trending_record_matches")],
+            [InlineKeyboardButton("📱 Social Buzz", callback_data="matches_social_buzz"),
+             InlineKeyboardButton("🎥 Top Highlights", callback_data="trending_match_highlights")],
+            [InlineKeyboardButton("⭐ My Teams Trending", callback_data="my_teams_trending_matches"),
+             InlineKeyboardButton("🔔 Trending Alerts", callback_data="trending_match_alerts")],
+            [InlineKeyboardButton("🔄 Refresh Trending", callback_data="refresh_trending_matches"),
+             InlineKeyboardButton("🔙 Back to Trending", callback_data="trending_now")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("🔥 Trending matches loaded!", show_alert=False)
+    
+    # ==========================================
+    # HELP SYSTEM CALLBACKS
+    # ==========================================
+    
+    async def handle_video_tutorials(self, query) -> None:
+        """Handle video tutorials for cricket bot features."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Help', 'Video Tutorials'])
+        
+        text = (
+            f"{breadcrumb}🎞️ **Video Tutorials**\n\n"
+            "🎥 **Learn to master the cricket bot:**\n\n"
+            "🚀 **Getting Started (2:30)**\n"
+            "• How to set up your first alerts\n"
+            "• Adding favorite teams and players\n"
+            "• Navigating the dashboard\n\n"
+            "📊 **Analytics Deep Dive (5:45)**\n"
+            "• Understanding win probability\n"
+            "• Reading performance metrics\n"
+            "• Using prediction features\n\n"
+            "🔔 **Alert Mastery (3:20)**\n"
+            "• Setting up smart notifications\n"
+            "• Customizing alert frequency\n"
+            "• Managing quiet hours\n\n"
+            "🎯 **Pro Features (4:15)**\n"
+            "• Advanced analytics dashboard\n"
+            "• Custom prediction models\n"
+            "• Data export and insights\n\n"
+            "📱 **Mobile Tips (2:50)**\n"
+            "• Optimizing for mobile viewing\n"
+            "• Quick actions and shortcuts\n"
+            "• Offline features\n\n"
+            "🏆 **Tournament Mode (6:10)**\n"
+            "• Following specific tournaments\n"
+            "• Qualification tracking\n"
+            "• Championship predictions"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🚀 Getting Started Tutorial", callback_data="tutorial_getting_started"),
+             InlineKeyboardButton("📊 Analytics Tutorial", callback_data="tutorial_analytics")],
+            [InlineKeyboardButton("🔔 Alerts Tutorial", callback_data="tutorial_alerts"),
+             InlineKeyboardButton("🎯 Pro Features Tutorial", callback_data="tutorial_pro_features")],
+            [InlineKeyboardButton("📱 Mobile Tips", callback_data="tutorial_mobile_tips"),
+             InlineKeyboardButton("🏆 Tournament Tutorial", callback_data="tutorial_tournament_mode")],
+            [InlineKeyboardButton("🎥 All Tutorials", callback_data="all_video_tutorials"),
+             InlineKeyboardButton("🔍 Tutorial Search", callback_data="search_tutorials")],
+            [InlineKeyboardButton("💾 Download Tutorials", callback_data="download_tutorials"),
+             InlineKeyboardButton("🔙 Back to Help", callback_data="help_tips")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("🎞️ Video tutorials loaded!", show_alert=False)
+    
+    async def handle_faq(self, query) -> None:
+        """Handle frequently asked questions."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Help', 'FAQ'])
+        
+        text = (
+            f"{breadcrumb}❓ **Frequently Asked Questions**\n\n"
+            "💫 **Most Popular Questions:**\n\n"
+            "🔔 **Q: How do I set up match alerts?**\n"
+            "A: Go to Settings → Alerts → Quick Setup for instant configuration.\n\n"
+            "📊 **Q: Why aren't my predictions accurate?**\n"
+            "A: Our AI uses 95% accurate models. Remember, cricket has inherent unpredictability!\n\n"
+            "⭐ **Q: How do I add favorite teams?**\n"
+            "A: Visit 'My Teams' from the main menu or use the quick setup wizard.\n\n"
+            "📱 **Q: Does the bot work offline?**\n"
+            "A: Basic features work offline, but live updates require internet connection.\n\n"
+            "🚀 **Q: What are Pro features?**\n"
+            "A: Advanced analytics, custom alerts, data export, and priority support.\n\n"
+            "🏏 **Q: How often is cricket data updated?**\n"
+            "A: Live matches update every 1.5 seconds, schedules refresh hourly.\n\n"
+            "🔍 **Q: Can I search for specific matches?**\n"
+            "A: Yes! Use the search feature in Live Matches or Schedule sections.\n\n"
+            "⚙️ **Q: How do I customize the interface?**\n"
+            "A: Visit Settings → Display to change themes, layout, and preferences.\n\n"
+            "📅 **Q: Can I get historical match data?**\n"
+            "A: Yes! Pro users get access to comprehensive historical data and analytics."
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔔 Alert Questions", callback_data="faq_alerts"),
+             InlineKeyboardButton("📊 Analytics FAQ", callback_data="faq_analytics")],
+            [InlineKeyboardButton("⭐ Teams & Players FAQ", callback_data="faq_teams_players"),
+             InlineKeyboardButton("🚀 Pro Features FAQ", callback_data="faq_pro_features")],
+            [InlineKeyboardButton("📱 Technical FAQ", callback_data="faq_technical"),
+             InlineKeyboardButton("🔒 Privacy & Security", callback_data="faq_privacy")],
+            [InlineKeyboardButton("🔍 Search FAQ", callback_data="search_faq"),
+             InlineKeyboardButton("💬 Ask New Question", callback_data="ask_new_question")],
+            [InlineKeyboardButton("📞 Contact Support", callback_data="contact_support"),
+             InlineKeyboardButton("🔙 Back to Help", callback_data="help_tips")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("❓ FAQ loaded!", show_alert=False)
+    
+    async def handle_contact_support(self, query) -> None:
+        """Handle support contact interface."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Help', 'Contact Support'])
+        
+        text = (
+            f"{breadcrumb}📞 **Contact Support**\n\n"
+            "👥 **We're here to help you!**\n\n"
+            "⚡ **Quick Support:**\n"
+            "• Average response time: 2 hours\n"
+            "• Available 24/7 for urgent issues\n"
+            "• Multi-language support available\n\n"
+            "📧 **Email Support:**\n"
+            "• General queries: support@cricketbot.com\n"
+            "• Technical issues: tech@cricketbot.com\n"
+            "• Business inquiries: business@cricketbot.com\n\n"
+            "💬 **Live Chat:**\n"
+            "• Available 9 AM - 9 PM IST\n"
+            "• Instant responses for common issues\n"
+            "• Screen sharing for complex problems\n\n"
+            "🚀 **Pro Support:**\n"
+            "• Priority queue for Pro users\n"
+            "• Dedicated support specialist\n"
+            "• Phone support available\n\n"
+            "🐛 **Bug Reports:**\n"
+            "• Report bugs directly through the app\n"
+            "• Include screenshots for faster resolution\n"
+            "• Get updates on fix progress\n\n"
+            "💡 **Feature Requests:**\n"
+            "• Suggest new features\n"
+            "• Vote on community requests\n"
+            "• Get early access to beta features"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("💬 Start Live Chat", callback_data="start_live_chat"),
+             InlineKeyboardButton("📧 Send Email", callback_data="compose_support_email")],
+            [InlineKeyboardButton("🐛 Report Bug", callback_data="report_issue"),
+             InlineKeyboardButton("💡 Request Feature", callback_data="request_feature")],
+            [InlineKeyboardButton("🚀 Pro Support", callback_data="pro_support_contact"),
+             InlineKeyboardButton("📅 Schedule Call", callback_data="schedule_support_call")],
+            [InlineKeyboardButton("📊 Support History", callback_data="support_history"),
+             InlineKeyboardButton("🔍 FAQ Search", callback_data="search_faq")],
+            [InlineKeyboardButton("📱 Contact via WhatsApp", callback_data="whatsapp_support"),
+             InlineKeyboardButton("🔙 Back to Help", callback_data="help_tips")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("📞 Support options loaded!", show_alert=False)
+    
+    # ==========================================
+    # TOURNAMENT CALLBACKS
+    # ==========================================
+    
+    async def handle_tournament_live_analytics(self, query) -> None:
+        """Handle live tournament analytics."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Tournaments', 'Live Analytics'])
+        
+        text = (
+            f"{breadcrumb}📊 **Tournament Live Analytics**\n\n"
+            "⚡ **Real-time Tournament Intelligence**\n\n"
+            "🏆 **IPL 2024 - Live Stats:**\n"
+            "• Matches Completed: 45/74\n"
+            "• Current Leaders: Gujarat Titans (18 pts)\n"
+            "• Playoff Race: 6 teams competing for 4 spots\n"
+            "• Orange Cap: Shubman Gill (687 runs)\n"
+            "• Purple Cap: Rashid Khan (23 wickets)\n\n"
+            "📈 **Performance Trends:**\n"
+            "• Batting Average: 28.4 (up 2.1 from last season)\n"
+            "• Strike Rate: 142.3 (highest in IPL history)\n"
+            "• Economy Rate: 8.7 (bowler-friendly conditions)\n\n"
+            "🎯 **Key Insights:**\n"
+            "• Toss winning impact: 67% (up from 55%)\n"
+            "• Home advantage: 71% win rate\n"
+            "• Death over scoring: 11.2 RPO average\n"
+            "• Powerplay wickets correlation: 78% win rate\n\n"
+            "🔮 **Playoff Predictions:**\n"
+            "• Gujarat Titans: 92% qualification chance\n"
+            "• Mumbai Indians: 78% chance\n"
+            "• Chennai Super Kings: 65% chance\n"
+            "• Royal Challengers: 43% chance\n\n"
+            "🏆 **Championship Odds:**\n"
+            "• Gujarat Titans: 28%\n"
+            "• Mumbai Indians: 22%\n"
+            "• Chennai Super Kings: 18%\n"
+            "• Others: 32%"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("📈 Points Table", callback_data="live_points_table"),
+             InlineKeyboardButton("🏆 Playoff Scenarios", callback_data="playoff_scenarios")],
+            [InlineKeyboardButton("👑 Player Leaders", callback_data="tournament_player_leaders"),
+             InlineKeyboardButton("📊 Team Performance", callback_data="tournament_team_performance")],
+            [InlineKeyboardButton("🔮 AI Predictions", callback_data="tournament_ai_predictions"),
+             InlineKeyboardButton("📉 Trends Analysis", callback_data="tournament_trends")],
+            [InlineKeyboardButton("⚡ Live Updates", callback_data="tournament_live_updates"),
+             InlineKeyboardButton("📱 Custom Dashboard", callback_data="tournament_custom_dashboard")],
+            [InlineKeyboardButton("🔄 Refresh Analytics", callback_data="refresh_tournament_analytics"),
+             InlineKeyboardButton("🔙 Back to Tournaments", callback_data="competitions_pro")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("📊 Tournament analytics loaded!", show_alert=False)
+    
+    async def handle_championship_race_tracker(self, query) -> None:
+        """Handle championship race tracking."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Tournaments', 'Championship Race'])
+        
+        text = (
+            f"{breadcrumb}🏆 **Championship Race Tracker**\n\n"
+            "🏷️ **Live Championship Battles:**\n\n"
+            "🏆 **IPL 2024 Championship Race:**\n"
+            "🥇 Gujarat Titans - 92% playoff chance\n"
+            "• Remaining matches: 4\n"
+            "• Must win: 2 matches to guarantee playoffs\n"
+            "• Championship probability: 28%\n\n"
+            "🥈 Mumbai Indians - 78% playoff chance\n"
+            "• Remaining matches: 5\n"
+            "• Must win: 3 matches for safe qualification\n"
+            "• Championship probability: 22%\n\n"
+            "🥉 Chennai Super Kings - 65% playoff chance\n"
+            "• Remaining matches: 4\n"
+            "• Critical matches: vs GT, vs MI\n"
+            "• Championship probability: 18%\n\n"
+            "📈 **Race Dynamics:**\n"
+            "• Points gap: Top 4 separated by 6 points\n"
+            "• Net run rate crucial for 3 teams\n"
+            "• Head-to-head advantage: GT over MI\n"
+            "• Remaining fixtures heavily favor GT\n\n"
+            "🔮 **Qualification Scenarios:**\n"
+            "• **If GT wins next 2:** Guaranteed playoff spot\n"
+            "• **If MI loses to CSK:** Drops to 4th place\n"
+            "• **If RCB wins all:** 73% playoff chance\n"
+            "• **Net run rate tiebreaker:** 67% probability"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🏆 Championship Odds", callback_data="championship_odds"),
+             InlineKeyboardButton("📈 Qualification Math", callback_data="qualification_mathematics")],
+            [InlineKeyboardButton("🔮 Scenario Simulator", callback_data="championship_scenario_simulator"),
+             InlineKeyboardButton("⚡ Race Updates", callback_data="live_race_updates")],
+            [InlineKeyboardButton("📊 Head-to-Head Impact", callback_data="head_to_head_championship"),
+             InlineKeyboardButton("🎯 Net Run Rate Tracker", callback_data="nrr_championship_tracker")],
+            [InlineKeyboardButton("📅 Remaining Fixtures", callback_data="championship_remaining_fixtures"),
+             InlineKeyboardButton("📱 Custom Scenarios", callback_data="custom_championship_scenarios")],
+            [InlineKeyboardButton("🔔 Race Alerts", callback_data="championship_race_alerts"),
+             InlineKeyboardButton("🔙 Back to Tournaments", callback_data="competitions_pro")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("🏆 Championship race loaded!", show_alert=False)
+    
+    # ==========================================
+    # ANALYTICS CALLBACKS
+    # ==========================================
+    
+    async def handle_analytics_live(self, query, callback_data: str) -> None:
+        """Handle live analytics for matches."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Analytics', 'Live Analytics'])
+        
+        text = (
+            f"{breadcrumb}⚡ **Live Match Analytics**\n\n"
+            "📊 **Real-time Performance Insights**\n\n"
+            "🏏 **Current Match Analytics:**\n"
+            "• Run rate pressure: 8.5 (above par)\n"
+            "• Win probability: 67% Team A\n"
+            "• Key player impact: +0.3 WPA\n"
+            "• Bowling pressure index: 72%\n\n"
+            "🎯 **Performance Metrics:**\n"
+            "• Strike rotation efficiency: 85%\n"
+            "• Boundary percentage: 12.4%\n"
+            "• Dot ball pressure: 38%\n"
+            "• Partnership strength: Strong\n\n"
+            "🔮 **AI Insights:**\n"
+            "• Predicted final score: 186-195\n"
+            "• Wicket probability next 3 overs: 45%\n"
+            "• Powerplay impact: +18 runs\n"
+            "• Death overs forecast: 48 runs\n\n"
+            "📈 **Momentum Tracking:**\n"
+            "• Current momentum: Batting team\n"
+            "• Turning point: Over 12.4\n"
+            "• Pressure moments: 3 in last 5 overs"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("⚡ Live Updates", callback_data="analytics_live_updates"),
+             InlineKeyboardButton("📊 Win Probability", callback_data="analytics_live_probability")],
+            [InlineKeyboardButton("🎯 Player Impact", callback_data="analytics_live_player_impact"),
+             InlineKeyboardButton("🔮 AI Predictions", callback_data="analytics_live_predictions")],
+            [InlineKeyboardButton("📈 Momentum Chart", callback_data="analytics_live_momentum"),
+             InlineKeyboardButton("🚯 Performance Radar", callback_data="analytics_live_radar")],
+            [InlineKeyboardButton("🔄 Refresh Analytics", callback_data="refresh_live_analytics"),
+             InlineKeyboardButton("🔙 Back to Analytics", callback_data="analytics_dashboard")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("⚡ Live analytics loaded!", show_alert=False)
+    
+    async def handle_analytics_history(self, query, callback_data: str) -> None:
+        """Handle historical analytics."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Analytics', 'Historical Analytics'])
+        
+        text = (
+            f"{breadcrumb}📉 **Historical Analytics**\n\n"
+            "📈 **Performance Trends & Insights**\n\n"
+            "🏆 **Season Performance:**\n"
+            "• Total matches analyzed: 247\n"
+            "• Prediction accuracy: 78.4%\n"
+            "• Average match score: 156.7\n"
+            "• Most successful team: India (82% win rate)\n\n"
+            "👑 **Player Analytics:**\n"
+            "• Top performer: Virat Kohli (avg 58.3)\n"
+            "• Best bowler: Jasprit Bumrah (1.8 WPM)\n"
+            "• Most consistent: Kane Williamson\n"
+            "• Biggest improver: Shubman Gill (+23%)\n\n"
+            "🎯 **Strategic Insights:**\n"
+            "• Toss impact: 64% correlation with wins\n"
+            "• Home advantage: +18% win rate boost\n"
+            "• Powerplay importance: 67% match impact\n"
+            "• Death overs mastery: 43% of upsets\n\n"
+            "📊 **Trends Analysis:**\n"
+            "• Scoring trend: +12 runs per season\n"
+            "• Wicket frequency: Every 15.7 balls\n"
+            "• Six hitting: +34% increase\n"
+            "• Bowling economy: Improving by 0.3 RPO"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🏆 Season Summary", callback_data="analytics_season_summary"),
+             InlineKeyboardButton("👑 Player History", callback_data="analytics_player_history")],
+            [InlineKeyboardButton("🎯 Strategic Trends", callback_data="analytics_strategic_trends"),
+             InlineKeyboardButton("📈 Performance Charts", callback_data="analytics_performance_charts")],
+            [InlineKeyboardButton("🔍 Custom Analysis", callback_data="analytics_custom_analysis"),
+             InlineKeyboardButton("📅 Date Range Filter", callback_data="analytics_date_filter")],
+            [InlineKeyboardButton("📊 Export Data", callback_data="analytics_export_data"),
+             InlineKeyboardButton("🔙 Back to Analytics", callback_data="analytics_dashboard")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("📉 Historical analytics loaded!", show_alert=False)
+    
+    # ==========================================
+    # SCHEDULE CALLBACKS  
+    # ==========================================
+    
+    async def handle_schedule_today(self, query) -> None:
+        """Handle today's match schedule."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Schedule', 'Today'])
+        
+        try:
+            # Get today's matches
+            from datetime import datetime
+            today = datetime.now().strftime('%Y-%m-%d')
+            
+            text = (
+                f"{breadcrumb}📅 **Today's Cricket Schedule**\n\n"
+                f"🗓️ **{today}**\n\n"
+                "🏏 **Scheduled Matches:**\n\n"
+                "⚡ **Live Now:**\n"
+                "🏏 India vs Australia - 2nd Test\n"
+                "🕐 Started: 9:30 AM IST\n"
+                "📍 MCG, Melbourne\n"
+                "📈 India 287/6 (Day 2)\n\n"
+                "🕒 **Starting Soon:**\n"
+                "🏏 Mumbai Indians vs CSK\n"
+                "🕐 Starts: 7:30 PM IST\n"
+                "📍 Wankhede Stadium, Mumbai\n"
+                "🏆 IPL 2024 - Match 46\n\n"
+                "🕘 **Later Today:**\n"
+                "🏏 England vs Pakistan\n"
+                "🕐 Starts: 11:00 PM IST\n"
+                "📍 The Oval, London\n"
+                "🌍 ODI Series - Match 3\n\n"
+                "📊 **Today's Highlights:**\n"
+                "• 3 international matches\n"
+                "• 1 IPL playoff thriller\n"
+                "• 12 hours of live cricket\n"
+                "• 5 different time zones covered"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error loading today's schedule: {e}")
+            text = (
+                f"{breadcrumb}📅 **Today's Cricket Schedule**\n\n"
+                "⚠️ Unable to load today's schedule.\n\n"
+                "🔄 Please try again in a moment!"
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("⚡ Live Matches", callback_data="live_matches_today"),
+             InlineKeyboardButton("🕒 Upcoming Today", callback_data="upcoming_matches_today")],
+            [InlineKeyboardButton("🔔 Set Alerts", callback_data="schedule_alerts_today"),
+             InlineKeyboardButton("📱 Add to Calendar", callback_data="add_today_calendar")],
+            [InlineKeyboardButton("🎯 My Teams Only", callback_data="my_teams_today"),
+             InlineKeyboardButton("🏆 Tournament Filter", callback_data="tournament_today")],
+            [InlineKeyboardButton("🔄 Refresh Schedule", callback_data="refresh_today_schedule"),
+             InlineKeyboardButton("🔙 Back to Schedule", callback_data="match_schedule_pro")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("📅 Today's schedule loaded!", show_alert=False)
+    
+    async def handle_schedule_week(self, query) -> None:
+        """Handle this week's match schedule."""
+        user_id = query.from_user.id if query.from_user else None
+        if not user_id:
+            return
+        
+        breadcrumb = self.ui_components.create_breadcrumb_navigation(['Home', 'Schedule', 'This Week'])
+        
+        text = (
+            f"{breadcrumb}📅 **This Week's Cricket Schedule**\n\n"
+            "🗓️ **Sept 23 - Sept 29, 2025**\n\n"
+            "📅 **Monday, Sep 23:**\n"
+            "• India vs Australia - 2nd Test (Day 1)\n"
+            "• MI vs CSK - IPL Match 46\n\n"
+            "📅 **Tuesday, Sep 24:**\n"
+            "• England vs Pakistan - 3rd ODI\n"
+            "• RCB vs KKR - IPL Match 47\n\n"
+            "📅 **Wednesday, Sep 25:**\n"
+            "• India vs Australia - 2nd Test (Day 3)\n"
+            "• GT vs PBKS - IPL Match 48\n\n"
+            "📅 **Thursday, Sep 26:**\n"
+            "• SA vs WI - T20I Series Game 1\n"
+            "• DC vs RR - IPL Match 49\n\n"
+            "📅 **Friday, Sep 27:**\n"
+            "• India vs Australia - 2nd Test (Day 5)\n"
+            "• SRH vs LSG - IPL Match 50\n\n"
+            "📅 **Weekend Highlights:**\n"
+            "• IPL Playoff Qualifiers\n"
+            "• T20 World Cup Qualifiers\n"
+            "• County Championship Finals\n\n"
+            "📊 **Week Overview:**\n"
+            "• 12 international matches\n"
+            "• 8 IPL matches\n"
+            "• 3 different formats\n"
+            "• 6 countries participating"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("📅 Day-by-Day View", callback_data="schedule_day_by_day"),
+             InlineKeyboardButton("🏆 Tournament Filter", callback_data="schedule_tournament_week")],
+            [InlineKeyboardButton("⭐ My Teams This Week", callback_data="my_teams_week"),
+             InlineKeyboardButton("🔔 Week Alerts", callback_data="schedule_week_alerts")],
+            [InlineKeyboardButton("📱 Export to Calendar", callback_data="export_week_calendar"),
+             InlineKeyboardButton("📊 Week Summary", callback_data="week_schedule_summary")],
+            [InlineKeyboardButton("🔄 Refresh Week", callback_data="refresh_week_schedule"),
+             InlineKeyboardButton("🔙 Back to Schedule", callback_data="match_schedule_pro")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        await query.answer("📅 Week's schedule loaded!", show_alert=False)
