@@ -170,29 +170,24 @@ class CricketJSONExtractor:
                     rate_limit=0.1
                 ),
                 JSONEndpoint(
-                    url="https://api.cricapi.com/v1/currentMatches?apikey=demo&offset=0",
-                    parser="cricapi",
+                    url="https://cricbuzz-live.vercel.app/v1/matches/live",
+                    parser="cricbuzz_live",
                     timeout=2,
                     rate_limit=0.1
                 ),
                 # RapidAPI alternatives (backup)
                 JSONEndpoint(
-                    url="https://cricket-api-free-data.rapidapi.com/matches",
-                    parser="rapidapi_cricket",
+                    url="https://cricbuzz-live.vercel.app/v1/matches/recent",
+                    parser="cricbuzz_recent",
                     timeout=3,
-                    rate_limit=0.2,
-                    headers={
-                        'Accept': 'application/json',
-                        'X-RapidAPI-Key': 'demo',  # Use demo or configure with real key
-                        'X-RapidAPI-Host': 'cricket-api-free-data.rapidapi.com',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    }
+                    rate_limit=0.2
                 ),
                 # Self-hosted option as fallback
                 JSONEndpoint(
-                    url="https://api.github.com/repos/sanwebinfo/cricket-api",  # GitHub API as test endpoint
-                    parser="github_test",
-                    timeout=5
+                    url="https://rest.cricketapi.com/rest/v1/matches.json",
+                    parser="roanuz",
+                    timeout=4,
+                    rate_limit=0.3
                 ),
             ],
             
@@ -203,9 +198,9 @@ class CricketJSONExtractor:
                     timeout=3
                 ),
                 JSONEndpoint(
-                    url="https://api.cricapi.com/v1/match_info?apikey=demo&id={match_id}",
-                    parser="cricapi",
-                    timeout=4
+                    url="https://cricbuzz-live.vercel.app/v1/score/{match_id}",
+                    parser="cricbuzz_live_details",
+                    timeout=3
                 ),
             ],
             
@@ -224,13 +219,18 @@ class CricketJSONExtractor:
             
             'schedule': [
                 JSONEndpoint(
-                    url="https://cricketdata.org/api/fixtures",
-                    parser="cricketdata_org",
+                    url="https://cricketdata.org/api/matchCalendar",
+                    parser="cricketdata_org_schedule",
                     timeout=4
                 ),
                 JSONEndpoint(
-                    url="https://api.cricapi.com/v1/matches?apikey=demo&offset=0",
-                    parser="cricapi",
+                    url="https://cricbuzz-live.vercel.app/v1/matches/upcoming",
+                    parser="cricbuzz_upcoming",
+                    timeout=3
+                ),
+                JSONEndpoint(
+                    url="https://rest.cricketapi.com/rest/v1/matches.json?per_page=20",
+                    parser="roanuz_schedule",
                     timeout=5
                 ),
             ]
@@ -277,7 +277,7 @@ class CricketJSONExtractor:
                     self._mark_endpoint_healthy(endpoint, False)
                     continue
                 
-                if result:  # Non-empty result
+                if result and isinstance(result, list):  # Non-empty result and it's a list
                     successful_endpoints += 1
                     # Filter by format if specified
                     filtered_matches = self._filter_schedule_matches(result, days, match_format)
@@ -694,6 +694,14 @@ class CricketJSONExtractor:
         try:
             if parser_type == "cricbuzz" or parser_type == "cricbuzz_mobile":
                 return await self._parse_cricbuzz_json(data)
+            elif parser_type in ["cricbuzz_live", "cricbuzz_recent", "cricbuzz_upcoming"]:
+                return await self._parse_cricbuzz_live_json(data)
+            elif parser_type == "cricketdata_org" or parser_type == "cricketdata_org_schedule":
+                return await self._parse_cricketdata_org_json(data)
+            elif parser_type == "roanuz" or parser_type == "roanuz_schedule":
+                return await self._parse_roanuz_json(data)
+            elif parser_type == "cricapi_free" or parser_type == "cricapi_free_schedule":
+                return await self._parse_cricapi_free_json(data)
             elif parser_type == "espn":
                 return await self._parse_espn_json(data)
             else:
@@ -944,6 +952,361 @@ class CricketJSONExtractor:
             logger.error(f"❌ Error in generic JSON parsing: {e}")
         
         logger.info(f"✅ Parsed {len(matches)} matches from generic JSON")
+        return matches
+    
+    async def _parse_cricbuzz_live_json(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse Cricbuzz Live API JSON format (cricbuzz-live.vercel.app)."""
+        matches = []
+        
+        try:
+            # Handle cricbuzz-live.vercel.app API response format
+            match_list = []
+            
+            # The API returns either a list of matches or a nested structure
+            if isinstance(data, list):
+                match_list = data
+            elif 'typeMatches' in data:
+                # Handle standard Cricbuzz structure
+                for type_match in data['typeMatches']:
+                    if 'seriesMatches' in type_match:
+                        for series in type_match['seriesMatches']:
+                            if 'seriesAdWrapper' in series and 'matches' in series['seriesAdWrapper']:
+                                match_list.extend(series['seriesAdWrapper']['matches'])
+            elif 'matches' in data:
+                match_list = data['matches']
+            elif 'data' in data:
+                data_content = data['data']
+                match_list = data_content if isinstance(data_content, list) else [data_content]
+            
+            # Ensure match_list is a list before slicing with explicit type casting
+            if not isinstance(match_list, list):
+                match_list = [match_list] if match_list else []
+            
+            # Type cast to satisfy LSP type checker
+            match_list = cast(List[Dict[str, Any]], match_list)
+            
+            for match_data in match_list[:8]:  # Process max 8 matches
+                try:
+                    # Extract match info - could be directly in match_data or nested
+                    match_info = match_data.get('matchInfo', match_data)
+                    
+                    match_id = str(match_info.get('matchId', match_info.get('id', '')))
+                    match_desc = match_info.get('matchDesc', match_info.get('description', ''))
+                    series_name = match_info.get('seriesName', match_info.get('series', ''))
+                    
+                    title = f"{match_desc} - {series_name}" if series_name else match_desc
+                    
+                    # Extract team information
+                    team1_data = match_info.get('team1', {})
+                    team2_data = match_info.get('team2', {})
+                    
+                    team1 = Team(
+                        name=team1_data.get('teamName', team1_data.get('name', 'Team 1')),
+                        short_name=team1_data.get('teamSName', team1_data.get('shortName', 'T1'))
+                    )
+                    
+                    team2 = Team(
+                        name=team2_data.get('teamName', team2_data.get('name', 'Team 2')),
+                        short_name=team2_data.get('teamSName', team2_data.get('shortName', 'T2'))
+                    )
+                    
+                    # Extract scores if available
+                    score_data = match_data.get('score', {})
+                    if score_data:
+                        team1_score = score_data.get('team1', {})
+                        team2_score = score_data.get('team2', {})
+                        
+                        if team1_score:
+                            team1.score = team1_score.get('runs', 0)
+                            team1.wickets = team1_score.get('wickets', 0)
+                            team1.overs = str(team1_score.get('overs', '0.0'))
+                            
+                        if team2_score:
+                            team2.score = team2_score.get('runs', 0)
+                            team2.wickets = team2_score.get('wickets', 0)
+                            team2.overs = str(team2_score.get('overs', '0.0'))
+                    
+                    # Determine match status
+                    status_text = match_info.get('status', '').lower()
+                    if any(word in status_text for word in ['live', 'in progress', 'innings break']):
+                        status = MatchStatus.LIVE
+                    elif any(word in status_text for word in ['upcoming', 'toss', 'preview']):
+                        status = MatchStatus.UPCOMING
+                    else:
+                        status = MatchStatus.COMPLETED
+                    
+                    match = Match(
+                        match_id=f"cb_live_{match_id}_{int(time.time())}",
+                        title=title,
+                        team1=team1,
+                        team2=team2,
+                        status=status,
+                        venue=match_info.get('venueInfo', {}).get('ground', match_info.get('venue', '')),
+                        date=match_info.get('startDate', match_info.get('date', '')),
+                        format=match_info.get('matchFormat', match_info.get('format', '')),
+                        series_name=series_name
+                    )
+                    
+                    matches.append(match)
+                    logger.debug(f"📊 Parsed Cricbuzz Live match: {title}")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Error parsing individual Cricbuzz Live match: {e}")
+                    continue
+        
+        except Exception as e:
+            logger.error(f"❌ Error parsing Cricbuzz Live JSON structure: {e}")
+        
+        logger.info(f"✅ Parsed {len(matches)} matches from Cricbuzz Live JSON")
+        return matches
+    
+    async def _parse_cricketdata_org_json(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse CricketData.org API JSON format."""
+        matches = []
+        
+        try:
+            # CricketData.org API response format
+            match_list = []
+            
+            if 'data' in data:
+                data_content = data['data']
+                match_list = data_content if isinstance(data_content, list) else [data_content]
+            elif 'matches' in data:
+                match_list = data['matches']
+            elif isinstance(data, list):
+                match_list = data
+            
+            # Ensure match_list is a list before slicing with explicit type casting
+            if not isinstance(match_list, list):
+                match_list = [match_list] if match_list else []
+            
+            # Type cast to satisfy LSP type checker
+            match_list = cast(List[Dict[str, Any]], match_list)
+            
+            for match_data in match_list[:8]:  # Process max 8 matches
+                try:
+                    match_id = str(match_data.get('unique_id', match_data.get('id', '')))
+                    title = match_data.get('title', match_data.get('name', ''))
+                    
+                    # Extract team information
+                    teama = match_data.get('teama', {})
+                    teamb = match_data.get('teamb', {})
+                    
+                    team1 = Team(
+                        name=teama.get('name', 'Team A'),
+                        short_name=teama.get('short_name', 'TA'),
+                        score=teama.get('scores_full', teama.get('score', 0)),
+                        overs=str(teama.get('overs', '0.0'))
+                    )
+                    
+                    team2 = Team(
+                        name=teamb.get('name', 'Team B'),
+                        short_name=teamb.get('short_name', 'TB'),
+                        score=teamb.get('scores_full', teamb.get('score', 0)),
+                        overs=str(teamb.get('overs', '0.0'))
+                    )
+                    
+                    # Determine match status
+                    status_text = match_data.get('status', '').lower()
+                    if any(word in status_text for word in ['live', 'in progress']):
+                        status = MatchStatus.LIVE
+                    elif any(word in status_text for word in ['fixture', 'upcoming']):
+                        status = MatchStatus.UPCOMING
+                    else:
+                        status = MatchStatus.COMPLETED
+                    
+                    match = Match(
+                        match_id=f"cd_org_{match_id}_{int(time.time())}",
+                        title=title,
+                        team1=team1,
+                        team2=team2,
+                        status=status,
+                        venue=match_data.get('venue', ''),
+                        date=match_data.get('date_start', match_data.get('dateTimeGMT', '')),
+                        format=match_data.get('format_str', match_data.get('format', '')),
+                        series_name=match_data.get('competition', {}).get('title', '')
+                    )
+                    
+                    matches.append(match)
+                    logger.debug(f"📊 Parsed CricketData.org match: {title}")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Error parsing individual CricketData.org match: {e}")
+                    continue
+        
+        except Exception as e:
+            logger.error(f"❌ Error parsing CricketData.org JSON structure: {e}")
+        
+        logger.info(f"✅ Parsed {len(matches)} matches from CricketData.org JSON")
+        return matches
+    
+    async def _parse_roanuz_json(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse Roanuz Cricket API JSON format."""
+        matches = []
+        
+        try:
+            # Roanuz API response format
+            match_list = []
+            
+            if 'data' in data:
+                if 'matches' in data['data']:
+                    match_list = data['data']['matches']
+                elif isinstance(data['data'], list):
+                    match_list = data['data']
+            elif 'matches' in data:
+                match_list = data['matches']
+            elif isinstance(data, list):
+                match_list = data
+            
+            # Ensure match_list is a list before slicing with explicit type casting
+            if not isinstance(match_list, list):
+                match_list = [match_list] if match_list else []
+            
+            # Type cast to satisfy LSP type checker
+            match_list = cast(List[Dict[str, Any]], match_list)
+            
+            for match_data in match_list[:8]:  # Process max 8 matches
+                try:
+                    match_id = str(match_data.get('match_id', match_data.get('key', '')))
+                    title = match_data.get('title', match_data.get('name', ''))
+                    
+                    # Extract team information
+                    teams = match_data.get('teams', {})
+                    team_keys = list(teams.keys())[:2] if teams else []
+                    
+                    if len(team_keys) >= 2:
+                        team1_key, team2_key = team_keys[0], team_keys[1]
+                        team1_data = teams[team1_key]
+                        team2_data = teams[team2_key]
+                        
+                        team1 = Team(
+                            name=team1_data.get('name', 'Team 1'),
+                            short_name=team1_data.get('code', 'T1')
+                        )
+                        
+                        team2 = Team(
+                            name=team2_data.get('name', 'Team 2'),
+                            short_name=team2_data.get('code', 'T2')
+                        )
+                    else:
+                        # Fallback if teams structure is different
+                        team1 = Team(name='Team 1', short_name='T1')
+                        team2 = Team(name='Team 2', short_name='T2')
+                    
+                    # Determine match status
+                    status_text = match_data.get('status', '').lower()
+                    if any(word in status_text for word in ['started', 'live']):
+                        status = MatchStatus.LIVE
+                    elif any(word in status_text for word in ['not_started', 'upcoming']):
+                        status = MatchStatus.UPCOMING
+                    else:
+                        status = MatchStatus.COMPLETED
+                    
+                    match = Match(
+                        match_id=f"roanuz_{match_id}_{int(time.time())}",
+                        title=title,
+                        team1=team1,
+                        team2=team2,
+                        status=status,
+                        venue=match_data.get('venue', ''),
+                        date=match_data.get('date_start', ''),
+                        format=match_data.get('format', ''),
+                        series_name=match_data.get('competition', {}).get('title', '')
+                    )
+                    
+                    matches.append(match)
+                    logger.debug(f"📊 Parsed Roanuz match: {title}")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Error parsing individual Roanuz match: {e}")
+                    continue
+        
+        except Exception as e:
+            logger.error(f"❌ Error parsing Roanuz JSON structure: {e}")
+        
+        logger.info(f"✅ Parsed {len(matches)} matches from Roanuz JSON")
+        return matches
+    
+    async def _parse_cricapi_free_json(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse CricAPI free tier JSON format."""
+        matches = []
+        
+        try:
+            # CricAPI response format
+            match_list = []
+            
+            if 'data' in data:
+                data_content = data['data']
+                match_list = data_content if isinstance(data_content, list) else [data_content]
+            elif 'matches' in data:
+                match_list = data['matches']
+            elif isinstance(data, list):
+                match_list = data
+            
+            # Ensure match_list is a list before slicing with explicit type casting
+            if not isinstance(match_list, list):
+                match_list = [match_list] if match_list else []
+            
+            # Type cast to satisfy LSP type checker
+            match_list = cast(List[Dict[str, Any]], match_list)
+            
+            for match_data in match_list[:8]:  # Process max 8 matches
+                try:
+                    match_id = str(match_data.get('id', match_data.get('unique_id', '')))
+                    title = match_data.get('name', match_data.get('title', ''))
+                    
+                    # Extract team information
+                    teams = match_data.get('teamInfo', match_data.get('teams', []))
+                    
+                    if len(teams) >= 2:
+                        team1_data = teams[0]
+                        team2_data = teams[1]
+                        
+                        team1 = Team(
+                            name=team1_data.get('name', team1_data.get('fullName', 'Team 1')),
+                            short_name=team1_data.get('shortname', team1_data.get('name', 'T1')[:3])
+                        )
+                        
+                        team2 = Team(
+                            name=team2_data.get('name', team2_data.get('fullName', 'Team 2')),
+                            short_name=team2_data.get('shortname', team2_data.get('name', 'T2')[:3])
+                        )
+                    else:
+                        team1 = Team(name='Team 1', short_name='T1')
+                        team2 = Team(name='Team 2', short_name='T2')
+                    
+                    # Determine match status
+                    status_text = match_data.get('status', '').lower()
+                    if any(word in status_text for word in ['live', 'inprogress']):
+                        status = MatchStatus.LIVE
+                    elif any(word in status_text for word in ['not started', 'upcoming']):
+                        status = MatchStatus.UPCOMING
+                    else:
+                        status = MatchStatus.COMPLETED
+                    
+                    match = Match(
+                        match_id=f"cricapi_{match_id}_{int(time.time())}",
+                        title=title,
+                        team1=team1,
+                        team2=team2,
+                        status=status,
+                        venue=match_data.get('venue', ''),
+                        date=match_data.get('dateTimeGMT', match_data.get('date', '')),
+                        format=match_data.get('matchType', match_data.get('format', '')),
+                        series_name=match_data.get('series', '')
+                    )
+                    
+                    matches.append(match)
+                    logger.debug(f"📊 Parsed CricAPI free match: {title}")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Error parsing individual CricAPI free match: {e}")
+                    continue
+        
+        except Exception as e:
+            logger.error(f"❌ Error parsing CricAPI free JSON structure: {e}")
+        
+        logger.info(f"✅ Parsed {len(matches)} matches from CricAPI free JSON")
         return matches
     
     def _find_json_objects_with_keys(self, data: Any, required_keys: List[str], min_matches: int = 2) -> List[Dict[str, Any]]:

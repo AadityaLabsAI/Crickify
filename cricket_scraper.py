@@ -1209,31 +1209,33 @@ class RealCricketScraper:
             
             # Updated selectors for current Cricbuzz structure (2024/2025)
             # Look for match links with the current URL pattern
-            match_links = soup.find_all('a', href=lambda x: x and 'live-cricket-scores' in x)
+            match_links = soup.find_all('a', href=lambda x: bool(x and 'live-cricket-scores' in str(x or '')))
             
             logger.info(f"🔍 Found {len(match_links)} potential match links on Cricbuzz")
             
             for i, link in enumerate(match_links[:15]):  # Process up to 15 matches
                 try:
-                    # Extract match URL and details
-                    match_url = link.get('href', '')
+                    # Extract match URL and details with proper type checking
+                    match_url_attr = link.get('href') if isinstance(link, Tag) else None
+                    match_url = str(match_url_attr or '')
                     if not match_url.startswith('http'):
                         match_url = f"{self.cricbuzz_base_url}{match_url}"
                     
                     # Extract match ID from URL pattern: /live-cricket-scores/130179/pak-vs-ind-final-asia-cup-2025
-                    match_id_match = re.search(r'/live-cricket-scores/(\d+)/', match_url)
+                    match_id_match = re.search(r'/live-cricket-scores/(\d+)/', str(match_url))
                     match_id = match_id_match.group(1) if match_id_match else f"cb_{i+1}_{int(time.time())}"
                     
                     # Extract teams and match info from link text and title
                     link_text = self._safe_text(link)
-                    title_attr = link.get('title', '')
+                    title_attr_raw = link.get('title') if isinstance(link, Tag) else None
+                    title_attr = str(title_attr_raw or '')
                     
                     # Parse team names from link text (format: "Pakistan vs India" or "Pakistan v India")
                     teams = self._parse_team_names_from_text(link_text)
                     
                     if len(teams) >= 2:
                         # Determine match status from title attribute or surrounding context
-                        status = self._determine_status_from_title(title_attr, link_text)
+                        status = self._determine_status_from_title(str(title_attr), str(link_text))
                         
                         # Extract additional context from parent elements
                         parent_context = self._extract_parent_context(link)
@@ -1243,7 +1245,7 @@ class RealCricketScraper:
                         team2 = Team(name=teams[1], short_name=self._generate_short_name(teams[1]))
                         
                         # Extract scores if available in context
-                        score_info = self._extract_scores_from_context(parent_context, title_attr)
+                        score_info = self._extract_scores_from_context(str(parent_context or ''), str(title_attr))
                         if score_info:
                             team1.score = score_info.get('team1_score', 0)
                             team1.wickets = score_info.get('team1_wickets', 0)
@@ -1257,7 +1259,7 @@ class RealCricketScraper:
                             team2.run_rate = self._calculate_run_rate(team2.score, team2.overs)
                         
                         # Extract match details
-                        match_details = self._extract_match_details_from_title(title_attr)
+                        match_details = self._extract_match_details_from_title(str(title_attr))
                         
                         match = Match(
                             match_id=match_id,
@@ -1267,7 +1269,7 @@ class RealCricketScraper:
                             status=status,
                             venue=match_details.get('venue', 'Venue TBD'),
                             date=match_details.get('date', datetime.now().strftime("%d %b %Y")),
-                            format=match_details.get('format', self._detect_format_from_text(title_attr + link_text)),
+                            format=match_details.get('format', self._detect_format_from_text(str(title_attr) + str(link_text))),
                             series_name=match_details.get('series', ''),
                             tournament_name=match_details.get('tournament', ''),
                             match_status_detail=match_details.get('status_detail', '')
@@ -3758,14 +3760,14 @@ class RealCricketScraper:
         domain = "cricbuzz"
         circuit_breaker = self._get_circuit_breaker(domain)
         
-        if circuit_breaker.should_allow_request():
+        if circuit_breaker.can_execute():
             try:
                 await self._rate_limit(domain)
                 
                 # Use session manager for optimized HTTP connections
                 if hasattr(self, 'session_manager'):
-                    async with self.session_manager.get_session(f"cricket_resilience_{domain}") as session:
-                        matches = await self._fetch_live_matches_with_retries(session, self.cricbuzz_endpoints['live_matches'])
+                    session = await self.session_manager.get_session_for_url(f"https://www.{domain}.com")
+                    matches = await self._fetch_live_matches_with_retries(session, self.cricbuzz_endpoints['live_matches'])
                 else:
                     # Fallback to basic session
                     matches = await self._fetch_live_matches_with_retries(self.session, self.cricbuzz_endpoints['live_matches'])
@@ -3785,13 +3787,13 @@ class RealCricketScraper:
         backup_domain = "espn"
         backup_circuit_breaker = self._get_circuit_breaker(backup_domain)
         
-        if backup_circuit_breaker.should_allow_request():
+        if backup_circuit_breaker.can_execute():
             try:
                 await self._rate_limit(backup_domain)
                 
                 if hasattr(self, 'session_manager'):
-                    async with self.session_manager.get_session(f"cricket_resilience_{backup_domain}") as session:
-                        matches = await self._fetch_live_matches_with_retries(session, self.espn_endpoints['live_matches'])
+                    session = await self.session_manager.get_session_for_url(f"https://www.{backup_domain}.com")
+                    matches = await self._fetch_live_matches_with_retries(session, self.espn_endpoints['live_matches'])
                 else:
                     matches = await self._fetch_live_matches_with_retries(self.session, self.espn_endpoints['live_matches'])
                 
@@ -3825,14 +3827,14 @@ class RealCricketScraper:
         domain = "cricbuzz"
         circuit_breaker = self._get_circuit_breaker(domain)
         
-        if circuit_breaker.should_allow_request():
+        if circuit_breaker.can_execute():
             try:
                 await self._rate_limit(domain)
                 
                 # Use session manager for optimized HTTP connections
                 if hasattr(self, 'session_manager'):
-                    async with self.session_manager.get_session(f"cricket_resilience_{domain}") as session:
-                        matches = await self._fetch_schedule_with_retries(session, self.cricbuzz_endpoints['upcoming_matches'], days, match_format)
+                    session = await self.session_manager.get_session_for_url(f"https://www.{domain}.com")
+                    matches = await self._fetch_schedule_with_retries(session, self.cricbuzz_endpoints['upcoming_matches'], days, match_format)
                 else:
                     matches = await self._fetch_schedule_with_retries(self.session, self.cricbuzz_endpoints['upcoming_matches'], days, match_format)
                 
@@ -3851,13 +3853,13 @@ class RealCricketScraper:
         backup_domain = "espn"
         backup_circuit_breaker = self._get_circuit_breaker(backup_domain)
         
-        if backup_circuit_breaker.should_allow_request():
+        if backup_circuit_breaker.can_execute():
             try:
                 await self._rate_limit(backup_domain)
                 
                 if hasattr(self, 'session_manager'):
-                    async with self.session_manager.get_session(f"cricket_resilience_{backup_domain}") as session:
-                        matches = await self._fetch_schedule_with_retries(session, self.espn_endpoints['upcoming_matches'], days, match_format)
+                    session = await self.session_manager.get_session_for_url(f"https://www.{backup_domain}.com")
+                    matches = await self._fetch_schedule_with_retries(session, self.espn_endpoints['upcoming_matches'], days, match_format)
                 else:
                     matches = await self._fetch_schedule_with_retries(self.session, self.espn_endpoints['upcoming_matches'], days, match_format)
                 
