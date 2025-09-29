@@ -202,15 +202,36 @@ class CricketJSONExtractor:
         self.validation_failures = defaultdict(int)  # endpoint -> failure count
         
     def _initialize_endpoints(self) -> Dict[str, List[JSONEndpoint]]:
-        """Initialize real Cricbuzz and ESPN endpoints - NO COMMUNITY MIRRORS."""
+        """Initialize working free cricket API endpoints including Cricbuzz Live API."""
         return {
             'live_matches': [
-                # REAL CRICBUZZ.COM ENDPOINTS - Primary sources
+                # CRICBUZZ LIVE API - Working free alternative
+                JSONEndpoint(
+                    url="https://cricbuzz-live.vercel.app/v1/live",
+                    parser="cricbuzz_live_api",
+                    timeout=2,
+                    rate_limit=0.1,
+                    headers={
+                        'Accept': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                ),
+                JSONEndpoint(
+                    url="https://cricbuzz-live.vercel.app/v1/recent",
+                    parser="cricbuzz_recent_api",
+                    timeout=2,
+                    rate_limit=0.1,
+                    headers={
+                        'Accept': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                ),
+                # BACKUP: REAL CRICBUZZ.COM ENDPOINTS - Fallback sources
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/live-scores/widget",
                     parser="cricbuzz_live_widget",
-                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
-                    rate_limit=0.1,  # Reduced from 0.3s to 0.1s for ultra-fast
+                    timeout=2,
+                    rate_limit=0.1,
                     headers={
                         'Accept': 'application/json, text/plain, */*',
                         'Accept-Language': 'en-US,en;q=0.9',
@@ -222,20 +243,20 @@ class CricketJSONExtractor:
                 JSONEndpoint(
                     url="https://m.cricbuzz.com/api/html/cricket-match/live-scores/homepage-widget",
                     parser="cricbuzz_mobile_widget",
-                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
-                    rate_limit=0.1,  # Reduced from 0.3s to 0.1s for ultra-fast
+                    timeout=2,
+                    rate_limit=0.1,
                     headers={
                         'Accept': 'application/json, text/html, */*',
                         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
                         'Referer': 'https://m.cricbuzz.com/'
                     }
                 ),
-                # ESPN CRICINFO ENDPOINTS - Direct sources
+                # ESPN CRICINFO ENDPOINTS - Additional fallback sources
                 JSONEndpoint(
                     url="https://www.espncricinfo.com/live-cricket-score",
                     parser="espn_cricinfo_html",
-                    timeout=2,  # Reduced from 4s to 2s for sub-1s response
-                    rate_limit=0.15,  # Reduced from 0.4s to 0.15s for ultra-fast
+                    timeout=2,
+                    rate_limit=0.15,
                     headers={
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -247,8 +268,8 @@ class CricketJSONExtractor:
                 JSONEndpoint(
                     url="https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en",
                     parser="espn_cricinfo_api",
-                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
-                    rate_limit=0.1,  # Reduced from 0.5s to 0.1s for ultra-fast
+                    timeout=2,
+                    rate_limit=0.1,
                     headers={
                         'Accept': 'application/json',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -259,31 +280,42 @@ class CricketJSONExtractor:
             ],
             
             'match_details': [
-                # REAL CRICBUZZ.COM MATCH DETAILS  
+                # CRICBUZZ LIVE API - Match details
+                JSONEndpoint(
+                    url="https://cricbuzz-live.vercel.app/v1/score/{match_id}",
+                    parser="cricbuzz_live_score_api",
+                    timeout=2,
+                    rate_limit=0.1,
+                    headers={
+                        'Accept': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                ),
+                # BACKUP: REAL CRICBUZZ.COM MATCH DETAILS  
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/{match_id}/scorecard-html",
                     parser="cricbuzz_scorecard",
-                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
-                    rate_limit=0.1  # Reduced from 0.3s to 0.1s for ultra-fast
+                    timeout=2,
+                    rate_limit=0.1
                 ),
                 JSONEndpoint(
                     url="https://m.cricbuzz.com/api/html/cricket-match/{match_id}/scorecard",
                     parser="cricbuzz_mobile_scorecard",
-                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
-                    rate_limit=0.1  # Reduced from 0.3s to 0.1s for ultra-fast
+                    timeout=2,
+                    rate_limit=0.1
                 ),
                 # ESPN CRICINFO MATCH DETAILS
                 JSONEndpoint(
                     url="https://hs-consumer-api.espncricinfo.com/v1/pages/match/scorecard?lang=en&matchId={match_id}",
                     parser="espn_cricinfo_scorecard_api",
-                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
-                    rate_limit=0.1  # Reduced from 0.4s to 0.1s for ultra-fast
+                    timeout=2,
+                    rate_limit=0.1
                 ),
                 JSONEndpoint(
                     url="https://www.espncricinfo.com/matches/engine/match/{match_id}.html",
                     parser="espn_cricinfo_scorecard_html",
-                    timeout=2,  # Reduced from 4s to 2s for sub-1s response
-                    rate_limit=0.15  # Reduced from 0.4s to 0.15s for ultra-fast
+                    timeout=2,
+                    rate_limit=0.15
                 ),
             ],
             
@@ -317,7 +349,18 @@ class CricketJSONExtractor:
             ],
             
             'schedule': [
-                # REAL CRICBUZZ.COM SCHEDULE
+                # CRICBUZZ LIVE API - Upcoming matches
+                JSONEndpoint(
+                    url="https://cricbuzz-live.vercel.app/v1/upcoming",
+                    parser="cricbuzz_upcoming_api",
+                    timeout=3,
+                    rate_limit=0.2,
+                    headers={
+                        'Accept': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                ),
+                # BACKUP: REAL CRICBUZZ.COM SCHEDULE
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/cricket-schedule/upcoming-matches",
                     parser="cricbuzz_schedule_html",
@@ -807,8 +850,20 @@ class CricketJSONExtractor:
     async def _parse_json_matches(self, data: Dict[str, Any], parser_type: str) -> List[Match]:
         """Parse matches from JSON data based on source type - NOW WITH REAL CRICBUZZ + ESPN SUPPORT."""
         try:
-            # REAL CRICBUZZ.COM PARSERS
-            if parser_type in ["cricbuzz_live_widget", "cricbuzz_widget"]:
+            # NEW CRICBUZZ LIVE API PARSERS (PRIMARY)
+            if parser_type == "cricbuzz_live_api":
+                return await self._parse_cricbuzz_live_api(data)
+            elif parser_type == "cricbuzz_recent_api":
+                return await self._parse_cricbuzz_recent_api(data)
+            elif parser_type == "cricbuzz_upcoming_api":
+                return await self._parse_cricbuzz_upcoming_api(data)
+            elif parser_type == "cricbuzz_live_score_api":
+                # For score details, return empty list since it's not match list format
+                await self._parse_cricbuzz_live_score_api(data)
+                return []
+            
+            # REAL CRICBUZZ.COM PARSERS (FALLBACK)
+            elif parser_type in ["cricbuzz_live_widget", "cricbuzz_widget"]:
                 return await self._parse_cricbuzz_widget_json(data)
             elif parser_type == "cricbuzz_mobile_widget":
                 return await self._parse_cricbuzz_mobile_widget(data)
@@ -1140,14 +1195,24 @@ class CricketJSONExtractor:
                 
                 for card in match_cards:
                     try:
-                        # Extract team names
-                        team_elements = card.find_all('div', class_='cb-ovr-flo')
+                        # Extract team names  
+                        team_elements = []
+                        if card and hasattr(card, 'find_all'):
+                            try:
+                                team_elements = card.find_all('div', class_='cb-ovr-flo')  # type: ignore
+                            except:
+                                pass
                         if len(team_elements) >= 2:
                             team1_name = team_elements[0].get_text(strip=True)
                             team2_name = team_elements[1].get_text(strip=True)
                             
                             # Extract scores
-                            score_elements = card.find_all('div', class_='cb-scr-wll-chvrn')
+                            score_elements = []
+                            if card and hasattr(card, 'find_all'):
+                                try:
+                                    score_elements = card.find_all('div', class_='cb-scr-wll-chvrn')  # type: ignore
+                                except:
+                                    pass
                             team1_score = score_elements[0].get_text(strip=True) if len(score_elements) > 0 else "0/0"
                             team2_score = score_elements[1].get_text(strip=True) if len(score_elements) > 1 else "0/0"
                             
@@ -1180,6 +1245,143 @@ class CricketJSONExtractor:
             return []
     
     # =============================================
+    # NEW CRICBUZZ LIVE API PARSERS
+    # =============================================
+    
+    async def _parse_cricbuzz_live_api(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse Cricbuzz Live API response from cricbuzz-live.vercel.app/v1/live."""
+        matches = []
+        
+        try:
+            if 'data' in data and isinstance(data['data'], list):
+                for match_data in data['data']:
+                    if isinstance(match_data, dict):
+                        match = await self._parse_cricbuzz_live_match(match_data)
+                        if match:
+                            matches.append(match)
+            elif isinstance(data, list):
+                for match_data in data:
+                    if isinstance(match_data, dict):
+                        match = await self._parse_cricbuzz_live_match(match_data)
+                        if match:
+                            matches.append(match)
+            
+            logger.info(f"✅ Parsed {len(matches)} matches from Cricbuzz Live API")
+            return matches[:5]
+            
+        except Exception as e:
+            logger.error(f"❌ Error parsing Cricbuzz Live API: {e}")
+            return []
+    
+    async def _parse_cricbuzz_recent_api(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse Cricbuzz Recent API response from cricbuzz-live.vercel.app/v1/recent."""
+        return await self._parse_cricbuzz_live_api(data)  # Same format
+    
+    async def _parse_cricbuzz_upcoming_api(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse Cricbuzz Upcoming API response from cricbuzz-live.vercel.app/v1/upcoming."""
+        matches = []
+        
+        try:
+            if 'data' in data and isinstance(data['data'], list):
+                for match_data in data['data']:
+                    if isinstance(match_data, dict):
+                        match = await self._parse_cricbuzz_upcoming_match(match_data)
+                        if match:
+                            matches.append(match)
+            elif isinstance(data, list):
+                for match_data in data:
+                    if isinstance(match_data, dict):
+                        match = await self._parse_cricbuzz_upcoming_match(match_data)
+                        if match:
+                            matches.append(match)
+            
+            logger.info(f"✅ Parsed {len(matches)} upcoming matches from Cricbuzz Live API")
+            return matches[:20]
+            
+        except Exception as e:
+            logger.error(f"❌ Error parsing Cricbuzz Upcoming API: {e}")
+            return []
+    
+    async def _parse_cricbuzz_live_score_api(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse Cricbuzz Live Score API response from cricbuzz-live.vercel.app/v1/score/{match_id}."""
+        try:
+            if 'data' in data:
+                return data['data']
+            return data
+        except Exception as e:
+            logger.error(f"❌ Error parsing Cricbuzz Live Score API: {e}")
+            return {}
+    
+    async def _parse_cricbuzz_live_match(self, match_data: Dict[str, Any]) -> Optional[Match]:
+        """Parse individual match from Cricbuzz Live API."""
+        try:
+            # Extract match information from Cricbuzz Live API format
+            title = match_data.get('title', '')
+            live_score = match_data.get('liveScore', '')
+            update = match_data.get('update', '')
+            
+            # Parse team names from title (format: "Team1 vs Team2, Match Description")
+            if ' vs ' in title:
+                teams_part = title.split(',')[0] if ',' in title else title
+                team_names = teams_part.split(' vs ')
+                
+                if len(team_names) >= 2:
+                    team1_name = team_names[0].strip()
+                    team2_name = team_names[1].strip()
+                    
+                    # Parse live score (format: "TEAM 155/5 (18.2)")
+                    team1_score, team1_wickets = 0, 0
+                    team2_score, team2_wickets = 0, 0
+                    
+                    if live_score:
+                        score_parts = live_score.split(' ')
+                        if len(score_parts) >= 2:
+                            # Parse score format "155/5"
+                            score_str = score_parts[1]
+                            if '/' in score_str:
+                                score_parts_detail = score_str.split('/')
+                                team1_score = int(score_parts_detail[0]) if score_parts_detail[0].isdigit() else 0
+                                team1_wickets = int(score_parts_detail[1]) if score_parts_detail[1].isdigit() else 0
+                    
+                    # Determine status from update text
+                    status = MatchStatus.LIVE
+                    if 'need' in update.lower() or 'target' in update.lower():
+                        status = MatchStatus.LIVE
+                    elif 'upcoming' in update.lower():
+                        status = MatchStatus.UPCOMING
+                    elif 'won' in update.lower() or 'completed' in update.lower():
+                        status = MatchStatus.COMPLETED
+                    
+                    match = Match(
+                        match_id=f"cricbuzz_live_{hash(title)}_{int(time.time())}",
+                        title=title,
+                        team1=Team(name=team1_name, score=team1_score, wickets=team1_wickets),
+                        team2=Team(name=team2_name, score=team2_score, wickets=team2_wickets),
+                        status=status,
+                        data_sources=["cricbuzz-live.vercel.app"],
+                        # Note: update info stored but not passed to Match constructor
+                    )
+                    return match
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Error parsing Cricbuzz Live match: {e}")
+            return None
+    
+    async def _parse_cricbuzz_upcoming_match(self, match_data: Dict[str, Any]) -> Optional[Match]:
+        """Parse upcoming match from Cricbuzz Live API."""
+        try:
+            # Similar to live match but with upcoming status
+            match = await self._parse_cricbuzz_live_match(match_data)
+            if match:
+                match.status = MatchStatus.UPCOMING
+            return match
+        except Exception as e:
+            logger.debug(f"Error parsing upcoming match: {e}")
+            return None
+    
+    # =============================================
     # REAL ESPN CRICINFO PARSERS
     # =============================================
     
@@ -1198,14 +1400,24 @@ class CricketJSONExtractor:
             for card in match_cards[:5]:  # Limit to 5 matches for performance
                 try:
                     # Extract team information
-                    team_elements = card.find_all('span', class_=['team-name', 'team'])
+                    team_elements = []
+                    if card and hasattr(card, 'find_all'):
+                        try:
+                            team_elements = card.find_all('span', class_=['team-name', 'team'])  # type: ignore
+                        except:
+                            pass
                     
                     if len(team_elements) >= 2:
                         team1_name = team_elements[0].get_text(strip=True)
                         team2_name = team_elements[1].get_text(strip=True)
                         
                         # Extract scores
-                        score_elements = card.find_all('span', class_=['score', 'team-score'])
+                        score_elements = []
+                        if card and hasattr(card, 'find_all'):
+                            try:
+                                score_elements = card.find_all('span', class_=['score', 'team-score'])  # type: ignore
+                            except:
+                                pass
                         team1_score = score_elements[0].get_text(strip=True) if len(score_elements) > 0 else "0/0"
                         team2_score = score_elements[1].get_text(strip=True) if len(score_elements) > 1 else "0/0"
                         
@@ -1214,7 +1426,12 @@ class CricketJSONExtractor:
                         team2_runs, team2_wickets = self._parse_score_string(team2_score)
                         
                         # Extract match status
-                        status_element = card.find('span', class_=['match-status', 'game-status'])
+                        status_element = None
+                        if card and hasattr(card, 'find'):
+                            try:
+                                status_element = card.find('span', class_=['match-status', 'game-status'])  # type: ignore
+                            except:
+                                pass
                         status_text = status_element.get_text(strip=True) if status_element else ""
                         
                         # Determine status
@@ -2272,8 +2489,10 @@ class CricketJSONExtractor:
             async with session_manager.request_session(url) as session:
                 headers = endpoint.headers or {}
                 
-                async with session.request(endpoint.method, url, headers=headers) as response:
-                    if response.status == 200:
+                timeout = aiohttp.ClientTimeout(total=endpoint.timeout)
+                response = await session.request(endpoint.method, url, headers=headers, timeout=timeout)
+                try:
+                    if response and response.status == 200:
                         response_text = await response.text()
                         
                         # Use ultra-fast orjson parsing
@@ -2285,9 +2504,15 @@ class CricketJSONExtractor:
                         else:
                             logger.warning(f"⚠️ Failed to parse JSON from {endpoint.parser}")
                             return None
-                    else:
+                    elif response:
                         logger.warning(f"⚠️ HTTP {response.status} from {endpoint.parser}")
                         return None
+                    else:
+                        logger.warning(f"⚠️ No response received from {endpoint.parser}")
+                        return None
+                finally:
+                    if response:
+                        response.close()
                         
         except Exception as e:
             logger.error(f"❌ Optimized fetch failed for {endpoint.parser}: {e}")
@@ -2365,3 +2590,6 @@ async def get_commentary_json(match_id: str) -> List[Commentary]:
     
     if commentary_data:
         return await json_extractor._parse_json_commentary(commentary_data)
+    
+    # Return empty list if no commentary data found
+    return []

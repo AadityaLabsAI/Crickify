@@ -39,7 +39,7 @@ except ImportError:
     logging.warning("⚠️ lz4 not available, falling back to gzip compression (slower)")
 from typing import Dict, Any, Optional, Union, List, Callable, TypeVar, Generic
 from dataclasses import dataclass, field
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict, deque
 from enum import Enum
 import threading
 from datetime import datetime, timedelta
@@ -183,15 +183,17 @@ class ShardedLRUCache:
         
         # Fast hashing for shard selection with fallback
         if HAS_XXHASH:
-            if HAS_XXHASH:
-                self._shard_hash_func = xxhash.xxh64_intdigest
-            else:
-                def _fallback_hash(data):
-                    return int(hashlib.md5(data).hexdigest()[:8], 16)
-                self._shard_hash_func = _fallback_hash
+            import xxhash
+            self._shard_hash_func = xxhash.xxh64_intdigest
         else:
             def _fallback_hash(data):
-                return int(hashlib.md5(data).hexdigest()[:8], 16)
+                if isinstance(data, str):
+                    data_bytes = data.encode()
+                elif isinstance(data, (bytes, bytearray, memoryview)):
+                    data_bytes = bytes(data)
+                else:
+                    data_bytes = str(data).encode()
+                return int(hashlib.md5(data_bytes).hexdigest()[:8], 16)
             self._shard_hash_func = _fallback_hash
         
         # Compression settings optimized for sub-1s response
@@ -238,6 +240,40 @@ class ShardedLRUCache:
         # Start background cleanup
         self._cleanup_task: Optional[asyncio.Task] = None
         self._start_cleanup_task()
+    
+    def _record_operation_latency(self, operation: str, start_time: float):
+        """Record operation latency for performance monitoring."""
+        latency = time.time() - start_time
+        
+        # Track latencies based on operation type
+        if operation == 'get':
+            self._performance_metrics['get_latencies'].append(latency)
+            # Update average
+            latencies = list(self._performance_metrics['get_latencies'])
+            self._performance_metrics['avg_get_latency_ms'] = (sum(latencies) / len(latencies)) * 1000
+            
+            # Update p95
+            if latencies:
+                sorted_latencies = sorted(latencies)
+                p95_index = int(len(sorted_latencies) * 0.95)
+                self._performance_metrics['p95_get_latency_ms'] = sorted_latencies[min(p95_index, len(sorted_latencies) - 1)] * 1000
+        
+        elif operation == 'set':
+            self._performance_metrics['set_latencies'].append(latency)
+            # Update average
+            latencies = list(self._performance_metrics['set_latencies'])
+            self._performance_metrics['avg_set_latency_ms'] = (sum(latencies) / len(latencies)) * 1000
+            
+            # Update p95
+            if latencies:
+                sorted_latencies = sorted(latencies)
+                p95_index = int(len(sorted_latencies) * 0.95)
+                self._performance_metrics['p95_set_latency_ms'] = sorted_latencies[min(p95_index, len(sorted_latencies) - 1)] * 1000
+        
+        # Track sub-1s operations
+        self._performance_metrics['total_operations'] += 1
+        if latency < 1.0:  # Less than 1 second
+            self._performance_metrics['sub_1s_operations'] += 1
     
     def _start_cleanup_task(self):
         """Start background cleanup task."""
@@ -393,10 +429,20 @@ class ShardedLRUCache:
                 compress_start = time.time()
                 if HAS_LZ4:
                     import lz4.frame
-                    compressed = lz4.frame.compress(serialized)
+                    if isinstance(serialized, bytes):
+                        compressed = lz4.frame.compress(serialized)
+                    elif isinstance(serialized, str):
+                        compressed = lz4.frame.compress(serialized.encode('utf-8'))
+                    else:
+                        compressed = lz4.frame.compress(str(serialized).encode('utf-8'))
                 else:
                     import gzip
-                    compressed = gzip.compress(serialized)
+                    if isinstance(serialized, bytes):
+                        compressed = gzip.compress(serialized)
+                    elif isinstance(serialized, str):
+                        compressed = gzip.compress(serialized.encode('utf-8'))
+                    else:
+                        compressed = gzip.compress(str(serialized).encode('utf-8'))
                 self._performance_metrics['compression_time'] += time.time() - compress_start
                 self._performance_metrics['compression_ratio'] = len(compressed) / len(serialized)
                 return compressed
