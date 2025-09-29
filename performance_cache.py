@@ -370,40 +370,73 @@ class PerformanceCacheManager:
     
     def __init__(self):
         """Initialize cache manager with multiple specialized caches."""
-        # Specialized caches for different data types
+        # ULTRA-FAST specialized caches for different data types optimized for sub-2-second updates
         self.live_matches_cache = LRUCache(
-            max_size=200,
-            max_memory_mb=15.0,
-            default_ttl=1.5,  # 1.5 seconds for ultra-fast live data
-            cleanup_interval=5.0  # More frequent cleanup for real-time
+            max_size=300,  # Increased for better hit rate
+            max_memory_mb=25.0,  # Increased memory for ultra-fast performance
+            default_ttl=1.0,  # 1.0 second for maximum speed (faster than Cricbuzz)
+            cleanup_interval=2.0  # Ultra-frequent cleanup for real-time
         )
         
         self.schedule_cache = LRUCache(
-            max_size=300,
-            max_memory_mb=20.0,
-            default_ttl=300.0,  # 5 minutes for schedule data (faster refresh)
-            cleanup_interval=60.0
+            max_size=400,  # Increased size
+            max_memory_mb=30.0,  # Increased memory
+            default_ttl=120.0,  # 2 minutes for faster schedule refresh
+            cleanup_interval=30.0  # More frequent cleanup
         )
         
         self.tournament_cache = LRUCache(
-            max_size=100,
-            max_memory_mb=8.0,
-            default_ttl=900.0,  # 15 minutes for tournament data
-            cleanup_interval=180.0
+            max_size=150,  # Increased size
+            max_memory_mb=15.0,  # Increased memory
+            default_ttl=600.0,  # 10 minutes for faster tournament data
+            cleanup_interval=120.0  # More frequent cleanup
         )
         
         self.standings_cache = LRUCache(
-            max_size=150,
-            max_memory_mb=12.0,
-            default_ttl=600.0,  # 10 minutes for standings (faster refresh)
-            cleanup_interval=120.0
+            max_size=200,  # Increased size
+            max_memory_mb=20.0,  # Increased memory
+            default_ttl=300.0,  # 5 minutes for faster standings refresh
+            cleanup_interval=60.0  # More frequent cleanup
         )
         
-        # Performance monitoring
+        # ULTRA-FAST HOT CACHE for most critical live data (sub-second updates)
+        self.hot_live_cache = LRUCache(
+            max_size=50,  # Small but ultra-fast
+            max_memory_mb=5.0,  # Minimal memory for speed
+            default_ttl=0.5,  # 500ms TTL for instant updates
+            cleanup_interval=1.0  # Cleanup every second
+        )
+        
+        # PREDICTIVE CACHE for anticipated data requests
+        self.predictive_cache = LRUCache(
+            max_size=100,  # Medium size for predictions
+            max_memory_mb=10.0,  # Moderate memory
+            default_ttl=5.0,  # 5 seconds for predictions
+            cleanup_interval=10.0  # Cleanup every 10 seconds
+        )
+        
+        # ENHANCED performance monitoring for ultra-fast optimization
         self.performance_metrics = {
             'response_times': defaultdict(list),
             'cache_operations': defaultdict(int),
-            'data_freshness': defaultdict(float)
+            'data_freshness': defaultdict(float),
+            'ultra_fast_hits': defaultdict(int),  # Track ultra-fast cache hits
+            'sub_second_responses': defaultdict(int),  # Track sub-second responses
+            'cache_efficiency_score': defaultdict(float),  # Efficiency scores per cache
+            'predictive_accuracy': defaultdict(float)  # Prediction accuracy
+        }
+        
+        # Ultra-fast optimization settings
+        self.ultra_fast_mode = True
+        self.enable_predictive_caching = True
+        self.auto_ttl_optimization = True
+        
+        # Dynamic TTL optimization based on access patterns
+        self.dynamic_ttl_settings = {
+            'live_matches': {'min': 0.5, 'max': 2.0, 'current': 1.0},
+            'live_scores': {'min': 0.3, 'max': 1.5, 'current': 0.8},
+            'match_details': {'min': 2.0, 'max': 10.0, 'current': 5.0},
+            'schedule': {'min': 60.0, 'max': 300.0, 'current': 120.0}
         }
         
         self._setup_event_listeners()
@@ -417,36 +450,81 @@ class PerformanceCacheManager:
                 self.performance_metrics['cache_operations'][f"{cache_name}_{event_type.value}"] += 1
             return listener
         
-        # Add listeners to all caches
+        # Add listeners to all caches including ultra-fast caches
         for cache_name, cache in [
             ('live_matches', self.live_matches_cache),
             ('schedule', self.schedule_cache),
             ('tournament', self.tournament_cache),
-            ('standings', self.standings_cache)
+            ('standings', self.standings_cache),
+            ('hot_live', self.hot_live_cache),
+            ('predictive', self.predictive_cache)
         ]:
             for event_type in CacheEventType:
                 cache.add_event_listener(event_type, log_cache_event(cache_name))
     
     def _setup_prefetch_patterns(self):
         """Setup intelligent prefetch patterns."""
-        # When accessing live matches, prefetch schedule
+        # ULTRA-FAST prefetch patterns for sub-2-second responses
+        # When accessing live matches, prefetch related data
         self.live_matches_cache.add_prefetch_pattern(
             "live_matches_all",
-            ["schedule_3_all_all_all", "tournaments_list"]
+            ["schedule_3_all_all_all", "tournaments_list", "live_scores_all"]
+        )
+        
+        # Hot cache prefetch patterns for instant access
+        self.hot_live_cache.add_prefetch_pattern(
+            "live_scores",
+            ["live_matches_all", "match_details_recent"]
+        )
+        
+        # Predictive prefetch based on user behavior
+        self.predictive_cache.add_prefetch_pattern(
+            "user_dashboard",
+            ["live_matches_all", "user_preferences", "recent_matches"]
         )
         
         # When accessing a specific tournament, prefetch its standings
         # This will be set dynamically when tournament IDs are known
     
-    def get_cache_for_type(self, data_type: str) -> LRUCache:
-        """Get appropriate cache for data type."""
+    def get_cache_for_type(self, data_type: str, priority: str = 'normal') -> LRUCache:
+        """Get appropriate cache for data type with ultra-fast priority support."""
+        # Ultra-fast hot cache for critical live data
+        if priority == 'ultra_fast' or (data_type in ['live_matches', 'live_scores'] and self.ultra_fast_mode):
+            return self.hot_live_cache
+        
+        # Predictive cache for anticipated requests
+        if priority == 'predictive' and self.enable_predictive_caching:
+            return self.predictive_cache
+        
+        # Standard cache mapping with enhanced options
         cache_mapping = {
             'live_matches': self.live_matches_cache,
+            'live_scores': self.live_matches_cache,  # Use same cache for scores
             'schedule': self.schedule_cache,
             'tournament': self.tournament_cache,
-            'standings': self.standings_cache
+            'standings': self.standings_cache,
+            'hot_live': self.hot_live_cache,  # Direct access to hot cache
+            'predictive': self.predictive_cache  # Direct access to predictive cache
         }
         return cache_mapping.get(data_type, self.schedule_cache)
+    
+    def get_optimal_ttl(self, data_type: str, access_frequency: float = 1.0) -> float:
+        """Get optimal TTL based on data type and access frequency."""
+        if not self.auto_ttl_optimization:
+            return self.get_cache_for_type(data_type).default_ttl
+        
+        if data_type in self.dynamic_ttl_settings:
+            settings = self.dynamic_ttl_settings[data_type]
+            # Adjust TTL based on access frequency
+            # Higher frequency = lower TTL for fresher data
+            frequency_factor = max(0.5, min(2.0, 1.0 / max(0.1, access_frequency)))
+            optimal_ttl = settings['current'] * frequency_factor
+            
+            # Clamp to min/max bounds
+            optimal_ttl = max(settings['min'], min(settings['max'], optimal_ttl))
+            return optimal_ttl
+        
+        return self.get_cache_for_type(data_type).default_ttl
     
     def generate_cache_key(self, data_type: str, **params) -> str:
         """Generate consistent cache key from parameters."""

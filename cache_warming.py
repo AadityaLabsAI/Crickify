@@ -139,63 +139,90 @@ class IntelligentCacheWarmer:
         self._running = False
         self._lock = threading.RLock()
         
-        # Resource budgeting and concurrency control (Railway-friendly)
+        # ULTRA-FAST resource budgeting optimized for Railway deployment
         self._thread_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="cache_warm"
+            max_workers=3, thread_name_prefix="ultra_warm"  # Increased for better performance
         )
-        self._max_concurrent_prefetch = 3
+        self._max_concurrent_prefetch = 5  # Increased for better parallelism
         self._current_prefetch_count = 0
-        self._max_warming_per_cycle = 2  # Limit warming strategies per cycle
-        self._resource_budget_seconds = 5.0  # Max seconds per warming cycle
+        self._max_warming_per_cycle = 3  # Increased for better throughput
+        self._resource_budget_seconds = 3.0  # Reduced for faster cycles
         
-        # Circuit breaker for resource protection
+        # Ultra-fast optimization flags
+        self._ultra_fast_mode = True
+        self._adaptive_intervals = True
+        self._predictive_warming_enabled = True
+        
+        # ENHANCED circuit breaker for ultra-fast performance protection
         self._circuit_breaker_failures = 0
-        self._circuit_breaker_threshold = 5
-        self._circuit_breaker_reset_time = 300  # 5 minutes
+        self._circuit_breaker_threshold = 3  # More sensitive threshold
+        self._circuit_breaker_reset_time = 180  # 3 minutes (faster recovery)
         self._circuit_breaker_last_failure = 0
+        self._circuit_breaker_half_open_time = 60  # 1 minute half-open state
+        self._circuit_breaker_state = 'CLOSED'  # CLOSED, OPEN, HALF_OPEN
         
-        # Rate limiting for network calls
+        # OPTIMIZED rate limiting for ultra-fast network calls
         self._last_network_call = 0
-        self._min_network_call_interval = 0.5  # Minimum 500ms between network calls
+        self._min_network_call_interval = 0.2  # Reduced to 200ms for faster updates
+        self._network_call_burst_limit = 3  # Allow burst of 3 calls
+        self._network_call_burst_window = 1.0  # Within 1 second window
+        self._recent_network_calls = deque(maxlen=10)  # Track recent calls
+        
+        # Performance tracking for optimization
+        self._warming_response_times = defaultdict(list)
+        self._success_rates = defaultdict(float)
+        self._adaptive_interval_adjustments = defaultdict(float)
         
         # Register default strategies
         self._register_default_strategies()
     
     def _register_default_strategies(self):
         """Register default cache warming strategies with proper TTL/refresh synchronization."""
-        # Critical: Live matches (most important for user experience)
-        # Fix: Set interval to 3 seconds with TTL of 5 seconds to ensure data stays valid
+        # ULTRA-CRITICAL: Live matches (sub-2-second performance)
         self.register_strategy(WarmingStrategy(
-            name="live_matches_critical",
+            name="live_matches_ultra_critical",
             data_type="live_matches",
             fetcher_func=self._warm_live_matches,
             priority=WarmingPriority.CRITICAL,
-            interval=3.0,  # Every 3 seconds (balanced for Railway constraints)
-            ttl_multiplier=1.7,  # TTL = 5.1 seconds (ensures data stays valid)
-            conditions=[lambda ctx: True]  # Always warm live matches
+            interval=1.5,  # Every 1.5 seconds for ultra-fast updates
+            ttl_multiplier=2.0,  # TTL = 3.0 seconds (ensures data stays valid)
+            conditions=[lambda ctx: True],  # Always warm live matches
+            prefetch_related=["live_scores", "match_details_recent"]
         ))
         
-        # High: Popular schedule data
+        # CRITICAL: Live scores (even faster for instant updates)
         self.register_strategy(WarmingStrategy(
-            name="schedule_popular",
+            name="live_scores_instant",
+            data_type="live_scores",
+            fetcher_func=self._warm_live_matches,
+            priority=WarmingPriority.CRITICAL,
+            interval=1.0,  # Every 1 second for instant updates
+            ttl_multiplier=2.5,  # TTL = 2.5 seconds
+            conditions=[lambda ctx: True],  # Always warm live scores
+            prefetch_related=["live_matches"]
+        ))
+        
+        # HIGH: Popular schedule data (optimized)
+        self.register_strategy(WarmingStrategy(
+            name="schedule_popular_optimized",
             data_type="schedule",
             fetcher_func=self._warm_popular_schedule,
             priority=WarmingPriority.HIGH,
-            interval=120.0,  # Every 2 minutes
-            ttl_multiplier=1.5,  # TTL = 180 seconds (3 minutes)
-            prefetch_related=["tournaments_list"],
-            conditions=[self._is_high_traffic_period]
+            interval=60.0,  # Every 1 minute (faster refresh)
+            ttl_multiplier=2.0,  # TTL = 120 seconds (2 minutes)
+            prefetch_related=["tournaments_list", "recent_matches"],
+            conditions=[lambda ctx: True]  # Always warm popular schedule
         ))
         
-        # High: Tournaments list
+        # HIGH: Tournaments list (optimized)
         self.register_strategy(WarmingStrategy(
-            name="tournaments_active",
+            name="tournaments_active_optimized",
             data_type="tournament",
             fetcher_func=self._warm_tournaments,
             priority=WarmingPriority.HIGH,
-            interval=300.0,  # Every 5 minutes
-            ttl_multiplier=1.5,  # TTL = 450 seconds (7.5 minutes)
-            prefetch_related=["popular_standings"]
+            interval=180.0,  # Every 3 minutes (faster refresh)
+            ttl_multiplier=2.0,  # TTL = 360 seconds (6 minutes)
+            prefetch_related=["popular_standings", "tournament_matches"]
         ))
         
         # Medium: Popular tournament standings (limited to reduce resource usage)
@@ -206,7 +233,7 @@ class IntelligentCacheWarmer:
             priority=WarmingPriority.MEDIUM,
             interval=1200.0,  # Every 20 minutes (reduced frequency)
             ttl_multiplier=1.5,  # TTL = 1800 seconds (30 minutes)
-            conditions=[self._has_popular_tournaments]
+            conditions=[lambda ctx: True]  # Always warm standings
         ))
         
         # Low: Extended schedule data (reduced frequency for Railway efficiency)
@@ -217,12 +244,21 @@ class IntelligentCacheWarmer:
             priority=WarmingPriority.LOW,
             interval=3600.0,  # Every hour (reduced for efficiency)
             ttl_multiplier=1.2,  # TTL = 4320 seconds (72 minutes)
-            conditions=[self._is_low_traffic_period]
+            conditions=[lambda ctx: True]  # Always warm extended schedule
         ))
     
     def register_strategy(self, strategy: WarmingStrategy):
-        """Register a cache warming strategy."""
+        """Register a cache warming strategy with ultra-fast optimization."""
         with self._lock:
+            # Auto-optimize intervals for ultra-fast mode
+            if self._ultra_fast_mode and strategy.priority == WarmingPriority.CRITICAL:
+                strategy.interval = min(strategy.interval, 2.0)  # Cap at 2 seconds for critical
+                logger.info(f"⚡ Ultra-fast mode: Optimized {strategy.name} interval to {strategy.interval}s")
+            
+            # Validate strategy configuration
+            if strategy.interval * strategy.ttl_multiplier < strategy.interval + 1.0:
+                logger.warning(f"⚠️ Strategy {strategy.name} may have TTL issues - adjusting multiplier")
+                strategy.ttl_multiplier = max(2.0, strategy.ttl_multiplier)
             self.strategies[strategy.name] = strategy
             logger.info(f"🔥 Registered warming strategy: {strategy.name}")
     

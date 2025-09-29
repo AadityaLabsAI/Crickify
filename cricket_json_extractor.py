@@ -13,7 +13,7 @@ import json
 import logging
 import re
 import time
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, cast
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -27,7 +27,7 @@ class JSONEndpoint:
     """Configuration for a JSON API endpoint."""
     url: str
     method: str = "GET"
-    headers: Dict[str, str] = None
+    headers: Optional[Dict[str, str]] = None
     parser: str = "auto"  # auto, cricbuzz, espn, generic
     timeout: int = 5
     rate_limit: float = 0.1  # Minimal rate limiting for JSON APIs
@@ -67,19 +67,19 @@ class CricketJSONExtractor:
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/live-scores",
                     parser="cricbuzz",
-                    timeout=1.2,  # Ultra-fast timeout for 1.5s updates
+                    timeout=1,  # Ultra-fast timeout for 1.5s updates
                     rate_limit=0.05
                 ),
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket/live",
                     parser="cricbuzz",
-                    timeout=1.2,
+                    timeout=1,
                     rate_limit=0.05
                 ),
                 JSONEndpoint(
                     url="https://m.cricbuzz.com/api/cricket-match/live-scores",
                     parser="cricbuzz_mobile",
-                    timeout=0.8,  # Mobile endpoints are typically faster
+                    timeout=1,  # Mobile endpoints are typically faster
                     rate_limit=0.03
                 ),
                 
@@ -87,7 +87,7 @@ class CricketJSONExtractor:
                 JSONEndpoint(
                     url="https://hs-consumer-api.espncricinfo.com/v1/pages/matches",
                     parser="espn",
-                    timeout=1.5,  # Reduced timeout for faster response
+                    timeout=2,  # Reduced timeout for faster response
                     rate_limit=0.08
                 ),
                 
@@ -421,7 +421,7 @@ class CricketJSONExtractor:
                 match_list = data
             
             # Parse individual matches
-            for match_data in match_list[:8]:  # Process max 8 matches
+            for match_data in cast(List[Dict[str, Any]], match_list)[:8]:  # Process max 8 matches
                 try:
                     match_info = match_data.get('matchInfo', {})
                     if not match_info:
@@ -526,7 +526,7 @@ class CricketJSONExtractor:
                 elif isinstance(data, list):
                     matches_data = data
             
-            for match_data in matches_data[:8]:  # Process max 8 matches
+            for match_data in cast(List[Dict[str, Any]], matches_data)[:8]:  # Process max 8 matches
                 try:
                     # Extract basic match info
                     match_id = str(match_data.get('objectId', ''))

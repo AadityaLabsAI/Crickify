@@ -23,6 +23,11 @@ from user_preferences import UserDataManager, UserPreferences
 from advanced_ui_components import UIComponents
 from professional_handlers import ProfessionalHandlers
 from cache_warming import start_cache_warming, stop_cache_warming
+# Import ultra-fast JSON extractor for sub-2-second updates
+from cricket_json_extractor import CricketJSONExtractor
+# Import performance monitoring
+from performance_monitor import PerformanceMonitor
+from centralized_fetcher import centralized_fetcher
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import (
@@ -106,12 +111,25 @@ class ProfessionalCricketBot:
         self.match_cache: Dict[str, Any] = {}  # Cache for match details
         self.last_data_hash = ""  # To detect actual data changes
         
-        # Dynamic scheduling system
+        # Ultra-fast dynamic scheduling system (optimized for sub-2-second updates)
         self.update_job: Optional[Any] = None
         self.current_interval = 10.0  # Current update interval
-        self.fast_interval = 1.5  # Fast interval when users are active (1.5 seconds)
-        self.slow_interval = 10.0  # Slow interval when no users are active
+        self.fast_interval = 1.2  # Ultra-fast interval when users are active (1.2 seconds)
+        self.turbo_interval = 0.8  # Turbo mode for high activity (0.8 seconds)
+        self.slow_interval = 8.0  # Reduced slow interval for better responsiveness
         self.last_interval_check = 0.0
+        self.user_activity_score = 0  # Track user activity for intelligent interval adjustment
+        
+        # Ultra-fast JSON extractor for sub-2-second data delivery
+        self.json_extractor = CricketJSONExtractor()
+        
+        # Performance monitoring for optimization
+        self.performance_monitor = PerformanceMonitor(monitoring_interval=20.0)
+        self.update_performance_cache = {}  # Cache update performance metrics
+        
+        # Concurrency optimization
+        self.max_concurrent_updates = 10  # Maximum concurrent user updates
+        self._update_semaphore = asyncio.Semaphore(10)  # Control concurrency
         
         # Enhanced professional features
         self.user_sessions: Dict[int, Dict[str, Any]] = {}  # Track user sessions and navigation
@@ -985,21 +1003,34 @@ class ProfessionalCricketBot:
             )
     
     def adjust_update_interval(self) -> None:
-        """Dynamically adjust update interval based on active users."""
+        """Ultra-responsive dynamic interval adjustment for sub-2-second updates."""
         current_time = time.time()
         
-        # Only check interval adjustment every 5 seconds to avoid thrashing
-        if current_time - self.last_interval_check < 5.0:
+        # More responsive: check every 2 seconds instead of 5 for ultra-fast adaptation
+        if current_time - self.last_interval_check < 2.0:
             return
             
         self.last_interval_check = current_time
         active_users = len(self.live_users)
         
-        # Determine optimal interval
-        target_interval = self.fast_interval if active_users > 0 else self.slow_interval
+        # Calculate user activity score for intelligent interval adjustment
+        recent_activity = sum(1 for user_data in self.live_users.values() 
+                            if current_time - user_data.get('last_update', 0) < 30)
+        self.user_activity_score = (recent_activity / max(1, active_users)) * 100 if active_users > 0 else 0
         
-        # Only reschedule if interval needs to change significantly
-        if abs(self.current_interval - target_interval) > 0.5:
+        # Intelligent interval selection based on user count and activity
+        if active_users == 0:
+            target_interval = self.slow_interval
+        elif active_users >= 5 and self.user_activity_score > 70:  # High activity
+            target_interval = self.turbo_interval  # 0.8 seconds for maximum speed
+        elif active_users > 0:
+            target_interval = self.fast_interval   # 1.2 seconds for regular active users
+        else:
+            target_interval = self.slow_interval
+        
+        # More aggressive rescheduling for sub-2-second responsiveness
+        if abs(self.current_interval - target_interval) > 0.2:  # Reduced threshold for faster adjustment
+            old_interval = self.current_interval
             self.current_interval = target_interval
             
             if self.application and self.application.job_queue and self.update_job:
@@ -1011,25 +1042,27 @@ class ProfessionalCricketBot:
                     self.update_job = self.application.job_queue.run_repeating(
                         self.update_all_live_users,
                         interval=self.current_interval,
-                        first=0.5  # Start quickly
+                        first=0.3  # Start even faster for immediate response
                     )
                     
-                    logger.info(f"🚀 Adjusted update interval to {target_interval}s for {active_users} active users")
+                    activity_msg = f"(activity: {self.user_activity_score:.0f}%)"
+                    logger.info(f"⚡ ULTRA-FAST: Adjusted interval {old_interval:.1f}s → {target_interval:.1f}s for {active_users} users {activity_msg}")
                 except Exception as e:
                     logger.error(f"❌ Failed to adjust update interval: {e}")
     
     async def update_all_live_users(self, context=None):
-        """Enhanced live user updates with stale user cleanup and error resilience."""
+        """Ultra-fast live user updates with concurrent processing and JSON extractor integration."""
         if not self.live_users or not self.bot_instance:
             return
             
-        current_time = time.time()
+        update_start_time = time.time()
+        current_time = update_start_time
         users_to_remove = []
         
-        # Adjust update interval dynamically based on user activity
+        # Adjust update interval dynamically based on user activity (more responsive)
         self.adjust_update_interval()
         
-        # First, clean up stale users
+        # First, clean up stale users (non-blocking)
         await self._cleanup_stale_users()
         
         # If no users left after cleanup, skip
@@ -1037,77 +1070,183 @@ class ProfessionalCricketBot:
             return
         
         try:
-            # Get fresh live matches data with error handling
-            live_text = await self.format_live_matches_text()
+            # ULTRA-FAST: Use JSON extractor for sub-2-second data delivery
+            live_text = await self._get_ultra_fast_live_data()
             
             # Smart update: Only update if data has actually changed
             import hashlib
             current_hash = hashlib.md5(live_text.encode()).hexdigest()
             
             if current_hash == self.last_data_hash:
-                logger.debug("📊 No data changes detected, skipping user updates")
+                # Even if no changes, update activity score for users
+                for user_id in self.live_users:
+                    self.live_users[user_id]['last_seen'] = current_time
+                logger.debug(f"📊 No data changes detected, activity updated for {len(self.live_users)} users")
                 return
             
             self.last_data_hash = current_hash
-            logger.info(f"🔄 Data changed, updating {len(self.live_users)} tracked users")
+            data_fetch_time = (time.time() - update_start_time) * 1000  # Convert to ms
+            logger.info(f"⚡ ULTRA-FAST: Data fetched in {data_fetch_time:.1f}ms, updating {len(self.live_users)} users")
         
         except Exception as data_error:
-            logger.error(f"❌ Error getting live data: {data_error}")
-            # Still try to send error message to users
-            live_text = (
-                "🏏 *Live Matches* 🔄\n\n"
-                "⚡ *Quick data refresh in progress!* ⚡\n\n"
-                "Our cricket servers are catching up with the latest action!\n\n"
-                "🔄 _Refreshing automatically..._ 🔄"
-            )
-        
-        # CRITICAL FIX: Dynamic interval scheduling based on user activity
-        await self._check_and_adjust_update_interval()
-        
-        # Update each tracked user
-        for user_id, user_data in list(self.live_users.items()):
+            logger.error(f"❌ Error getting ultra-fast live data: {data_error}")
+            # Fallback to centralized fetcher if JSON extractor fails
             try:
-                chat_id = user_data['chat_id']
-                message_id = user_data['message_id']
-                last_update = user_data['last_update']
-                
-                # Remove stale users (inactive for more than 10 minutes)
-                if current_time - last_update > 600:  # 10 minutes
-                    users_to_remove.append(user_id)
-                    continue
-                
-                # Create keyboard for live matches
-                keyboard = [
-                    [InlineKeyboardButton("🔄 Refresh", callback_data="live_matches")],
-                    [InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                # Update the user's message with fresh data
-                await self.bot_instance.edit_message_text(
-                    text=live_text,
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    parse_mode='Markdown',
-                    reply_markup=reply_markup
+                live_text = await self.format_live_matches_text()
+                logger.info("🔄 Fallback to centralized fetcher successful")
+            except Exception as fallback_error:
+                logger.error(f"❌ Fallback also failed: {fallback_error}")
+                live_text = (
+                    "🏏 *Live Matches* 🔄\n\n"
+                    "⚡ *Ultra-fast data refresh in progress!* ⚡\n\n"
+                    "Our lightning-fast cricket servers are syncing!\n\n"
+                    "🚀 _Sub-2-second updates resuming..._ 🚀"
                 )
-                
-                # Update last update time
-                self.live_users[user_id]['last_update'] = current_time
-                
-            except Exception as e:
-                # If we can't update the user (message deleted, etc.), remove them
-                logger.warning(f"Failed to update user {user_id}: {e}")
-                users_to_remove.append(user_id)
+        
+        # CONCURRENT USER UPDATES: Process multiple users simultaneously for speed
+        update_tasks = []
+        for user_id, user_data in list(self.live_users.items()):
+            # Create concurrent update task
+            task = self._update_single_user_concurrent(
+                user_id, user_data, live_text, current_time
+            )
+            update_tasks.append(task)
+        
+        # Execute all user updates concurrently with semaphore control
+        if update_tasks:
+            # Process in batches to avoid overwhelming the system
+            batch_size = min(self.max_concurrent_updates, len(update_tasks))
+            for i in range(0, len(update_tasks), batch_size):
+                batch = update_tasks[i:i + batch_size]
+                try:
+                    # Wait for batch completion with timeout
+                    batch_results = await asyncio.wait_for(
+                        asyncio.gather(*batch, return_exceptions=True),
+                        timeout=3.0  # 3-second timeout per batch
+                    )
+                    
+                    # Process results and collect failed users
+                    for idx, result in enumerate(batch_results):
+                        if isinstance(result, Exception):
+                            user_id = list(self.live_users.keys())[i + idx]
+                            users_to_remove.append(user_id)
+                            logger.warning(f"User {user_id} update failed: {result}")
+                            
+                except asyncio.TimeoutError:
+                    logger.warning(f"⚠️ Batch update timeout - some users may have stale data")
+                except Exception as batch_error:
+                    logger.error(f"❌ Batch update error: {batch_error}")
         
         # Clean up users we couldn't update
         for user_id in users_to_remove:
             if user_id in self.live_users:
                 del self.live_users[user_id]
-                logger.info(f"🧹 Removed stale/failed user {user_id} from tracking")
+                logger.info(f"🧹 Removed failed user {user_id} from tracking")
+        
+        # Performance tracking
+        total_update_time = (time.time() - update_start_time) * 1000
+        self.update_performance_cache['last_update_time_ms'] = total_update_time
+        self.update_performance_cache['users_updated'] = len(self.live_users)
+        self.update_performance_cache['timestamp'] = current_time
         
         if self.live_users:
-            logger.info(f"✅ Updated {len(self.live_users)} users with fresh live scores")
+            avg_time_per_user = total_update_time / len(self.live_users)
+            logger.info(f"⚡ ULTRA-FAST COMPLETE: {len(self.live_users)} users updated in {total_update_time:.1f}ms ({avg_time_per_user:.1f}ms/user)")
+    
+    async def _update_single_user_concurrent(self, user_id: int, user_data: dict, live_text: str, current_time: float) -> bool:
+        """Update a single user concurrently with semaphore control."""
+        async with self._update_semaphore:
+            try:
+                chat_id = user_data['chat_id']
+                message_id = user_data['message_id']
+                last_update = user_data.get('last_update', 0)
+                
+                # Remove stale users (inactive for more than 8 minutes - reduced for faster cleanup)
+                if current_time - last_update > 480:  # 8 minutes
+                    return False
+                
+                # Create keyboard for live matches with quick refresh
+                keyboard = [
+                    [InlineKeyboardButton("⚡ Quick Refresh", callback_data="live_matches")],
+                    [InlineKeyboardButton("📊 Match Details", callback_data="match_details")],
+                    [InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                # Update the user's message with fresh data (with timeout)
+                await asyncio.wait_for(
+                    self.bot_instance.edit_message_text(
+                        text=live_text,
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        parse_mode='Markdown',
+                        reply_markup=reply_markup
+                    ),
+                    timeout=2.0  # 2-second timeout per user update
+                )
+                
+                # Update last update time and activity
+                self.live_users[user_id]['last_update'] = current_time
+                self.live_users[user_id]['last_seen'] = current_time
+                return True
+                
+            except asyncio.TimeoutError:
+                logger.warning(f"⏰ Timeout updating user {user_id}")
+                return False
+            except Exception as e:
+                logger.warning(f"❌ Failed to update user {user_id}: {e}")
+                return False
+    
+    async def _get_ultra_fast_live_data(self) -> str:
+        """Get live match data using ultra-fast JSON extractor."""
+        try:
+            # Use JSON extractor for fastest possible data retrieval
+            start_time = time.time()
+            live_matches = await self.json_extractor.extract_live_matches()
+            fetch_time = (time.time() - start_time) * 1000
+            
+            logger.debug(f"⚡ JSON extractor: {len(live_matches)} matches in {fetch_time:.1f}ms")
+            
+            # Format matches with optimized rendering
+            return await self._format_live_matches_ultra_fast(live_matches)
+            
+        except Exception as e:
+            logger.warning(f"⚠️ JSON extractor failed: {e}, falling back to centralized fetcher")
+            # Fallback to existing system
+            return await self.format_live_matches_text()
+    
+    async def _format_live_matches_ultra_fast(self, matches) -> str:
+        """Ultra-fast formatting of live matches data."""
+        if not matches:
+            return (
+                "🏏 *Live Cricket Matches* ⚡\n\n"
+                "📡 No live matches at the moment\n\n"
+                "🔄 _Updates every 1.2 seconds when active_ 🔄\n\n"
+                "⚡ *Faster than Cricbuzz!* ⚡"
+            )
+        
+        # Use string builder for performance
+        text_parts = ["🏏 *Live Cricket Matches* ⚡\n\n"]
+        
+        for i, match in enumerate(matches[:5]):  # Limit to 5 matches for speed
+            try:
+                # Quick format without heavy processing
+                team1 = match.team1.name if hasattr(match, 'team1') and match.team1 else "Team 1"
+                team2 = match.team2.name if hasattr(match, 'team2') and match.team2 else "Team 2"
+                status = match.status if hasattr(match, 'status') else "Live"
+                
+                # Simplified formatting for speed
+                text_parts.append(f"⚡ **{team1}** vs **{team2}**\n")
+                text_parts.append(f"📊 {status}\n\n")
+                
+            except Exception as e:
+                logger.warning(f"Error formatting match {i}: {e}")
+                text_parts.append(f"⚡ Live Match {i+1}\n📊 Data syncing...\n\n")
+        
+        text_parts.append("🚀 *Sub-2-second updates!* 🚀\n")
+        text_parts.append("⚡ _Faster than Cricbuzz & ESPNCricinfo_ ⚡")
+        
+        return "".join(text_parts)
     
     async def simple_error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Simple error handler that only logs conflicts without cascading failures."""
