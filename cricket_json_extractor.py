@@ -196,80 +196,152 @@ class CricketJSONExtractor:
             'matches_per_cycle': deque(maxlen=50)  # Track recent match counts
         }
         
+        # Endpoint validation system
+        self.endpoint_validation_results = {}  # endpoint -> validation status
+        self.last_validation_time = {}  # endpoint -> timestamp
+        self.validation_failures = defaultdict(int)  # endpoint -> failure count
+        
     def _initialize_endpoints(self) -> Dict[str, List[JSONEndpoint]]:
-        """Initialize all JSON endpoints with fallback priorities."""
+        """Initialize real Cricbuzz and ESPN endpoints - NO COMMUNITY MIRRORS."""
         return {
             'live_matches': [
-                # Primary working Cricket APIs - Updated 2025
+                # REAL CRICBUZZ.COM ENDPOINTS - Primary sources
                 JSONEndpoint(
-                    url="https://cricketdata.org/api/matches",
-                    parser="cricketdata_org",
-                    timeout=2,  # Reliable free API
-                    rate_limit=0.1
-                ),
-                JSONEndpoint(
-                    url="https://cricbuzz-live.vercel.app/v1/matches/live",
-                    parser="cricbuzz_live",
-                    timeout=2,
-                    rate_limit=0.1
-                ),
-                # RapidAPI alternatives (backup)
-                JSONEndpoint(
-                    url="https://cricbuzz-live.vercel.app/v1/matches/recent",
-                    parser="cricbuzz_recent",
+                    url="https://www.cricbuzz.com/api/cricket-match/live-scores/widget",
+                    parser="cricbuzz_live_widget",
                     timeout=3,
-                    rate_limit=0.2
+                    rate_limit=0.3,
+                    headers={
+                        'Accept': 'application/json, text/plain, */*',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Referer': 'https://www.cricbuzz.com/cricket-match/live-scores',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
                 ),
-                # Self-hosted option as fallback
                 JSONEndpoint(
-                    url="https://rest.cricketapi.com/rest/v1/matches.json",
-                    parser="roanuz",
+                    url="https://m.cricbuzz.com/api/html/cricket-match/live-scores/homepage-widget",
+                    parser="cricbuzz_mobile_widget",
+                    timeout=3,
+                    rate_limit=0.3,
+                    headers={
+                        'Accept': 'application/json, text/html, */*',
+                        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+                        'Referer': 'https://m.cricbuzz.com/'
+                    }
+                ),
+                # ESPN CRICINFO ENDPOINTS - Direct sources
+                JSONEndpoint(
+                    url="https://www.espncricinfo.com/live-cricket-score",
+                    parser="espn_cricinfo_html",
                     timeout=4,
-                    rate_limit=0.3
+                    rate_limit=0.4,
+                    headers={
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept-Language': 'en-US,en;q=0.5',
+                        'Accept-Encoding': 'gzip, deflate',
+                        'Connection': 'keep-alive'
+                    }
+                ),
+                JSONEndpoint(
+                    url="https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en",
+                    parser="espn_cricinfo_api",
+                    timeout=3,
+                    rate_limit=0.5,
+                    headers={
+                        'Accept': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Referer': 'https://www.espncricinfo.com/',
+                        'Origin': 'https://www.espncricinfo.com'
+                    }
                 ),
             ],
             
             'match_details': [
+                # REAL CRICBUZZ.COM MATCH DETAILS  
                 JSONEndpoint(
-                    url="https://cricketdata.org/api/match/{match_id}",
-                    parser="cricketdata_org",
-                    timeout=3
+                    url="https://www.cricbuzz.com/api/cricket-match/{match_id}/scorecard-html",
+                    parser="cricbuzz_scorecard",
+                    timeout=3,
+                    rate_limit=0.3
                 ),
                 JSONEndpoint(
-                    url="https://cricbuzz-live.vercel.app/v1/score/{match_id}",
-                    parser="cricbuzz_live_details",
-                    timeout=3
+                    url="https://m.cricbuzz.com/api/html/cricket-match/{match_id}/scorecard",
+                    parser="cricbuzz_mobile_scorecard",
+                    timeout=3,
+                    rate_limit=0.3
+                ),
+                # ESPN CRICINFO MATCH DETAILS
+                JSONEndpoint(
+                    url="https://hs-consumer-api.espncricinfo.com/v1/pages/match/scorecard?lang=en&matchId={match_id}",
+                    parser="espn_cricinfo_scorecard_api",
+                    timeout=3,
+                    rate_limit=0.4
+                ),
+                JSONEndpoint(
+                    url="https://www.espncricinfo.com/matches/engine/match/{match_id}.html",
+                    parser="espn_cricinfo_scorecard_html",
+                    timeout=4,
+                    rate_limit=0.4
                 ),
             ],
             
             'commentary': [
+                # REAL CRICBUZZ.COM COMMENTARY
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/{match_id}/commentary",
-                    parser="cricbuzz",
-                    timeout=3
+                    parser="cricbuzz_commentary",
+                    timeout=3,
+                    rate_limit=0.3
                 ),
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/{match_id}/full-commentary",
-                    parser="cricbuzz",
-                    timeout=3
+                    parser="cricbuzz_full_commentary", 
+                    timeout=4,
+                    rate_limit=0.3
+                ),
+                # ESPN CRICINFO COMMENTARY
+                JSONEndpoint(
+                    url="https://hs-consumer-api.espncricinfo.com/v1/pages/match/commentary?lang=en&matchId={match_id}",
+                    parser="espn_cricinfo_commentary_api",
+                    timeout=3,
+                    rate_limit=0.4
+                ),
+                JSONEndpoint(
+                    url="https://www.espncricinfo.com/matches/engine/match/{match_id}.html?view=commentary",
+                    parser="espn_cricinfo_commentary_html",
+                    timeout=4,
+                    rate_limit=0.4
                 ),
             ],
             
             'schedule': [
+                # REAL CRICBUZZ.COM SCHEDULE
                 JSONEndpoint(
-                    url="https://cricketdata.org/api/matchCalendar",
-                    parser="cricketdata_org_schedule",
-                    timeout=4
+                    url="https://www.cricbuzz.com/cricket-schedule/upcoming-matches",
+                    parser="cricbuzz_schedule_html",
+                    timeout=4,
+                    rate_limit=0.4
                 ),
                 JSONEndpoint(
-                    url="https://cricbuzz-live.vercel.app/v1/matches/upcoming",
-                    parser="cricbuzz_upcoming",
-                    timeout=3
+                    url="https://m.cricbuzz.com/cricket-schedule/matches/all",
+                    parser="cricbuzz_mobile_schedule",
+                    timeout=4,
+                    rate_limit=0.4
+                ),
+                # ESPN CRICINFO SCHEDULE
+                JSONEndpoint(
+                    url="https://www.espncricinfo.com/fixtures",
+                    parser="espn_cricinfo_fixtures_html",
+                    timeout=4,
+                    rate_limit=0.4
                 ),
                 JSONEndpoint(
-                    url="https://rest.cricketapi.com/rest/v1/matches.json?per_page=20",
-                    parser="roanuz_schedule",
-                    timeout=5
+                    url="https://hs-consumer-api.espncricinfo.com/v1/pages/fixtures?lang=en",
+                    parser="espn_cricinfo_fixtures_api",
+                    timeout=3,
+                    rate_limit=0.5
                 ),
             ]
         }
@@ -733,18 +805,41 @@ class CricketJSONExtractor:
         return None
     
     async def _parse_json_matches(self, data: Dict[str, Any], parser_type: str) -> List[Match]:
-        """Parse matches from JSON data based on source type."""
+        """Parse matches from JSON data based on source type - NOW WITH REAL CRICBUZZ + ESPN SUPPORT."""
         try:
-            if parser_type == "cricbuzz" or parser_type == "cricbuzz_mobile":
+            # REAL CRICBUZZ.COM PARSERS
+            if parser_type in ["cricbuzz_live_widget", "cricbuzz_widget"]:
+                return await self._parse_cricbuzz_widget_json(data)
+            elif parser_type == "cricbuzz_mobile_widget":
+                return await self._parse_cricbuzz_mobile_widget(data)
+            elif parser_type in ["cricbuzz_scorecard", "cricbuzz_mobile_scorecard"]:
+                return await self._parse_cricbuzz_scorecard_json(data)
+            elif parser_type in ["cricbuzz_commentary", "cricbuzz_full_commentary"]:
+                return await self._parse_cricbuzz_commentary_json(data)
+            elif parser_type in ["cricbuzz_schedule_html", "cricbuzz_mobile_schedule"]:
+                return await self._parse_cricbuzz_schedule_html(data)
+            
+            # REAL ESPN CRICINFO PARSERS
+            elif parser_type == "espn_cricinfo_html":
+                return await self._parse_espn_cricinfo_html(data)
+            elif parser_type == "espn_cricinfo_api":
+                return await self._parse_espn_cricinfo_api_json(data)
+            elif parser_type in ["espn_cricinfo_scorecard_api", "espn_cricinfo_scorecard_html"]:
+                return await self._parse_espn_scorecard(data)
+            elif parser_type in ["espn_cricinfo_commentary_api", "espn_cricinfo_commentary_html"]:
+                return await self._parse_espn_commentary(data)
+            elif parser_type in ["espn_cricinfo_fixtures_html", "espn_cricinfo_fixtures_api"]:
+                return await self._parse_espn_fixtures(data)
+            
+            # FALLBACK TO EXISTING PARSERS FOR COMPATIBILITY
+            elif parser_type in ["cricbuzz_live_details", "cricbuzz_live_schedule", "cricbuzz_live_recent"]:
+                return await self._parse_cricbuzz_live_json(data)
+            elif parser_type in ["cricbuzz_mobile", "cricbuzz_schedule_mobile"]:
+                return await self._parse_cricbuzz_json(data)
+            elif parser_type == "cricbuzz":
                 return await self._parse_cricbuzz_json(data)
             elif parser_type in ["cricbuzz_live", "cricbuzz_recent", "cricbuzz_upcoming"]:
                 return await self._parse_cricbuzz_live_json(data)
-            elif parser_type == "cricketdata_org" or parser_type == "cricketdata_org_schedule":
-                return await self._parse_cricketdata_org_json(data)
-            elif parser_type == "roanuz" or parser_type == "roanuz_schedule":
-                return await self._parse_roanuz_json(data)
-            elif parser_type == "cricapi_free" or parser_type == "cricapi_free_schedule":
-                return await self._parse_cricapi_free_json(data)
             elif parser_type == "espn":
                 return await self._parse_espn_json(data)
             else:
@@ -996,6 +1091,359 @@ class CricketJSONExtractor:
         
         logger.info(f"✅ Parsed {len(matches)} matches from generic JSON")
         return matches
+    
+    # =============================================
+    # REAL CRICBUZZ.COM PARSERS - NO COMMUNITY MIRRORS
+    # =============================================
+    
+    async def _parse_cricbuzz_widget_json(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse real Cricbuzz.com live scores widget JSON."""
+        matches = []
+        
+        try:
+            # Handle Cricbuzz widget JSON structure
+            if 'typeMatches' in data:
+                for type_match in data['typeMatches']:
+                    if 'seriesMatches' in type_match:
+                        for series in type_match['seriesMatches']:
+                            if 'seriesAdWrapper' in series and 'matches' in series['seriesAdWrapper']:
+                                for match_data in series['seriesAdWrapper']['matches']:
+                                    match = await self._parse_single_cricbuzz_match(match_data, "cricbuzz_widget")
+                                    if match:
+                                        matches.append(match)
+            
+            elif 'matches' in data:
+                for match_data in data['matches']:
+                    match = await self._parse_single_cricbuzz_match(match_data, "cricbuzz_widget")
+                    if match:
+                        matches.append(match)
+                        
+            logger.info(f"✅ Parsed {len(matches)} matches from real Cricbuzz widget")
+            return matches[:5]  # Limit for performance
+            
+        except Exception as e:
+            logger.error(f"❌ Error parsing Cricbuzz widget JSON: {e}")
+            return []
+    
+    async def _parse_cricbuzz_mobile_widget(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse Cricbuzz mobile widget data (could be HTML or JSON)."""
+        matches = []
+        
+        try:
+            # Handle HTML response from mobile widget
+            if isinstance(data, str):
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(data, 'html.parser')
+                
+                # Parse mobile HTML structure for match cards
+                match_cards = soup.find_all('div', class_=['cb-mtch-lst', 'cb-col-84'])
+                
+                for card in match_cards:
+                    try:
+                        # Extract team names
+                        team_elements = card.find_all('div', class_='cb-ovr-flo')
+                        if len(team_elements) >= 2:
+                            team1_name = team_elements[0].get_text(strip=True)
+                            team2_name = team_elements[1].get_text(strip=True)
+                            
+                            # Extract scores
+                            score_elements = card.find_all('div', class_='cb-scr-wll-chvrn')
+                            team1_score = score_elements[0].get_text(strip=True) if len(score_elements) > 0 else "0/0"
+                            team2_score = score_elements[1].get_text(strip=True) if len(score_elements) > 1 else "0/0"
+                            
+                            # Parse scores
+                            team1_runs, team1_wickets = self._parse_score_string(team1_score)
+                            team2_runs, team2_wickets = self._parse_score_string(team2_score)
+                            
+                            # Create match object
+                            match = Match(
+                                match_id=f"cb_mobile_{hash(team1_name + team2_name)}_{int(time.time())}",
+                                title=f"{team1_name} vs {team2_name}",
+                                team1=Team(name=team1_name, score=team1_runs, wickets=team1_wickets),
+                                team2=Team(name=team2_name, score=team2_runs, wickets=team2_wickets),
+                                status=MatchStatus.LIVE,
+                                data_sources=["cricbuzz.com"]
+                            )
+                            matches.append(match)
+                    except Exception as e:
+                        logger.debug(f"Error parsing mobile match card: {e}")
+                        continue
+            else:
+                # Handle JSON response
+                return await self._parse_cricbuzz_widget_json(data)
+                
+            logger.info(f"✅ Parsed {len(matches)} matches from Cricbuzz mobile widget")
+            return matches[:5]
+            
+        except Exception as e:
+            logger.error(f"❌ Error parsing Cricbuzz mobile widget: {e}")
+            return []
+    
+    # =============================================
+    # REAL ESPN CRICINFO PARSERS
+    # =============================================
+    
+    async def _parse_espn_cricinfo_html(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse ESPN Cricinfo live scores HTML page."""
+        matches = []
+        
+        try:
+            html_content = data if isinstance(data, str) else str(data)
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Look for match cards in ESPN Cricinfo structure
+            match_cards = soup.find_all('div', class_=['match-card', 'scorecard-section'])
+            
+            for card in match_cards[:5]:  # Limit to 5 matches for performance
+                try:
+                    # Extract team information
+                    team_elements = card.find_all('span', class_=['team-name', 'team'])
+                    
+                    if len(team_elements) >= 2:
+                        team1_name = team_elements[0].get_text(strip=True)
+                        team2_name = team_elements[1].get_text(strip=True)
+                        
+                        # Extract scores
+                        score_elements = card.find_all('span', class_=['score', 'team-score'])
+                        team1_score = score_elements[0].get_text(strip=True) if len(score_elements) > 0 else "0/0"
+                        team2_score = score_elements[1].get_text(strip=True) if len(score_elements) > 1 else "0/0"
+                        
+                        # Parse scores
+                        team1_runs, team1_wickets = self._parse_score_string(team1_score)
+                        team2_runs, team2_wickets = self._parse_score_string(team2_score)
+                        
+                        # Extract match status
+                        status_element = card.find('span', class_=['match-status', 'game-status'])
+                        status_text = status_element.get_text(strip=True) if status_element else ""
+                        
+                        # Determine status
+                        if 'live' in status_text.lower() or 'in progress' in status_text.lower():
+                            status = MatchStatus.LIVE
+                        elif 'upcoming' in status_text.lower() or 'fixture' in status_text.lower():
+                            status = MatchStatus.UPCOMING
+                        else:
+                            status = MatchStatus.COMPLETED
+                        
+                        # Create match object
+                        match = Match(
+                            match_id=f"espn_html_{hash(team1_name + team2_name)}_{int(time.time())}",
+                            title=f"{team1_name} vs {team2_name}",
+                            team1=Team(name=team1_name, score=team1_runs, wickets=team1_wickets),
+                            team2=Team(name=team2_name, score=team2_runs, wickets=team2_wickets),
+                            status=status,
+                            data_sources=["espncricinfo.com"]
+                        )
+                        matches.append(match)
+                        
+                except Exception as e:
+                    logger.debug(f"Error parsing ESPN match card: {e}")
+                    continue
+            
+            logger.info(f"✅ Parsed {len(matches)} matches from ESPN Cricinfo HTML")
+            return matches
+            
+        except Exception as e:
+            logger.error(f"❌ Error parsing ESPN Cricinfo HTML: {e}")
+            return []
+    
+    async def _parse_espn_cricinfo_api_json(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse ESPN Cricinfo hs-consumer-api JSON (if auth works)."""
+        matches = []
+        
+        try:
+            # Handle ESPN API JSON structure
+            content = data.get('content', {})
+            if 'matches' in content:
+                match_list = content['matches']
+            elif 'content' in data and 'matches' in data['content']:
+                match_list = data['content']['matches']
+            elif 'matches' in data:
+                match_list = data['matches']
+            else:
+                # Try to find match-like data
+                match_list = []
+                if isinstance(data, dict):
+                    for key, value in data.items():
+                        if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict):
+                            if 'team' in str(value[0]).lower() or 'match' in str(value[0]).lower():
+                                match_list = value
+                                break
+            
+            for match_data in match_list[:5]:  # Limit to 5 matches
+                try:
+                    match_id = str(match_data.get('objectId', match_data.get('id', '')))
+                    title = match_data.get('title', match_data.get('description', ''))
+                    
+                    # Extract teams
+                    teams = match_data.get('teams', [])
+                    if len(teams) >= 2:
+                        team1_data = teams[0]
+                        team2_data = teams[1]
+                        
+                        team1 = Team(
+                            name=team1_data.get('team', {}).get('name', 'Team 1'),
+                            short_name=team1_data.get('team', {}).get('abbreviation', 'T1'),
+                            score=team1_data.get('score', 0),
+                            wickets=team1_data.get('wickets', 0)
+                        )
+                        
+                        team2 = Team(
+                            name=team2_data.get('team', {}).get('name', 'Team 2'),
+                            short_name=team2_data.get('team', {}).get('abbreviation', 'T2'),
+                            score=team2_data.get('score', 0),
+                            wickets=team2_data.get('wickets', 0)
+                        )
+                        
+                        # Determine status
+                        status_id = match_data.get('status', {}).get('id', 0)
+                        if status_id == 3:
+                            status = MatchStatus.LIVE
+                        elif status_id == 1:
+                            status = MatchStatus.UPCOMING
+                        else:
+                            status = MatchStatus.COMPLETED
+                        
+                        match = Match(
+                            match_id=f"espn_api_{match_id}_{int(time.time())}",
+                            title=title,
+                            team1=team1,
+                            team2=team2,
+                            status=status,
+                            venue=match_data.get('ground', {}).get('name', ''),
+                            date=match_data.get('startTime', ''),
+                            data_sources=["espncricinfo.com"]
+                        )
+                        matches.append(match)
+                        
+                except Exception as e:
+                    logger.debug(f"Error parsing ESPN API match: {e}")
+                    continue
+            
+            logger.info(f"✅ Parsed {len(matches)} matches from ESPN Cricinfo API")
+            return matches
+            
+        except Exception as e:
+            logger.error(f"❌ Error parsing ESPN Cricinfo API JSON: {e}")
+            return []
+    
+    # =============================================
+    # HELPER METHODS FOR REAL PARSERS
+    # =============================================
+    
+    async def _parse_single_cricbuzz_match(self, match_data: Dict[str, Any], source: str) -> Optional[Match]:
+        """Helper to parse a single Cricbuzz match."""
+        try:
+            match_info = match_data.get('matchInfo', match_data)
+            
+            match_id = str(match_info.get('matchId', ''))
+            match_desc = match_info.get('matchDesc', '')
+            series_name = match_info.get('seriesName', '')
+            title = f"{match_desc} - {series_name}" if series_name else match_desc
+            
+            # Extract teams
+            team1_info = match_info.get('team1', {})
+            team2_info = match_info.get('team2', {})
+            
+            team1 = Team(
+                name=team1_info.get('teamName', 'Team 1'),
+                short_name=team1_info.get('teamSName', 'T1')
+            )
+            
+            team2 = Team(
+                name=team2_info.get('teamName', 'Team 2'),
+                short_name=team2_info.get('teamSName', 'T2')
+            )
+            
+            # Extract scores if available
+            match_score = match_data.get('matchScore', {})
+            if match_score:
+                team1_score = match_score.get('team1Score', {})
+                team2_score = match_score.get('team2Score', {})
+                
+                if team1_score and 'inngs1' in team1_score:
+                    team1.score = team1_score['inngs1'].get('runs', 0)
+                    team1.wickets = team1_score['inngs1'].get('wickets', 0)
+                    team1.overs = str(team1_score['inngs1'].get('overs', 0.0))
+                
+                if team2_score and 'inngs1' in team2_score:
+                    team2.score = team2_score['inngs1'].get('runs', 0)
+                    team2.wickets = team2_score['inngs1'].get('wickets', 0)
+                    team2.overs = str(team2_score['inngs1'].get('overs', 0.0))
+            
+            # Determine status
+            status_text = match_info.get('status', '').lower()
+            if any(word in status_text for word in ['live', 'in progress', 'innings break']):
+                status = MatchStatus.LIVE
+            elif any(word in status_text for word in ['upcoming', 'toss', 'preview']):
+                status = MatchStatus.UPCOMING
+            else:
+                status = MatchStatus.COMPLETED
+            
+            return Match(
+                match_id=f"cb_real_{match_id}_{int(time.time())}",
+                title=title,
+                team1=team1,
+                team2=team2,
+                status=status,
+                venue=match_info.get('venueInfo', {}).get('ground', ''),
+                date=match_info.get('startDate', ''),
+                format=match_info.get('matchFormat', ''),
+                series_name=series_name,
+                data_sources=["cricbuzz.com"]
+            )
+            
+        except Exception as e:
+            logger.debug(f"Error parsing single Cricbuzz match: {e}")
+            return None
+    
+    def _parse_score_string(self, score_str: str) -> tuple[int, int]:
+        """Parse score string like '180/4' into (runs, wickets)."""
+        try:
+            if '/' in score_str:
+                parts = score_str.split('/')
+                runs = int(re.sub(r'[^\d]', '', parts[0]))
+                wickets = int(re.sub(r'[^\d]', '', parts[1]))
+                return runs, wickets
+            else:
+                runs = int(re.sub(r'[^\d]', '', score_str))
+                return runs, 0
+        except:
+            return 0, 0
+    
+    # =============================================
+    # PLACEHOLDER PARSERS FOR COMPLETENESS
+    # =============================================
+    
+    async def _parse_cricbuzz_scorecard_json(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse Cricbuzz scorecard JSON."""
+        # For now, delegate to main Cricbuzz parser
+        return await self._parse_cricbuzz_json(data)
+    
+    async def _parse_cricbuzz_commentary_json(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse Cricbuzz commentary JSON."""
+        # For now, delegate to main Cricbuzz parser
+        return await self._parse_cricbuzz_json(data)
+    
+    async def _parse_cricbuzz_schedule_html(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse Cricbuzz schedule HTML."""
+        # For now, delegate to main Cricbuzz parser
+        return await self._parse_cricbuzz_json(data)
+    
+    async def _parse_espn_scorecard(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse ESPN scorecard data."""
+        # For now, delegate to ESPN API parser
+        return await self._parse_espn_cricinfo_api_json(data)
+    
+    async def _parse_espn_commentary(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse ESPN commentary data."""
+        # For now, delegate to ESPN API parser
+        return await self._parse_espn_cricinfo_api_json(data)
+    
+    async def _parse_espn_fixtures(self, data: Dict[str, Any]) -> List[Match]:
+        """Parse ESPN fixtures data."""
+        # For now, delegate to ESPN API parser
+        return await self._parse_espn_cricinfo_api_json(data)
     
     async def _parse_cricbuzz_live_json(self, data: Dict[str, Any]) -> List[Match]:
         """Parse Cricbuzz Live API JSON format (cricbuzz-live.vercel.app)."""
@@ -1917,5 +2365,3 @@ async def get_commentary_json(match_id: str) -> List[Commentary]:
     
     if commentary_data:
         return await json_extractor._parse_json_commentary(commentary_data)
-    
-    return []

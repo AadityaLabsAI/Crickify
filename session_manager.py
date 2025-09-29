@@ -226,6 +226,62 @@ class OptimizedHTTPSession:
             self._active_requests.discard(request_id)
             self._domain_last_request[domain] = time.time()
     
+    def get(self, url: str, **kwargs):
+        """Convenience method for GET requests that returns an async context manager."""
+        class _AsyncContextManager:
+            def __init__(self, session, method, url, **kwargs):
+                self.session = session
+                self.method = method
+                self.url = url
+                self.kwargs = kwargs
+                
+            async def __aenter__(self):
+                session_obj = await self.session.get_session()
+                self._response = await session_obj.request(self.method, self.url, **self.kwargs)
+                return self._response
+                
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                # Properly close the response to prevent connection leaks
+                if hasattr(self, '_response') and self._response:
+                    try:
+                        self._response.close()
+                        # Ensure connection is returned to pool
+                        await asyncio.sleep(0)  # Allow response to be properly released
+                    except Exception as e:
+                        logger.debug(f"Error closing response: {e}")
+                    finally:
+                        self._response = None
+        
+        return _AsyncContextManager(self, 'GET', url, **kwargs)
+    
+    def post(self, url: str, **kwargs):
+        """Convenience method for POST requests that returns an async context manager."""
+        class _AsyncContextManager:
+            def __init__(self, session, method, url, **kwargs):
+                self.session = session
+                self.method = method
+                self.url = url
+                self.kwargs = kwargs
+                
+            async def __aenter__(self):
+                session_obj = await self.session.get_session()
+                self._response = await session_obj.request(self.method, self.url, **self.kwargs)
+                return self._response
+                
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                # Properly close the response to prevent connection leaks
+                if hasattr(self, '_response') and self._response:
+                    try:
+                        self._response.close()
+                        # Ensure connection is returned to pool
+                        await asyncio.sleep(0)  # Allow response to be properly released
+                    except Exception as e:
+                        logger.debug(f"Error closing response: {e}")
+                    finally:
+                        self._response = None
+        
+        return _AsyncContextManager(self, 'POST', url, **kwargs)
+    
     def _extract_domain(self, url: str) -> str:
         """Extract domain from URL."""
         try:
