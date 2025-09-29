@@ -115,12 +115,12 @@ class PerformanceMonitor:
     Comprehensive performance monitoring system with real-time analytics and alerts.
     """
     
-    def __init__(self, monitoring_interval: float = 30.0):
+    def __init__(self, monitoring_interval: float = 5.0):  # Reduced from 30s to 5s for sub-1s response
         """
-        Initialize performance monitor.
+        Initialize performance monitor for ultra-fast sub-1-second response monitoring.
         
         Args:
-            monitoring_interval: Interval between monitoring cycles in seconds
+            monitoring_interval: Interval between monitoring cycles in seconds (optimized for sub-1s)
         """
         self.monitoring_interval = monitoring_interval
         
@@ -132,23 +132,33 @@ class PerformanceMonitor:
         self.active_alerts: Dict[str, PerformanceAlert] = {}
         self.alert_history: deque = deque(maxlen=1000)
         
-        # Performance tracking
-        self.response_times: Dict[str, deque] = defaultdict(lambda: deque(maxlen=50))
+        # Performance tracking - ENHANCED FOR SUB-1-SECOND MONITORING
+        self.response_times: Dict[str, deque] = defaultdict(lambda: deque(maxlen=100))  # Increased history
         self.operation_counts: Dict[str, int] = defaultdict(int)
         
-        # Monitoring configuration
+        # Real-time latency monitoring for sub-1s response
+        self.real_time_latency = deque(maxlen=50)  # Track last 50 response times
+        self.latency_percentiles = {'p50': 0, 'p95': 0, 'p99': 0}
+        self.auto_tuning_enabled = True
+        self.performance_baseline = {}  # Track performance baselines for auto-tuning
+        
+        # Monitoring configuration - OPTIMIZED FOR SUB-1-SECOND RESPONSE
         self.alert_thresholds = {
-            'cache_hit_rate_min': 60.0,      # Minimum acceptable cache hit rate %
-            'response_time_max': 2000.0,     # Maximum acceptable response time ms
-            'error_rate_max': 5.0,           # Maximum acceptable error rate %
-            'memory_usage_max': 80.0,        # Maximum acceptable memory usage %
-            'efficiency_score_min': 50.0     # Minimum acceptable efficiency score
+            'cache_hit_rate_min': 75.0,      # Increased minimum cache hit rate for sub-1s response
+            'response_time_max': 800.0,      # Reduced from 2000ms to 800ms for sub-1s response
+            'error_rate_max': 3.0,           # Reduced from 5% to 3% for higher quality
+            'memory_usage_max': 85.0,        # Increased to 85% for better resource utilization
+            'efficiency_score_min': 70.0     # Increased from 50% to 70% for better performance
         }
         
-        # Background monitoring
+        # Background monitoring - OPTIMIZED FOR SUB-1-SECOND RESPONSE
         self._monitoring_task: Optional[asyncio.Task] = None
         self._running = False
         self._lock = threading.RLock()
+        
+        # Real-time monitoring task for immediate response
+        self._real_time_monitoring_task: Optional[asyncio.Task] = None
+        self._real_time_interval = 1.0  # 1-second real-time monitoring for sub-1s response
         
         # Performance trends
         self.trend_analyzer = TrendAnalyzer()

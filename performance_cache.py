@@ -149,11 +149,11 @@ class ShardedLRUCache:
     """
     
     def __init__(self, 
-                 max_size: int = 1000,
-                 max_memory_mb: float = 50.0,
-                 default_ttl: float = 300.0,
-                 cleanup_interval: float = 60.0,
-                 num_shards: int = 8,
+                 max_size: int = 1500,  # Increased from 1000 for better caching
+                 max_memory_mb: float = 75.0,  # Increased from 50MB for sub-1s response
+                 default_ttl: float = 30.0,  # Reduced from 300s to 30s for ultra-fresh data
+                 cleanup_interval: float = 10.0,  # Reduced from 60s to 10s for sub-1s response
+                 num_shards: int = 12,  # Increased from 8 to 12 for better concurrency
                  enable_compression: bool = True,
                  enable_disk_cache: bool = True):
         """
@@ -183,21 +183,32 @@ class ShardedLRUCache:
         
         # Fast hashing for shard selection with fallback
         if HAS_XXHASH:
-            self._shard_hash_func = xxhash.xxh64_intdigest
+            if HAS_XXHASH:
+                self._shard_hash_func = xxhash.xxh64_intdigest
+            else:
+                def _fallback_hash(data):
+                    return int(hashlib.md5(data).hexdigest()[:8], 16)
+                self._shard_hash_func = _fallback_hash
         else:
             def _fallback_hash(data):
                 return int(hashlib.md5(data).hexdigest()[:8], 16)
             self._shard_hash_func = _fallback_hash
         
-        # Compression settings
-        self._compression_threshold = 1024  # Compress objects > 1KB
+        # Compression settings optimized for sub-1s response
+        self._compression_threshold = 2048  # Increased to 2KB for faster processing
         
-        # Multi-level cache components
-        self._l1_cache = {}  # Fast in-memory cache
-        self._l2_disk_cache = None  # Optional disk cache
+        # ULTRA-FAST Multi-level cache components for sub-1-second response
+        self._l1_cache = {}  # Fast in-memory cache (immediate access)
+        self._l2_shared_cache = {}  # Shared cache layer for moderate access
+        self._l3_persistent_cache = None  # Optional persistent disk cache
         
-        # Performance optimizations
-        self._thread_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="cache_opt")
+        # Cache preloading and warming for popular data
+        self._preload_queue = asyncio.Queue(maxsize=100)
+        self._popular_keys = set()  # Track frequently accessed keys
+        self._access_frequency = defaultdict(int)  # Key access frequency counter
+        
+        # Performance optimizations for sub-1-second response
+        self._thread_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cache_opt")  # Increased workers
         
         # Event callbacks for monitoring
         self._event_callbacks: Dict[CacheEventType, List[Callable]] = defaultdict(list)
@@ -206,14 +217,22 @@ class ShardedLRUCache:
         self._warming_strategies: Dict[str, Callable] = {}
         self._prefetch_patterns: Dict[str, List[str]] = defaultdict(list)
         
-        # Performance metrics
+        # Performance metrics for sub-1-second latency verification
         self._performance_metrics = {
             'compression_ratio': 0.0,
             'shard_distribution': [0] * num_shards,
             'l1_hits': 0,
             'l2_hits': 0,
             'compression_time': 0.0,
-            'decompression_time': 0.0
+            'decompression_time': 0.0,
+            'get_latencies': deque(maxlen=1000),  # Track last 1000 get operations
+            'set_latencies': deque(maxlen=1000),  # Track last 1000 set operations
+            'total_operations': 0,
+            'sub_1s_operations': 0,  # Operations completing in <1s
+            'avg_get_latency_ms': 0.0,
+            'avg_set_latency_ms': 0.0,
+            'p95_get_latency_ms': 0.0,
+            'p95_set_latency_ms': 0.0
         }
         
         # Start background cleanup
@@ -373,8 +392,10 @@ class ShardedLRUCache:
             if len(serialized) > self._compression_threshold:
                 compress_start = time.time()
                 if HAS_LZ4:
+                    import lz4.frame
                     compressed = lz4.frame.compress(serialized)
                 else:
+                    import gzip
                     compressed = gzip.compress(serialized)
                 self._performance_metrics['compression_time'] += time.time() - compress_start
                 self._performance_metrics['compression_ratio'] = len(compressed) / len(serialized)
@@ -391,8 +412,10 @@ class ShardedLRUCache:
         try:
             decompress_start = time.time()
             if HAS_LZ4:
+                import lz4.frame
                 decompressed = lz4.frame.decompress(data)
             else:
+                import gzip
                 decompressed = gzip.decompress(data)
             self._performance_metrics['decompression_time'] += time.time() - decompress_start
             
@@ -406,7 +429,8 @@ class ShardedLRUCache:
             return data
     
     def get(self, key: str) -> Optional[Any]:
-        """Get value from sharded cache with multi-level lookup."""
+        """Get value from sharded cache with multi-level lookup and performance tracking."""
+        start_time = time.time()
         shard_index = self._get_shard_index(key)
         shard = self._shards[shard_index]
         shard_lock = self._shard_locks[shard_index]
@@ -420,7 +444,7 @@ class ShardedLRUCache:
                 self._fire_event(CacheEventType.MISS, key, None)
                 
                 # Check L2 cache if enabled
-                if self.enable_disk_cache and self._l2_disk_cache:
+                if self.enable_disk_cache and self._l3_persistent_cache:
                     l2_value = self._get_from_l2_cache(key)
                     if l2_value is not None:
                         # Promote to L1 cache
@@ -448,11 +472,16 @@ class ShardedLRUCache:
             self._performance_metrics['l1_hits'] += 1
             self._fire_event(CacheEventType.HIT, key, entry.data)
             
-            # Decompress data if needed
-            return self._decompress_data(entry.data)
+            # Decompress data if needed and track performance
+            result = self._decompress_data(entry.data)
+            
+            # Record performance metrics
+            self._record_operation_latency('get', start_time)
+            return result
     
     def set(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
-        """Set value in sharded cache with compression and L2 storage."""
+        """Set value in sharded cache with compression, L2 storage, and performance tracking."""
+        start_time = time.time()
         ttl = ttl or self.default_ttl
         shard_index = self._get_shard_index(key)
         shard = self._shards[shard_index]
@@ -485,6 +514,9 @@ class ShardedLRUCache:
             # Store in L2 cache if enabled and value is large enough
             if self.enable_disk_cache and self._should_store_in_l2(value):
                 self._store_in_l2_cache(key, value)
+            
+            # Record performance metrics
+            self._record_operation_latency('set', start_time)
     
     def _should_store_in_l2(self, value: Any) -> bool:
         """Determine if value should be stored in L2 cache."""
@@ -553,41 +585,66 @@ class ShardedLRUCache:
             self._fire_event(CacheEventType.EVICTED, key, "memory_limit")
     
     def delete(self, key: str) -> bool:
-        """Delete key from cache."""
-        with self._lock:
-            if key in self._cache:
-                del self._cache[key]
-                self._stats.invalidations += 1
+        """Delete key from sharded cache."""
+        shard_index = self._get_shard_index(key)
+        shard = self._shards[shard_index]
+        shard_lock = self._shard_locks[shard_index]
+        shard_stats = self._shard_stats[shard_index]
+        
+        with shard_lock:
+            if key in shard:
+                del shard[key]
+                shard_stats.invalidations += 1
                 self._fire_event(CacheEventType.INVALIDATED, key, None)
                 self._update_stats()
                 return True
             return False
     
     def invalidate_pattern(self, pattern: str) -> int:
-        """Invalidate all keys matching pattern."""
+        """Invalidate all keys matching pattern across all shards."""
         import fnmatch
         
-        with self._lock:
-            matching_keys = [
-                key for key in self._cache.keys()
-                if fnmatch.fnmatch(key, pattern)
-            ]
+        total_invalidated = 0
+        
+        # Process each shard independently
+        for shard_index in range(self.num_shards):
+            shard = self._shards[shard_index]
+            shard_lock = self._shard_locks[shard_index]
+            shard_stats = self._shard_stats[shard_index]
             
-            for key in matching_keys:
-                del self._cache[key]
-                self._stats.invalidations += 1
-                self._fire_event(CacheEventType.INVALIDATED, key, pattern)
-            
-            self._update_stats()
-            return len(matching_keys)
+            with shard_lock:
+                matching_keys = [
+                    key for key in shard.keys()
+                    if fnmatch.fnmatch(key, pattern)
+                ]
+                
+                for key in matching_keys:
+                    del shard[key]
+                    shard_stats.invalidations += 1
+                    self._fire_event(CacheEventType.INVALIDATED, key, pattern)
+                
+                total_invalidated += len(matching_keys)
+        
+        self._update_stats()
+        return total_invalidated
     
     def clear(self):
-        """Clear all cache entries."""
-        with self._lock:
-            count = len(self._cache)
-            self._cache.clear()
-            self._stats.invalidations += count
-            self._update_stats()
+        """Clear all cache entries from all shards."""
+        total_count = 0
+        
+        # Clear each shard independently
+        for shard_index in range(self.num_shards):
+            shard = self._shards[shard_index]
+            shard_lock = self._shard_locks[shard_index]
+            shard_stats = self._shard_stats[shard_index]
+            
+            with shard_lock:
+                count = len(shard)
+                shard.clear()
+                shard_stats.invalidations += count
+                total_count += count
+        
+        self._update_stats()
     
     def get_stats(self) -> Dict[str, Any]:
         """Get aggregated cache statistics from all shards."""
@@ -639,7 +696,9 @@ class ShardedLRUCache:
     async def _prefetch_keys(self, keys: List[str]):
         """Prefetch keys using registered warming strategies."""
         for key in keys:
-            if key not in self._cache:
+            shard_index = self._get_shard_index(key)
+            shard = self._shards[shard_index]
+            if key not in shard:
                 for pattern, strategy in self._warming_strategies.items():
                     import fnmatch
                     if fnmatch.fnmatch(key, pattern):

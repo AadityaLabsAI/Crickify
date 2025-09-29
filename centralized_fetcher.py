@@ -111,10 +111,10 @@ class CentralizedFetcher:
         self.pending_results: Dict[str, asyncio.Future] = {}  # cache_key -> Future
         self.request_callbacks: Dict[str, List[asyncio.Future]] = {}  # cache_key -> List[Future]
         
-        # Request batching and prioritization
+        # Request batching and prioritization - OPTIMIZED FOR SUB-1-SECOND RESPONSE
         self.request_queue: Dict[int, deque] = defaultdict(deque)  # priority -> deque[FetchRequest]
-        self.batch_size = 5  # Process up to 5 requests in parallel
-        self.batch_timeout = 0.1  # 100ms batch timeout for ultra-fast processing
+        self.batch_size = 8  # Process up to 8 requests in parallel (increased from 5)
+        self.batch_timeout = 0.05  # 50ms batch timeout for ULTRA-FAST processing (reduced from 100ms)
         self.processing_batch = False
         
         # Fast hash function for deduplication with fallback
@@ -138,16 +138,21 @@ class CentralizedFetcher:
             'broadcasts_sent': 0
         }
         
-        # Performance instrumentation for p50/p95 latency tracking
+        # Performance instrumentation for p50/p95 latency tracking - OPTIMIZED FOR SUB-1-SECOND
         self.latency_measurements: Dict[str, List[float]] = {}  # data_type -> [latencies]
         self.cache_hit_rates: Dict[str, Dict[str, int]] = {}  # data_type -> {hits, misses}
-        self.max_latency_history = 100  # Keep last 100 measurements for p50/p95
+        self.max_latency_history = 150  # Keep last 150 measurements for better p50/p95 accuracy
         
-        # Cache warming configuration - ULTRA-FAST INTERVALS
+        # Predictive fetching optimization for sub-1-second response
+        self.user_activity_patterns = {}  # Track user request patterns
+        self.predictive_fetch_enabled = True
+        self.predictive_fetch_threshold = 0.7  # 70% confidence threshold for prefetching
+        
+        # Cache warming configuration - ULTRA-FAST INTERVALS FOR SUB-1-SECOND RESPONSE
         self.cache_warming_active = False
         self.cache_warming_task: Optional[asyncio.Task] = None
         self.active_requesters_count = 0
-        self.cache_warming_interval = 0.8  # Aggressive 0.8s interval for sub-2s response times
+        self.cache_warming_interval = 0.3  # ULTRA-AGGRESSIVE 0.3s interval for sub-1s response times
         
         # Priority processing optimization
         self.priority_processing_task: Optional[asyncio.Task] = None
@@ -210,11 +215,11 @@ class CentralizedFetcher:
             task = asyncio.create_task(self._execute_single_request(request))
             batch_tasks.append(task)
         
-        # Execute all requests in parallel with timeout
+        # Execute all requests in parallel with ULTRA-FAST timeout for sub-1s response
         try:
             await asyncio.wait_for(
                 asyncio.gather(*batch_tasks, return_exceptions=True),
-                timeout=3.0  # 3s timeout for ultra-fast processing
+                timeout=1.5  # 1.5s timeout for sub-1-second response (reduced from 3s)
             )
         except asyncio.TimeoutError:
             logger.warning(f"⏰ Batch processing timeout for {len(requests)} requests")
@@ -257,9 +262,13 @@ class CentralizedFetcher:
             
             fetch_duration = time.time() - fetch_start
             
-            # Cache the result
+            # Cache the result with aggressive TTL for sub-1s response
             if data:
-                performance_cache.set(cache_key, data, ttl=30.0)  # 30s TTL for fresh data
+                performance_cache.set(cache_key, data, ttl=15.0)  # 15s TTL for ultra-fresh data (reduced from 30s)
+                
+                # Implement predictive fetching based on user patterns
+                if self.predictive_fetch_enabled:
+                    await self._trigger_predictive_fetching(request.data_type, data)
                 
             result = FetchResult(
                 request_id=request.request_id,

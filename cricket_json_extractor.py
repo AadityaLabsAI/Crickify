@@ -137,17 +137,17 @@ class CricketJSONExtractor:
         self.endpoint_health = {}  # Track endpoint health
         self.last_successful_endpoints = {}  # Cache successful endpoints
         
-        # ULTRA-FAST concurrent optimization settings
-        self.max_concurrent_requests = 8  # Increased concurrent endpoint requests
-        self.concurrent_semaphore = asyncio.Semaphore(8)  # Control concurrent requests
+        # ULTRA-FAST concurrent optimization settings - OPTIMIZED FOR SUB-1-SECOND RESPONSE
+        self.max_concurrent_requests = 20  # Dramatically increased concurrent endpoint requests
+        self.concurrent_semaphore = asyncio.Semaphore(20)  # Control concurrent requests
         self.priority_endpoints = {}  # Track fastest responding endpoints
         self.response_time_cache = {}  # Cache response times for optimization
         self.data_change_hashes = {}  # Track data changes with fast hashing (xxhash)
         self.endpoint_pools = {}  # Connection pools per endpoint
         
-        # Concurrent request processing
+        # Concurrent request processing - OPTIMIZED FOR SUB-1-SECOND RESPONSE
         self._request_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=6, thread_name_prefix="json_extract"
+            max_workers=12, thread_name_prefix="json_extract"
         )
         
         # Fast JSON parsing optimization
@@ -161,10 +161,10 @@ class CricketJSONExtractor:
         self.endpoint_health_window = 10  # Track last 10 requests per endpoint
         self.health_decay_factor = 0.95  # Decay older health scores
         
-        # Request batching and pipeline optimization
+        # Request batching and pipeline optimization - OPTIMIZED FOR SUB-1-SECOND RESPONSE
         self.batch_requests = True
-        self.batch_size = 5
-        self.request_pipeline = asyncio.Queue(maxsize=20)
+        self.batch_size = 8  # Increased batch size for better throughput
+        self.request_pipeline = asyncio.Queue(maxsize=30)  # Larger pipeline queue
         
         # Performance monitoring
         self.concurrent_metrics = {
@@ -181,9 +181,9 @@ class CricketJSONExtractor:
         self.endpoint_metrics = defaultdict(OperationalMetrics)  # Per-endpoint metrics
         self.circuit_breaker_states = {}  # endpoint -> {failures, last_failure, state}
         self.performance_thresholds = {
-            'max_acceptable_latency_ms': 2000,  # 2s max for sub-2s updates
-            'min_success_rate_percent': 80,     # 80% minimum success rate
-            'max_circuit_breaker_failures': 3   # Max failures before circuit breaker
+            'max_acceptable_latency_ms': 800,   # 800ms max for sub-1s updates (ULTRA-FAST)
+            'min_success_rate_percent': 85,     # 85% minimum success rate (higher quality)
+            'max_circuit_breaker_failures': 2   # Faster circuit breaker for bad endpoints
         }
         
         # Enhanced monitoring for operational insights
@@ -209,8 +209,8 @@ class CricketJSONExtractor:
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/live-scores/widget",
                     parser="cricbuzz_live_widget",
-                    timeout=3,
-                    rate_limit=0.3,
+                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
+                    rate_limit=0.1,  # Reduced from 0.3s to 0.1s for ultra-fast
                     headers={
                         'Accept': 'application/json, text/plain, */*',
                         'Accept-Language': 'en-US,en;q=0.9',
@@ -222,8 +222,8 @@ class CricketJSONExtractor:
                 JSONEndpoint(
                     url="https://m.cricbuzz.com/api/html/cricket-match/live-scores/homepage-widget",
                     parser="cricbuzz_mobile_widget",
-                    timeout=3,
-                    rate_limit=0.3,
+                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
+                    rate_limit=0.1,  # Reduced from 0.3s to 0.1s for ultra-fast
                     headers={
                         'Accept': 'application/json, text/html, */*',
                         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
@@ -234,8 +234,8 @@ class CricketJSONExtractor:
                 JSONEndpoint(
                     url="https://www.espncricinfo.com/live-cricket-score",
                     parser="espn_cricinfo_html",
-                    timeout=4,
-                    rate_limit=0.4,
+                    timeout=2,  # Reduced from 4s to 2s for sub-1s response
+                    rate_limit=0.15,  # Reduced from 0.4s to 0.15s for ultra-fast
                     headers={
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -247,8 +247,8 @@ class CricketJSONExtractor:
                 JSONEndpoint(
                     url="https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en",
                     parser="espn_cricinfo_api",
-                    timeout=3,
-                    rate_limit=0.5,
+                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
+                    rate_limit=0.1,  # Reduced from 0.5s to 0.1s for ultra-fast
                     headers={
                         'Accept': 'application/json',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -263,27 +263,27 @@ class CricketJSONExtractor:
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/{match_id}/scorecard-html",
                     parser="cricbuzz_scorecard",
-                    timeout=3,
-                    rate_limit=0.3
+                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
+                    rate_limit=0.1  # Reduced from 0.3s to 0.1s for ultra-fast
                 ),
                 JSONEndpoint(
                     url="https://m.cricbuzz.com/api/html/cricket-match/{match_id}/scorecard",
                     parser="cricbuzz_mobile_scorecard",
-                    timeout=3,
-                    rate_limit=0.3
+                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
+                    rate_limit=0.1  # Reduced from 0.3s to 0.1s for ultra-fast
                 ),
                 # ESPN CRICINFO MATCH DETAILS
                 JSONEndpoint(
                     url="https://hs-consumer-api.espncricinfo.com/v1/pages/match/scorecard?lang=en&matchId={match_id}",
                     parser="espn_cricinfo_scorecard_api",
-                    timeout=3,
-                    rate_limit=0.4
+                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
+                    rate_limit=0.1  # Reduced from 0.4s to 0.1s for ultra-fast
                 ),
                 JSONEndpoint(
                     url="https://www.espncricinfo.com/matches/engine/match/{match_id}.html",
                     parser="espn_cricinfo_scorecard_html",
-                    timeout=4,
-                    rate_limit=0.4
+                    timeout=2,  # Reduced from 4s to 2s for sub-1s response
+                    rate_limit=0.15  # Reduced from 0.4s to 0.15s for ultra-fast
                 ),
             ],
             
@@ -292,14 +292,14 @@ class CricketJSONExtractor:
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/{match_id}/commentary",
                     parser="cricbuzz_commentary",
-                    timeout=3,
-                    rate_limit=0.3
+                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
+                    rate_limit=0.1  # Reduced from 0.3s to 0.1s for ultra-fast
                 ),
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/{match_id}/full-commentary",
                     parser="cricbuzz_full_commentary", 
-                    timeout=4,
-                    rate_limit=0.3
+                    timeout=2,  # Reduced from 4s to 2s for sub-1s response
+                    rate_limit=0.1  # Reduced from 0.3s to 0.1s for ultra-fast
                 ),
                 # ESPN CRICINFO COMMENTARY
                 JSONEndpoint(
