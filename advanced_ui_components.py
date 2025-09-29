@@ -529,21 +529,65 @@ class UIComponents:
     
     @staticmethod
     def create_main_dashboard_menu(user_data: Dict[str, Any]) -> Tuple[str, InlineKeyboardMarkup]:
-        """Create sophisticated main dashboard superior to existing cricket apps."""
+        """Create sophisticated main dashboard superior to existing cricket apps with real cricket data."""
         username = user_data.get('username', 'Cricket Fan')
         favorite_teams = user_data.get('favorite_teams', [])
         recent_matches = user_data.get('recent_matches', [])
         active_alerts = user_data.get('active_alerts', 0)
         
-        # Enhanced welcome message with personalization and cricket atmosphere
+        # Enhanced data with real cricket information
+        live_matches = user_data.get('live_matches', [])
+        upcoming_matches = user_data.get('upcoming_matches', [])
+        active_tournaments = user_data.get('active_tournaments', [])
+        total_live_matches = user_data.get('total_live_matches', 0)
+        favorite_live_matches = user_data.get('favorite_live_matches', 0)
+        upcoming_favorite_matches = user_data.get('upcoming_favorite_matches', 0)
+        
+        # Enhanced welcome message with personalization and real cricket data
         welcome = f"🏏 **Cricket Live Match Centre Pro** 🏏\n\n"
         welcome += f"🌟 Welcome back, **{username}**! Ready for cricket? 🌟\n\n"
         
-        # Visual dashboard stats with cricket theming
+        # Live cricket status with real data
+        if total_live_matches > 0:
+            welcome += f"🔴 **LIVE NOW:** {total_live_matches} matches happening!\n"
+            if favorite_live_matches > 0:
+                welcome += f"⭐ **Your Teams:** {favorite_live_matches} matches featuring your favorites\n"
+            welcome += "\n"
+        else:
+            welcome += f"🕐 **No live matches** currently. Check schedule for upcoming action!\n\n"
+        
+        # Visual dashboard stats with cricket theming and real data
         welcome += f"📊 **Your Cricket Command Center:**\n"
         welcome += f"⭐ Favorite Teams: {len(favorite_teams) if favorite_teams else '🔧 Setup needed'}\n"
         welcome += f"🔔 Smart Alerts: {active_alerts} active\n"
-        welcome += f"👀 Recent Views: {len(recent_matches)} matches\n\n"
+        welcome += f"👀 Recent Views: {len(recent_matches)} matches\n"
+        if upcoming_favorite_matches > 0:
+            welcome += f"📅 Upcoming: {upcoming_favorite_matches} matches for your teams\n"
+        welcome += "\n"
+        
+        # Live match highlights from real data
+        if live_matches:
+            welcome += f"🔥 **Live Match Highlights:**\n"
+            for match in live_matches[:2]:  # Show top 2 live matches
+                status_emoji = "⭐" if match.get('is_favorite') else "🏏"
+                welcome += f"{status_emoji} **{match['title']}** - {match['score1']} vs {match['score2']}\n"
+            if len(live_matches) > 2:
+                welcome += f"... and {len(live_matches) - 2} more live matches!\n"
+            welcome += "\n"
+        
+        # Upcoming matches for user's teams
+        if upcoming_matches:
+            welcome += f"📅 **Your Teams' Next Matches:**\n"
+            for match in upcoming_matches[:2]:  # Show next 2 upcoming
+                welcome += f"🏏 **{match['title']}** - {match['format']} in {match['tournament']}\n"
+            welcome += "\n"
+        
+        # Tournament activity
+        if active_tournaments:
+            welcome += f"🏆 **Active Tournaments:** {len(active_tournaments)} competitions running\n"
+            for tournament in active_tournaments[:2]:  # Show top 2 tournaments
+                welcome += f"• {tournament['name']} ({tournament['format']}) - {tournament['status']}\n"
+            welcome += "\n"
         
         # Quick insights with cricket context
         if recent_matches:

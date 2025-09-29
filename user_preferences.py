@@ -255,7 +255,7 @@ class UserDataManager:
         return [{'team': team, **stats} for team, stats in trending[:10]]
     
     async def get_user_dashboard_data(self, user_id: int) -> Dict[str, Any]:
-        """Get personalized dashboard data for user."""
+        """Get personalized dashboard data for user with real cricket data integration."""
         prefs = await self.get_user_preferences(user_id)
         
         dashboard_data = {
@@ -267,6 +267,94 @@ class UserDataManager:
             'display_preferences': prefs.display_preferences,
             'last_activity': prefs.last_activity
         }
+        
+        # Enhance dashboard with real cricket data
+        try:
+            from cricket_scraper import get_live_matches, get_match_schedule, get_tournaments
+            
+            # Get live matches with user's favorite teams prioritized
+            live_matches = await get_live_matches()
+            user_live_matches = []
+            if live_matches:
+                for match in live_matches[:10]:  # Limit to 10 for performance
+                    if any(team in prefs.favorite_teams for team in [match.team1.name, match.team2.name, match.team1.short_name, match.team2.short_name]):
+                        user_live_matches.append({
+                            'match_id': match.match_id,
+                            'title': f"{match.team1.short_name} vs {match.team2.short_name}",
+                            'status': match.status.value,
+                            'score1': f"{match.team1.score}/{match.team1.wickets}",
+                            'score2': f"{match.team2.score}/{match.team2.wickets}",
+                            'overs1': match.team1.overs,
+                            'overs2': match.team2.overs,
+                            'is_favorite': True
+                        })
+                
+                # Add other live matches if we have space
+                for match in live_matches[:5]:
+                    if len(user_live_matches) < 5 and not any(m['match_id'] == match.match_id for m in user_live_matches):
+                        user_live_matches.append({
+                            'match_id': match.match_id,
+                            'title': f"{match.team1.short_name} vs {match.team2.short_name}",
+                            'status': match.status.value,
+                            'score1': f"{match.team1.score}/{match.team1.wickets}",
+                            'score2': f"{match.team2.score}/{match.team2.wickets}",
+                            'overs1': match.team1.overs,
+                            'overs2': match.team2.overs,
+                            'is_favorite': False
+                        })
+            
+            dashboard_data['live_matches'] = user_live_matches
+            
+            # Get upcoming matches for user's favorite teams
+            upcoming_schedule = await get_match_schedule()
+            user_upcoming_matches = []
+            if upcoming_schedule:
+                for match in upcoming_schedule[:15]:  # Check more matches
+                    if any(team in prefs.favorite_teams for team in [match.team1.name, match.team2.name, match.team1.short_name, match.team2.short_name]):
+                        user_upcoming_matches.append({
+                            'match_id': match.match_id,
+                            'title': f"{match.team1.short_name} vs {match.team2.short_name}",
+                            'datetime': match.datetime,
+                            'tournament': match.tournament,
+                            'format': match.format,
+                            'venue': match.venue
+                        })
+                        if len(user_upcoming_matches) >= 3:  # Limit to 3 upcoming
+                            break
+            
+            dashboard_data['upcoming_matches'] = user_upcoming_matches
+            
+            # Get active tournaments
+            tournaments = await get_tournaments()
+            active_tournaments = []
+            if tournaments:
+                for tournament in tournaments[:5]:  # Top 5 tournaments
+                    active_tournaments.append({
+                        'name': tournament.name,
+                        'format': tournament.format,
+                        'status': tournament.status,
+                        'current_stage': tournament.current_stage,
+                        'total_teams': len(tournament.teams) if tournament.teams else 0
+                    })
+            
+            dashboard_data['active_tournaments'] = active_tournaments
+            
+            # Calculate dashboard stats
+            dashboard_data['total_live_matches'] = len(live_matches) if live_matches else 0
+            dashboard_data['favorite_live_matches'] = len(user_live_matches)
+            dashboard_data['upcoming_favorite_matches'] = len(user_upcoming_matches)
+            dashboard_data['active_tournament_count'] = len(active_tournaments)
+            
+        except Exception as e:
+            logger.error(f"Error fetching real cricket data for dashboard: {e}")
+            # Fallback to basic dashboard without cricket data
+            dashboard_data['live_matches'] = []
+            dashboard_data['upcoming_matches'] = []
+            dashboard_data['active_tournaments'] = []
+            dashboard_data['total_live_matches'] = 0
+            dashboard_data['favorite_live_matches'] = 0
+            dashboard_data['upcoming_favorite_matches'] = 0
+            dashboard_data['active_tournament_count'] = 0
         
         return dashboard_data
     
