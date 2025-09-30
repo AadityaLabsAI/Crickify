@@ -20,6 +20,10 @@ from deployment_cache_warmup import railway_deployment_hook
 from railway_deployment_verification import run_deployment_verification, verify_deployment_ready
 from production_config import config_manager, get_performance_settings
 
+# Import Supabase database components
+from supabase_db import supabase_db
+from db_worker import db_worker
+
 # Railway Environment Detection and Optimization
 RAILWAY_ENV = bool(os.getenv('RAILWAY_ENVIRONMENT_NAME'))
 RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'cricket-bot')
@@ -104,9 +108,11 @@ class RailwayOptimizedLauncher:
             
         logger.info("🔒 Environment verification:")
         logger.info(f"✅ TELEGRAM_BOT_TOKEN: {'SET' if os.getenv('TELEGRAM_BOT_TOKEN') else '❌ MISSING'}")
+        logger.info(f"🗄️  DATABASE_URL: {'SET' if os.getenv('DATABASE_URL') else 'NOT SET (will use live scraping)'}")
         logger.info(f"🌍 Railway Environment: {'YES' if RAILWAY_ENV else 'NO (local)'}")
         logger.info(f"📊 Monitoring Enabled: {'YES' if RAILWAY_ENV else 'LIMITED (local)'}")
         logger.info(f"🔥 Cache Warming: {'ENABLED' if RAILWAY_ENV else 'DISABLED (local)'}")
+        logger.info(f"🔄 Database Worker: {'ENABLED' if os.getenv('DATABASE_URL') else 'DISABLED'}")
         logger.info("=" * 70)
         
     def check_health(self):
@@ -181,6 +187,23 @@ class RailwayOptimizedLauncher:
                 await start_railway_monitoring()
                 self.monitoring_started = True
                 logger.info("✅ [DEPLOYMENT] Railway monitoring started")
+            
+            # Phase 1.5: Database Initialization
+            if os.getenv('DATABASE_URL'):
+                logger.info("🗄️  [DEPLOYMENT] Phase 1.5: Initializing Supabase database...")
+                try:
+                    await supabase_db.initialize()
+                    logger.info("✅ [DEPLOYMENT] Supabase database initialized successfully")
+                    
+                    # Start background worker for automatic updates
+                    logger.info("🔄 [DEPLOYMENT] Starting database background worker...")
+                    await db_worker.start()
+                    logger.info("✅ [DEPLOYMENT] Database worker started - auto-updating every 1.5 seconds")
+                except Exception as e:
+                    logger.error(f"❌ [DEPLOYMENT] Database initialization failed: {e}")
+                    logger.warning("⚠️ [DEPLOYMENT] Bot will continue with live scraping fallback")
+            else:
+                logger.info("⏭️ [DEPLOYMENT] Skipping database initialization (DATABASE_URL not set)")
             
             # Phase 2: Cache Warm-start (Railway only)
             if RAILWAY_ENV:
