@@ -34,10 +34,12 @@ from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
+    InlineQueryHandler,
     ContextTypes,
     ExtBot,
     JobQueue,
 )
+from telegram import InlineQueryResultArticle, InputTextMessageContent, BotCommand
 from telegram.error import Conflict, TelegramError, NetworkError
 
 # Configure logging - Railway optimized (stdout only, no file logging)
@@ -147,6 +149,31 @@ class ProfessionalCricketBot:
         user = update.effective_user
         logger.info(f"User {user.id} started the bot - Professional UI")
         
+        # Parse referral parameter from context.args
+        referrer_id = None
+        referrer_name = None
+        if context.args:
+            for arg in context.args:
+                if arg.startswith('shared_by_'):
+                    try:
+                        referrer_id = int(arg.replace('shared_by_', ''))
+                        logger.info(f"📤 User {user.id} was referred by user {referrer_id}")
+                        
+                        # Track the referral (idempotent)
+                        referral_tracked = await user_data_manager.track_referral(
+                            new_user_id=user.id,
+                            referrer_id=referrer_id,
+                            new_user_username=user.username,
+                            new_user_first_name=user.first_name
+                        )
+                        
+                        if referral_tracked:
+                            # Get referrer info to thank them
+                            referrer_prefs = await user_data_manager.get_user_preferences(referrer_id)
+                            referrer_name = referrer_prefs.first_name or referrer_prefs.username or f"User {referrer_id}"
+                    except (ValueError, AttributeError) as e:
+                        logger.warning(f"Invalid referral parameter: {arg}, error: {e}")
+        
         # Get or create user preferences
         user_prefs = await user_data_manager.get_user_preferences(
             user.id, user.username, user.first_name
@@ -161,6 +188,15 @@ class ProfessionalCricketBot:
         # Create sophisticated main dashboard
         welcome_text, reply_markup = self.ui_components.create_main_dashboard_menu(dashboard_data)
         
+        # Add referral acknowledgment if user was referred
+        if referrer_name:
+            welcome_text = (
+                f"🎉 **Welcome!** 🎉\n\n"
+                f"Thanks to **{referrer_name}** for sharing this bot with you!\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"{welcome_text}"
+            )
+        
         # Initialize user session
         self.user_sessions[user.id] = {
             'navigation_path': ['home'],
@@ -174,6 +210,429 @@ class ProfessionalCricketBot:
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+    
+    async def live_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /live command - Quick access to live matches."""
+        if not update.effective_user or not update.message:
+            return
+        
+        user_id = update.effective_user.id
+        logger.info(f"User {user_id} used /live command")
+        
+        # Show loading message
+        loading_msg = await update.message.reply_text("🔴 Loading live matches...", parse_mode='Markdown')
+        
+        try:
+            live_matches = await get_live_matches()
+            
+            if live_matches:
+                text = "🏏 **Live Cricket Matches** 🏏\n\n"
+                
+                for i, match in enumerate(live_matches[:5]):
+                    match_text = match.to_telegram_format(include_commentary=True)
+                    text += match_text
+                    if i < len(live_matches[:5]) - 1:
+                        text += "\n" + "─" * 30 + "\n\n"
+                
+                text += f"\n\n📊 **Total:** {len(live_matches)} live matches"
+                text += f"\n\n💡 **Tip:** Use /start to access advanced features!"
+            else:
+                text = (
+                    "🏏 **Live Matches** 🏏\n\n"
+                    "🔍 No live matches at the moment.\n\n"
+                    "📅 Use /schedule to see upcoming matches!"
+                )
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data="live_matches_pro")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_main")]
+            ]
+            
+            await loading_msg.edit_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+            
+        except Exception as e:
+            logger.error(f"Error in /live command: {e}")
+            await loading_msg.edit_text(
+                "⚠️ Unable to fetch live matches.\n\n🔄 Try again in a moment!",
+                parse_mode='Markdown'
+            )
+    
+    async def schedule_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /schedule command - Quick access to match schedule."""
+        if not update.effective_user or not update.message:
+            return
+        
+        user_id = update.effective_user.id
+        logger.info(f"User {user_id} used /schedule command")
+        
+        text = (
+            "📅 **Cricket Match Schedule** 📅\n\n"
+            "🎯 **Quick Access:**\n"
+            "• View upcoming matches\n"
+            "• Filter by format (T20, ODI, Test)\n"
+            "• Set personalized alerts\n\n"
+            "Use the buttons below to explore!"
+        )
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("📅 Today", callback_data="schedule_today_enhanced"),
+                InlineKeyboardButton("🌙 Tonight", callback_data="schedule_tonight")
+            ],
+            [
+                InlineKeyboardButton("⚡ T20", callback_data="schedule_t20_focus"),
+                InlineKeyboardButton("🏏 ODI", callback_data="schedule_odi_focus")
+            ],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_main")]
+        ]
+        
+        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def alerts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /alerts command - Manage match alerts."""
+        if not update.effective_user or not update.message:
+            return
+        
+        user_id = update.effective_user.id
+        logger.info(f"User {user_id} used /alerts command")
+        
+        user_prefs = await user_data_manager.get_user_preferences(user_id)
+        
+        text = (
+            "🔔 **Match Alerts & Notifications** 🔔\n\n"
+            "📱 **Smart Alert Features:**\n"
+            "• 🏏 Live match updates\n"
+            "• ⭐ Favorite team notifications\n"
+            "• 🎯 Match start reminders\n"
+            "• 🏆 Tournament updates\n\n"
+        )
+        
+        if user_prefs.favorite_teams:
+            text += f"⭐ **Your Teams:** {', '.join(user_prefs.favorite_teams[:3])}\n\n"
+        else:
+            text += "💡 **Tip:** Add favorite teams to get personalized alerts!\n\n"
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("⭐ My Teams", callback_data="my_teams"),
+                InlineKeyboardButton("🔔 Alert Settings", callback_data="my_alerts")
+            ],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_main")]
+        ]
+        
+        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /stats command - View player and team statistics."""
+        if not update.effective_user or not update.message:
+            return
+        
+        user_id = update.effective_user.id
+        logger.info(f"User {user_id} used /stats command")
+        
+        text = (
+            "📊 **Cricket Statistics & Analytics** 📊\n\n"
+            "🎯 **Available Stats:**\n"
+            "• 🏏 Live match statistics\n"
+            "• 👤 Player performance\n"
+            "• 🏆 Team analytics\n"
+            "• 📈 Tournament standings\n"
+            "• 🔮 AI predictions\n\n"
+            "💡 **Pro Features:**\n"
+            "• Real-time analytics\n"
+            "• Head-to-head comparisons\n"
+            "• Performance trends\n"
+            "• Win probability tracking"
+        )
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 Analytics Hub", callback_data="analytics_hub"),
+                InlineKeyboardButton("🔮 Predictions", callback_data="match_predictions")
+            ],
+            [
+                InlineKeyboardButton("🏆 Standings", callback_data="all_tournament_standings"),
+                InlineKeyboardButton("🔥 Trending", callback_data="trending_now")
+            ],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_main")]
+        ]
+        
+        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def settings_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /settings command - Configure user preferences."""
+        if not update.effective_user or not update.message:
+            return
+        
+        user_id = update.effective_user.id
+        logger.info(f"User {user_id} used /settings command")
+        
+        user_prefs = await user_data_manager.get_user_preferences(user_id)
+        
+        text = (
+            "⚙️ **Bot Settings & Preferences** ⚙️\n\n"
+            "🎨 **Customize Your Experience:**\n"
+            "• ⭐ Favorite teams & players\n"
+            "• 🔔 Notification preferences\n"
+            "• 🌐 Time zone settings\n"
+            "• 📱 Display preferences\n\n"
+        )
+        
+        text += f"👤 **Your Profile:**\n"
+        text += f"• Sessions: {user_prefs.total_sessions}\n"
+        text += f"• Favorite teams: {len(user_prefs.favorite_teams)}\n"
+        text += f"• Alerts: {'Enabled' if user_prefs.notification_preferences.get('match_start', True) else 'Disabled'}"
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("⭐ Manage Teams", callback_data="my_teams"),
+                InlineKeyboardButton("🔔 Notifications", callback_data="my_alerts")
+            ],
+            [InlineKeyboardButton("⚙️ All Settings", callback_data="user_settings")],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_main")]
+        ]
+        
+        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /help command - Show help and tips."""
+        if not update.effective_user or not update.message:
+            return
+        
+        user_id = update.effective_user.id
+        logger.info(f"User {user_id} used /help command")
+        
+        text = (
+            "❓ **Cricket Bot Help & Tips** ❓\n\n"
+            "🎯 **Available Commands:**\n"
+            "• /start - Open main dashboard\n"
+            "• /live - View live matches\n"
+            "• /schedule - Browse match schedule\n"
+            "• /alerts - Manage notifications\n"
+            "• /stats - View statistics\n"
+            "• /settings - Configure preferences\n"
+            "• /share - Share bot with friends\n\n"
+            "🚀 **Pro Features:**\n"
+            "• 🔴 Real-time live scores (1-2s updates)\n"
+            "• 📊 Advanced analytics & insights\n"
+            "• 🔮 AI-powered predictions\n"
+            "• 🎯 Personalized recommendations\n"
+            "• 🔔 Smart alerts & notifications\n\n"
+            "💡 **Tips:**\n"
+            "• Use inline mode: @botusername live\n"
+            "• Add favorite teams for personalization\n"
+            "• Enable alerts for match updates\n"
+            "• Share with friends using /share"
+        )
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("🚀 Get Started", callback_data="back_to_main"),
+                InlineKeyboardButton("📤 Share Bot", callback_data="share_bot")
+            ],
+            [InlineKeyboardButton("💡 More Tips", callback_data="help_tips")]
+        ]
+        
+        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def share_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /share command - Viral sharing feature."""
+        if not update.effective_user or not update.message:
+            return
+        
+        user_id = update.effective_user.id
+        user_name = update.effective_user.first_name or "Cricket fan"
+        logger.info(f"User {user_id} used /share command")
+        
+        # Get bot username for the link
+        bot_username = context.bot.username if context.bot else "cricketbot"
+        bot_link = f"https://t.me/{bot_username}?start=shared_by_{user_id}"
+        
+        # Create compelling share message
+        share_text = (
+            f"🏏 **Share Cricket Bot with Friends!** 🏏\n\n"
+            f"Hey! I'm using this amazing Cricket Bot and thought you'd love it too! 🎯\n\n"
+            f"🚀 **Features:**\n"
+            f"• ⚡ Real-time live scores (1-2s updates)\n"
+            f"• 📊 Advanced analytics & AI predictions\n"
+            f"• 🔔 Smart match alerts & notifications\n"
+            f"• 🏆 Tournament tracking & standings\n"
+            f"• 🎯 Personalized recommendations\n"
+            f"• 📱 Beautiful, intuitive interface\n\n"
+            f"🎁 **It's completely FREE!**\n\n"
+            f"👇 **Try it now:**\n"
+            f"{bot_link}\n\n"
+            f"💬 **Or search:** @{bot_username}\n\n"
+            f"⭐ Shared by {user_name}"
+        )
+        
+        # Create shareable message for forwarding
+        forward_message = (
+            f"🏏 **The Best Cricket Bot on Telegram!** 🏏\n\n"
+            f"🔥 Never miss a cricket moment!\n\n"
+            f"✨ **Why Cricket Fans Love This Bot:**\n"
+            f"• Lightning-fast live scores ⚡\n"
+            f"• AI-powered match predictions 🔮\n"
+            f"• Comprehensive statistics 📊\n"
+            f"• Smart notifications 🔔\n"
+            f"• Tournament tracking 🏆\n\n"
+            f"🎁 **100% FREE - No Ads!**\n\n"
+            f"👇 Start now:\n"
+            f"{bot_link}\n\n"
+            f"#Cricket #LiveScores #CricketBot"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("📤 Share on Telegram", url=f"https://t.me/share/url?url={bot_link}&text={forward_message[:200]}")],
+            [
+                InlineKeyboardButton("📋 Copy Link", callback_data="copy_bot_link"),
+                InlineKeyboardButton("🔗 Bot Link", url=bot_link)
+            ],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_main")]
+        ]
+        
+        await update.message.reply_text(share_text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def inline_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle inline queries for viral features."""
+        query = update.inline_query
+        if not query:
+            return
+        
+        query_text = query.query.lower().strip()
+        logger.info(f"Inline query from user {query.from_user.id}: {query_text}")
+        
+        results = []
+        
+        try:
+            # Default or "live" query - show live matches
+            if not query_text or query_text == "live":
+                live_matches = await get_live_matches()
+                
+                if live_matches:
+                    for i, match in enumerate(live_matches[:5]):
+                        match_text = match.to_telegram_format(include_commentary=False)
+                        
+                        result = InlineQueryResultArticle(
+                            id=f"live_{i}_{match.match_id}",
+                            title=f"🔴 {match.team1.short_name} vs {match.team2.short_name}",
+                            description=f"{match.match_status_detail or match.status.value} - {match.format}",
+                            input_message_content=InputTextMessageContent(
+                                message_text=f"🏏 **Live Cricket Score**\n\n{match_text}\n\n🤖 Via Cricket Bot",
+                                parse_mode='Markdown'
+                            )
+                        )
+                        results.append(result)
+                else:
+                    # No live matches
+                    result = InlineQueryResultArticle(
+                        id="no_live",
+                        title="🏏 No Live Matches",
+                        description="No live cricket matches at the moment",
+                        input_message_content=InputTextMessageContent(
+                            message_text="🏏 No live cricket matches right now.\n\n📅 Check schedule for upcoming matches!",
+                            parse_mode='Markdown'
+                        )
+                    )
+                    results.append(result)
+            
+            # Team-specific query
+            else:
+                live_matches = await get_live_matches()
+                team_matches = [
+                    m for m in live_matches 
+                    if query_text in m.team1.name.lower() or query_text in m.team2.name.lower() or
+                       query_text in m.team1.short_name.lower() or query_text in m.team2.short_name.lower()
+                ]
+                
+                if team_matches:
+                    for i, match in enumerate(team_matches[:5]):
+                        match_text = match.to_telegram_format(include_commentary=False)
+                        
+                        result = InlineQueryResultArticle(
+                            id=f"team_{i}_{match.match_id}",
+                            title=f"🔴 {match.team1.short_name} vs {match.team2.short_name}",
+                            description=f"{match.match_status_detail or match.status.value} - {match.format}",
+                            input_message_content=InputTextMessageContent(
+                                message_text=f"🏏 **Live Cricket Score**\n\n{match_text}\n\n🤖 Via Cricket Bot",
+                                parse_mode='Markdown'
+                            )
+                        )
+                        results.append(result)
+                else:
+                    # No matches for this team
+                    result = InlineQueryResultArticle(
+                        id="no_team_match",
+                        title=f"🏏 No matches for '{query_text}'",
+                        description="Try searching for another team or use 'live' for all matches",
+                        input_message_content=InputTextMessageContent(
+                            message_text=f"🏏 No live matches found for '{query_text}'\n\n💡 Try: @{context.bot.username} live",
+                            parse_mode='Markdown'
+                        )
+                    )
+                    results.append(result)
+        
+        except Exception as e:
+            logger.error(f"Error in inline query: {e}")
+            # Error result
+            result = InlineQueryResultArticle(
+                id="error",
+                title="⚠️ Error",
+                description="Unable to fetch live matches",
+                input_message_content=InputTextMessageContent(
+                    message_text="⚠️ Unable to fetch live cricket data. Please try again!",
+                    parse_mode='Markdown'
+                )
+            )
+            results.append(result)
+        
+        await query.answer(results, cache_time=2, is_personal=True)
+    
+    async def handle_share_bot_callback(self, query, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle share bot button callback."""
+        user_id = query.from_user.id if query.from_user else None
+        user_name = query.from_user.first_name if query.from_user else "Cricket fan"
+        
+        if not user_id:
+            return
+        
+        # Get bot username for the link
+        bot_username = context.bot.username if context.bot else "cricketbot"
+        bot_link = f"https://t.me/{bot_username}?start=shared_by_{user_id}"
+        
+        # Create compelling share message
+        share_text = (
+            f"🏏 **Share Cricket Bot with Friends!** 🏏\n\n"
+            f"Hey! I'm using this amazing Cricket Bot and thought you'd love it too! 🎯\n\n"
+            f"🚀 **Features:**\n"
+            f"• ⚡ Real-time live scores (1-2s updates)\n"
+            f"• 📊 Advanced analytics & AI predictions\n"
+            f"• 🔔 Smart match alerts & notifications\n"
+            f"• 🏆 Tournament tracking & standings\n"
+            f"• 🎯 Personalized recommendations\n"
+            f"• 📱 Beautiful, intuitive interface\n\n"
+            f"🎁 **It's completely FREE!**\n\n"
+            f"👇 **Try it now:**\n"
+            f"{bot_link}\n\n"
+            f"💬 **Or search:** @{bot_username}\n\n"
+            f"⭐ Shared by {user_name}"
+        )
+        
+        # Create shareable message for forwarding
+        forward_message = (
+            f"🏏 The Best Cricket Bot on Telegram! Never miss a cricket moment!"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("📤 Share on Telegram", url=f"https://t.me/share/url?url={bot_link}&text={forward_message}")],
+            [
+                InlineKeyboardButton("📋 Copy Link", callback_data="copy_bot_link"),
+                InlineKeyboardButton("🔗 Bot Link", url=bot_link)
+            ],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_main")]
+        ]
+        
+        await query.edit_message_text(share_text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
 
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle inline keyboard button callbacks."""
@@ -256,6 +715,10 @@ class ProfessionalCricketBot:
         elif callback_data.startswith("filter_"):
             await self.handle_schedule_filter(query, callback_data)
             
+        # Share bot feature
+        elif callback_data == "share_bot":
+            await self.handle_share_bot_callback(query, context)
+        
         # Navigation
         elif callback_data == "back_to_main":
             await self.handle_back_to_main_pro(query)
@@ -1693,9 +2156,79 @@ async def async_main():
         bot.application = application
         bot.bot_instance = application.bot
         
-        # Add handlers
+        # Add command handlers with robust logging
+        logger.info("📝 Registering command handlers...")
         application.add_handler(CommandHandler("start", bot.start_command))
+        logger.info("✅ Handler registered: /start")
+        application.add_handler(CommandHandler("live", bot.live_command))
+        logger.info("✅ Handler registered: /live")
+        application.add_handler(CommandHandler("schedule", bot.schedule_command))
+        logger.info("✅ Handler registered: /schedule")
+        application.add_handler(CommandHandler("alerts", bot.alerts_command))
+        logger.info("✅ Handler registered: /alerts")
+        application.add_handler(CommandHandler("stats", bot.stats_command))
+        logger.info("✅ Handler registered: /stats")
+        application.add_handler(CommandHandler("settings", bot.settings_command))
+        logger.info("✅ Handler registered: /settings")
+        application.add_handler(CommandHandler("help", bot.help_command))
+        logger.info("✅ Handler registered: /help")
+        application.add_handler(CommandHandler("share", bot.share_command))
+        logger.info("✅ Handler registered: /share")
+        logger.info("🎯 All 8 command handlers registered successfully!")
+        
+        # Add inline query handler for viral features
+        application.add_handler(InlineQueryHandler(bot.inline_query))
+        logger.info("✅ Inline query handler registered")
+        
+        # Add callback query handler
         application.add_handler(CallbackQueryHandler(bot.button_callback))
+        logger.info("✅ Callback query handler registered")
+        
+        # Register bot commands with Telegram
+        bot_commands = [
+            BotCommand("start", "🏏 Start the bot and see welcome message"),
+            BotCommand("live", "🔴 View live cricket matches"),
+            BotCommand("schedule", "📅 See upcoming matches"),
+            BotCommand("alerts", "🔔 Manage match alerts"),
+            BotCommand("stats", "📊 View player statistics"),
+            BotCommand("settings", "⚙️ Configure preferences"),
+            BotCommand("help", "❓ Get help and feature info"),
+            BotCommand("share", "📤 Share the bot with friends")
+        ]
+        
+        # Bot description for better SEO and discoverability
+        bot_description = (
+            "🏏 The Best Cricket Bot on Telegram! Get real-time live cricket scores, "
+            "advanced analytics, AI predictions, and smart notifications. Never miss a cricket moment! "
+            "Features: ⚡ Lightning-fast updates (1-2s), 📊 Advanced statistics, 🔮 AI predictions, "
+            "🔔 Smart alerts, 🏆 Tournament tracking, 📱 Beautiful interface. "
+            "Use inline mode @botusername live to share scores in any chat. "
+            "100% FREE - No ads! #Cricket #LiveScores #CricketBot"
+        )
+        
+        bot_short_description = "🏏 Real-time cricket scores & AI predictions! ⚡ Fast updates, advanced stats & smart alerts"
+        
+        try:
+            # Register commands
+            await application.bot.set_my_commands(bot_commands)
+            logger.info("✅ Bot commands registered with Telegram successfully!")
+            
+            # Set bot description for SEO
+            try:
+                await application.bot.set_my_description(bot_description)
+                logger.info("✅ Bot description set successfully!")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to set bot description: {e}")
+            
+            # Set short description for SEO
+            try:
+                await application.bot.set_my_short_description(bot_short_description)
+                logger.info("✅ Bot short description set successfully!")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to set bot short description: {e}")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to register bot commands: {e}")
         
         # Add simple error handler (no cascading failures)
         application.add_error_handler(bot.simple_error_handler)
@@ -1916,13 +2449,84 @@ def main():
             bot.application = application
             bot.bot_instance = application.bot
             
-            # Add handlers
+            # Add command handlers with robust logging
+            logger.info("📝 Registering command handlers...")
             application.add_handler(CommandHandler("start", bot.start_command))
+            logger.info("✅ Handler registered: /start")
+            application.add_handler(CommandHandler("live", bot.live_command))
+            logger.info("✅ Handler registered: /live")
+            application.add_handler(CommandHandler("schedule", bot.schedule_command))
+            logger.info("✅ Handler registered: /schedule")
+            application.add_handler(CommandHandler("alerts", bot.alerts_command))
+            logger.info("✅ Handler registered: /alerts")
+            application.add_handler(CommandHandler("stats", bot.stats_command))
+            logger.info("✅ Handler registered: /stats")
+            application.add_handler(CommandHandler("settings", bot.settings_command))
+            logger.info("✅ Handler registered: /settings")
+            application.add_handler(CommandHandler("help", bot.help_command))
+            logger.info("✅ Handler registered: /help")
+            application.add_handler(CommandHandler("share", bot.share_command))
+            logger.info("✅ Handler registered: /share")
+            logger.info("🎯 All 8 command handlers registered successfully!")
+            
+            # Add inline query handler for viral features
+            application.add_handler(InlineQueryHandler(bot.inline_query))
+            logger.info("✅ Inline query handler registered")
+            
+            # Add callback query handler
             application.add_handler(CallbackQueryHandler(bot.button_callback))
+            logger.info("✅ Callback query handler registered")
             
             # Add simplified error handler that doesn't self-terminate
             application.add_error_handler(bot.simplified_error_handler)
             logger.info("🛡️ Added simplified error handler")
+            
+            # Register bot commands with Telegram
+            async def register_commands():
+                bot_commands = [
+                    BotCommand("start", "🏏 Start the bot and see welcome message"),
+                    BotCommand("live", "🔴 View live cricket matches"),
+                    BotCommand("schedule", "📅 See upcoming matches"),
+                    BotCommand("alerts", "🔔 Manage match alerts"),
+                    BotCommand("stats", "📊 View player statistics"),
+                    BotCommand("settings", "⚙️ Configure preferences"),
+                    BotCommand("help", "❓ Get help and feature info"),
+                    BotCommand("share", "📤 Share the bot with friends")
+                ]
+                
+                bot_description = (
+                    "🏏 The Best Cricket Bot on Telegram! Get real-time live cricket scores, "
+                    "advanced analytics, AI predictions, and smart notifications. Never miss a cricket moment! "
+                    "Features: ⚡ Lightning-fast updates (1-2s), 📊 Advanced statistics, 🔮 AI predictions, "
+                    "🔔 Smart alerts, 🏆 Tournament tracking, 📱 Beautiful interface. "
+                    "Use inline mode @botusername live to share scores in any chat. "
+                    "100% FREE - No ads! #Cricket #LiveScores #CricketBot"
+                )
+                
+                bot_short_description = "🏏 Real-time cricket scores & AI predictions! ⚡ Fast updates, advanced stats & smart alerts"
+                
+                try:
+                    await application.bot.set_my_commands(bot_commands)
+                    logger.info("✅ Bot commands registered with Telegram successfully!")
+                    
+                    try:
+                        await application.bot.set_my_description(bot_description)
+                        logger.info("✅ Bot description set successfully!")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to set bot description: {e}")
+                    
+                    try:
+                        await application.bot.set_my_short_description(bot_short_description)
+                        logger.info("✅ Bot short description set successfully!")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to set bot short description: {e}")
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to register bot commands: {e}")
+            
+            # Run command registration
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(register_commands())
             
             # Set up automatic live updates
             if application.job_queue:

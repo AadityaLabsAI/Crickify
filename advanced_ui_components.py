@@ -596,10 +596,14 @@ class UIComponents:
         
         # Premium feature highlights with cricket emojis
         welcome += f"⚡ **Premium Cricket Features:**\n"
-        welcome += f"• 🚀 Lightning-fast live updates\n"
+        welcome += f"• 🚀 Lightning-fast live updates (1-2s)\n"
         welcome += f"• 🧠 AI-powered match predictions\n"
         welcome += f"• 🎯 Advanced team analytics\n"
-        welcome += f"• 📱 Smart notification system\n\n"
+        welcome += f"• 📱 Smart notification system\n"
+        welcome += f"• 🔗 Inline queries from any chat\n"
+        welcome += f"• 📤 Share scores with friends\n\n"
+        
+        welcome += f"💡 **Quick Tip:** Type @botusername live in any chat to share live scores!\n\n"
         
         welcome += f"🎪 **Choose Your Cricket Adventure:**"
         
@@ -649,6 +653,13 @@ class UIComponents:
             InlineKeyboardButton("💡 Pro Tips", callback_data="help_tips")
         ]
         buttons.append(row6)
+        
+        # Share and help row
+        row7 = [
+            InlineKeyboardButton("📤 Share Bot", callback_data="share_bot"),
+            InlineKeyboardButton("❓ Help", callback_data="help_tips")
+        ]
+        buttons.append(row7)
         
         return welcome, InlineKeyboardMarkup(buttons)
     

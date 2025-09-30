@@ -72,6 +72,9 @@ class UserPreferences:
     total_sessions: int = 0
     total_interactions: int = 0
     premium_features: bool = False
+    referred_by: Optional[int] = None
+    referral_count: int = 0
+    referrals: List[int] = field(default_factory=list)
     
     def update_activity(self):
         """Update last activity timestamp."""
@@ -217,6 +220,35 @@ class UserDataManager:
         
         return matching_users
     
+    async def track_referral(self, new_user_id: int, referrer_id: int, new_user_username: Optional[str] = None, 
+                            new_user_first_name: Optional[str] = None) -> bool:
+        """Track a referral from referrer_id to new_user_id (idempotent)."""
+        try:
+            # Get new user preferences
+            new_user_prefs = await self.get_user_preferences(new_user_id, new_user_username, new_user_first_name)
+            
+            # Only track if not already referred
+            if new_user_prefs.referred_by is None:
+                new_user_prefs.referred_by = referrer_id
+                await self.save_user_preferences(new_user_prefs)
+                
+                # Update referrer's referral count
+                referrer_prefs = await self.get_user_preferences(referrer_id)
+                if new_user_id not in referrer_prefs.referrals:
+                    referrer_prefs.referrals.append(new_user_id)
+                    referrer_prefs.referral_count = len(referrer_prefs.referrals)
+                    await self.save_user_preferences(referrer_prefs)
+                
+                logger.info(f"✅ Referral tracked: User {new_user_id} referred by {referrer_id}")
+                return True
+            else:
+                logger.info(f"ℹ️ User {new_user_id} already referred by {new_user_prefs.referred_by}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error tracking referral: {e}")
+            return False
+    
     async def get_trending_teams(self, days: int = 7) -> List[Dict[str, Any]]:
         """Get trending teams based on user favorites and views."""
         team_stats = {}
@@ -314,8 +346,8 @@ class UserDataManager:
                         user_upcoming_matches.append({
                             'match_id': match.match_id,
                             'title': f"{match.team1.short_name} vs {match.team2.short_name}",
-                            'datetime': match.datetime,
-                            'tournament': match.tournament,
+                            'datetime': match.start_time,
+                            'tournament': match.tournament_name,
                             'format': match.format,
                             'venue': match.venue
                         })
