@@ -33,3 +33,5 @@ psycopg2-binary>=2.9.9
 
 # Note: python-telegram-bot already provides telegram functionality
 telegram
+asyncpg
+psycopg2-binary

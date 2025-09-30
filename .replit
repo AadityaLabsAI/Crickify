@@ -5,7 +5,7 @@ integrations = ["web_scraper:1.0.0"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["libiconv", "pkg-config"]
+packages = ["libiconv", "pkg-config", "postgresql"]
 
 [workflows]
 runButton = "Project"
