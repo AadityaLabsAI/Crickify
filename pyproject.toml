@@ -17,4 +17,6 @@ dependencies = [
     "lz4>=4.3.2",
     "orjson>=3.10.0",
     "xxhash>=3.4.1",
+    "asyncpg>=0.29.0",
+    "psycopg2-binary>=2.9.9",
 ]
