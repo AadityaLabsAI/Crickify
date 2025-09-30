@@ -1,0 +1,42 @@
+{
+  "user_id": 2145787222,
+  "username": "Aaditya_Samriya",
+  "first_name": "\ud835\udd38\ud835\udd52\ud835\udd55\ud835\udd5a\ud835\udd65\ud835\udd6a\ud835\udd52",
+  "favorite_teams": [],
+  "favorite_players": [],
+  "preferred_formats": [
+    "T20",
+    "ODI",
+    "Test"
+  ],
+  "preferred_tournaments": [],
+  "notification_preferences": {
+    "match_start": true,
+    "wickets": true,
+    "milestones": true,
+    "match_end": true,
+    "team_updates": true
+  },
+  "timezone": "UTC",
+  "language": "en",
+  "display_preferences": {
+    "show_detailed_scores": true,
+    "show_commentary": true,
+    "show_statistics": true,
+    "auto_refresh": true,
+    "compact_mode": false
+  },
+  "active_alerts": [],
+  "match_history": [],
+  "created_at": "2025-09-30T13:11:45.598637",
+  "last_activity": "2025-09-30T13:18:00.807956",
+  "total_sessions": 8,
+  "total_interactions": 13,
+  "premium_features": false,
+  "referred_by": null,
+  "referral_count": 0,
+  "referrals": [],
+  "tour_completed": false,
+  "onboarding_completed": false,
+  "last_feature_update_seen": "2025.09.30"
+}

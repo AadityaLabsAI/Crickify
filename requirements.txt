@@ -28,3 +28,4 @@ orjson>=3.10.0
 xxhash>=3.4.1
 
 # Note: python-telegram-bot already provides telegram functionality
+telegram
