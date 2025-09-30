@@ -36,7 +36,7 @@ class JSONEndpoint:
     method: str = "GET"
     headers: Optional[Dict[str, str]] = None
     parser: str = "auto"  # auto, cricbuzz, espn, generic
-    timeout: int = 5
+    timeout: float = 5
     rate_limit: float = 0.1  # Minimal rate limiting for JSON APIs
     
     def __post_init__(self):
@@ -202,14 +202,22 @@ class CricketJSONExtractor:
         self.validation_failures = defaultdict(int)  # endpoint -> failure count
         
     def _initialize_endpoints(self) -> Dict[str, List[JSONEndpoint]]:
-        """Initialize working free cricket API endpoints including Cricbuzz Live API."""
+        """Initialize working free cricket API endpoints - FAIL FAST strategy for dead endpoints."""
         return {
             'live_matches': [
-                # CRICBUZZ LIVE API - Working free alternative
+                # NOTE: All previously working JSON APIs are now failing:
+                # - cricbuzz-live.vercel.app returns 402 Payment Required
+                # - Cricbuzz.com widget endpoints return 404
+                # - ESPN Cricinfo API returns 403 Access Denied
+                # 
+                # Strategy: Try JSON with ultra-short timeout (0.3s), then immediately fallback to HTML
+                # This achieves <2s response by not wasting time on failing endpoints
+                
+                # These are kept for future compatibility but with MINIMAL timeout to fail fast
                 JSONEndpoint(
                     url="https://cricbuzz-live.vercel.app/v1/live",
                     parser="cricbuzz_live_api",
-                    timeout=2,
+                    timeout=0.3,  # ULTRA-SHORT timeout to fail fast (was 2s)
                     rate_limit=0.1,
                     headers={
                         'Accept': 'application/json',
@@ -219,18 +227,17 @@ class CricketJSONExtractor:
                 JSONEndpoint(
                     url="https://cricbuzz-live.vercel.app/v1/recent",
                     parser="cricbuzz_recent_api",
-                    timeout=2,
+                    timeout=0.3,  # ULTRA-SHORT timeout to fail fast
                     rate_limit=0.1,
                     headers={
                         'Accept': 'application/json',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     }
                 ),
-                # BACKUP: REAL CRICBUZZ.COM ENDPOINTS - Fallback sources
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/live-scores/widget",
                     parser="cricbuzz_live_widget",
-                    timeout=2,
+                    timeout=0.3,  # ULTRA-SHORT timeout to fail fast
                     rate_limit=0.1,
                     headers={
                         'Accept': 'application/json, text/plain, */*',
@@ -241,34 +248,9 @@ class CricketJSONExtractor:
                     }
                 ),
                 JSONEndpoint(
-                    url="https://m.cricbuzz.com/api/html/cricket-match/live-scores/homepage-widget",
-                    parser="cricbuzz_mobile_widget",
-                    timeout=2,
-                    rate_limit=0.1,
-                    headers={
-                        'Accept': 'application/json, text/html, */*',
-                        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
-                        'Referer': 'https://m.cricbuzz.com/'
-                    }
-                ),
-                # ESPN CRICINFO ENDPOINTS - Additional fallback sources
-                JSONEndpoint(
-                    url="https://www.espncricinfo.com/live-cricket-score",
-                    parser="espn_cricinfo_html",
-                    timeout=2,
-                    rate_limit=0.15,
-                    headers={
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Accept-Language': 'en-US,en;q=0.5',
-                        'Accept-Encoding': 'gzip, deflate',
-                        'Connection': 'keep-alive'
-                    }
-                ),
-                JSONEndpoint(
                     url="https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en",
                     parser="espn_cricinfo_api",
-                    timeout=2,
+                    timeout=0.3,  # ULTRA-SHORT timeout to fail fast
                     rate_limit=0.1,
                     headers={
                         'Accept': 'application/json',
@@ -280,110 +262,58 @@ class CricketJSONExtractor:
             ],
             
             'match_details': [
-                # CRICBUZZ LIVE API - Match details
+                # All match detail JSON endpoints are likely failing - FAIL FAST
                 JSONEndpoint(
                     url="https://cricbuzz-live.vercel.app/v1/score/{match_id}",
                     parser="cricbuzz_live_score_api",
-                    timeout=2,
+                    timeout=0.3,  # ULTRA-SHORT timeout to fail fast
                     rate_limit=0.1,
                     headers={
                         'Accept': 'application/json',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     }
                 ),
-                # BACKUP: REAL CRICBUZZ.COM MATCH DETAILS  
-                JSONEndpoint(
-                    url="https://www.cricbuzz.com/api/cricket-match/{match_id}/scorecard-html",
-                    parser="cricbuzz_scorecard",
-                    timeout=2,
-                    rate_limit=0.1
-                ),
-                JSONEndpoint(
-                    url="https://m.cricbuzz.com/api/html/cricket-match/{match_id}/scorecard",
-                    parser="cricbuzz_mobile_scorecard",
-                    timeout=2,
-                    rate_limit=0.1
-                ),
-                # ESPN CRICINFO MATCH DETAILS
                 JSONEndpoint(
                     url="https://hs-consumer-api.espncricinfo.com/v1/pages/match/scorecard?lang=en&matchId={match_id}",
                     parser="espn_cricinfo_scorecard_api",
-                    timeout=2,
+                    timeout=0.3,  # ULTRA-SHORT timeout to fail fast
                     rate_limit=0.1
-                ),
-                JSONEndpoint(
-                    url="https://www.espncricinfo.com/matches/engine/match/{match_id}.html",
-                    parser="espn_cricinfo_scorecard_html",
-                    timeout=2,
-                    rate_limit=0.15
                 ),
             ],
             
             'commentary': [
-                # REAL CRICBUZZ.COM COMMENTARY
+                # Commentary JSON endpoints - FAIL FAST strategy
                 JSONEndpoint(
                     url="https://www.cricbuzz.com/api/cricket-match/{match_id}/commentary",
                     parser="cricbuzz_commentary",
-                    timeout=2,  # Reduced from 3s to 2s for sub-1s response
-                    rate_limit=0.1  # Reduced from 0.3s to 0.1s for ultra-fast
+                    timeout=0.3,  # ULTRA-SHORT timeout to fail fast
+                    rate_limit=0.1
                 ),
-                JSONEndpoint(
-                    url="https://www.cricbuzz.com/api/cricket-match/{match_id}/full-commentary",
-                    parser="cricbuzz_full_commentary", 
-                    timeout=2,  # Reduced from 4s to 2s for sub-1s response
-                    rate_limit=0.1  # Reduced from 0.3s to 0.1s for ultra-fast
-                ),
-                # ESPN CRICINFO COMMENTARY
                 JSONEndpoint(
                     url="https://hs-consumer-api.espncricinfo.com/v1/pages/match/commentary?lang=en&matchId={match_id}",
                     parser="espn_cricinfo_commentary_api",
-                    timeout=3,
-                    rate_limit=0.4
-                ),
-                JSONEndpoint(
-                    url="https://www.espncricinfo.com/matches/engine/match/{match_id}.html?view=commentary",
-                    parser="espn_cricinfo_commentary_html",
-                    timeout=4,
+                    timeout=0.3,  # ULTRA-SHORT timeout to fail fast
                     rate_limit=0.4
                 ),
             ],
             
             'schedule': [
-                # CRICBUZZ LIVE API - Upcoming matches
+                # CRICBUZZ LIVE API - Upcoming matches (FAIL FAST - likely broken)
                 JSONEndpoint(
                     url="https://cricbuzz-live.vercel.app/v1/upcoming",
                     parser="cricbuzz_upcoming_api",
-                    timeout=3,
+                    timeout=0.3,  # ULTRA-SHORT timeout to fail fast
                     rate_limit=0.2,
                     headers={
                         'Accept': 'application/json',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     }
                 ),
-                # BACKUP: REAL CRICBUZZ.COM SCHEDULE
-                JSONEndpoint(
-                    url="https://www.cricbuzz.com/cricket-schedule/upcoming-matches",
-                    parser="cricbuzz_schedule_html",
-                    timeout=4,
-                    rate_limit=0.4
-                ),
-                JSONEndpoint(
-                    url="https://m.cricbuzz.com/cricket-schedule/matches/all",
-                    parser="cricbuzz_mobile_schedule",
-                    timeout=4,
-                    rate_limit=0.4
-                ),
-                # ESPN CRICINFO SCHEDULE
-                JSONEndpoint(
-                    url="https://www.espncricinfo.com/fixtures",
-                    parser="espn_cricinfo_fixtures_html",
-                    timeout=4,
-                    rate_limit=0.4
-                ),
+                # These will be tried but will quickly fail - HTML fallback is primary
                 JSONEndpoint(
                     url="https://hs-consumer-api.espncricinfo.com/v1/pages/fixtures?lang=en",
                     parser="espn_cricinfo_fixtures_api",
-                    timeout=3,
+                    timeout=0.3,  # ULTRA-SHORT timeout to fail fast
                     rate_limit=0.5
                 ),
             ]
@@ -413,10 +343,10 @@ class CricketJSONExtractor:
             # Execute concurrent requests with timeout enforcement
             tasks = [self._fetch_and_parse_endpoint(endpoint) for endpoint in selected_endpoints]
             
-            # Use strict timeout for schedule data (less critical than live matches)
+            # Use strict timeout for schedule data - FAIL FAST to use HTML fallback
             results = await asyncio.wait_for(
                 asyncio.gather(*tasks, return_exceptions=True),
-                timeout=2.0  # 2s timeout for schedule data
+                timeout=0.5  # 0.5s timeout for schedule data (fail fast to HTML)
             )
             
             # Process results and aggregate matches
@@ -451,7 +381,7 @@ class CricketJSONExtractor:
             return matches[:20]  # Return top 20 for performance
             
         except asyncio.TimeoutError:
-            logger.warning("⏰ Schedule JSON extraction timed out after 2.0s")
+            logger.warning("⏰ Schedule JSON extraction timed out after 0.5s - using HTML fallback")
             return []
         except Exception as e:
             logger.error(f"❌ Schedule JSON extraction failed: {e}")
@@ -586,13 +516,14 @@ class CricketJSONExtractor:
             logger.error(f"❌ [CONCURRENT] No viable endpoints available")
             return []
         
-        # Wait for first successful response or timeout after 1.2s for ultra-fast updates
+        # Wait for first successful response or timeout after 0.5s for FAIL-FAST strategy
+        # Since all JSON APIs are currently failing, we want to fail quickly and use HTML fallback
         matches = []
         successful_endpoint = None
         
         try:
             task_list = [task for task, _ in tasks]
-            done, pending = await asyncio.wait(task_list, timeout=1.2, return_when=asyncio.FIRST_COMPLETED)
+            done, pending = await asyncio.wait(task_list, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
             
             # Process completed tasks in order of completion (fastest first)
             for task in done:
@@ -623,7 +554,7 @@ class CricketJSONExtractor:
                     pass
                 
         except asyncio.TimeoutError:
-            logger.warning(f"⏰ [CONCURRENT] Timeout after 1.2s - attempting fallback")
+            logger.warning(f"⏰ [CONCURRENT] Timeout after 0.5s - attempting fallback")
             
             # Cancel all tasks on timeout
             for task, _ in tasks:

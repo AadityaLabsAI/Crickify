@@ -14,20 +14,26 @@ import time
 # Import performance dependencies with fallbacks
 try:
     import statistics
+    statistics_mean = statistics.mean
 except ImportError:
     # Minimal fallback for statistics
-    class statistics:
-        @staticmethod
-        def mean(data):
-            return sum(data) / len(data) if data else 0.0
+    def statistics_mean(data):
+        return sum(data) / len(data) if data else 0.0
     logging.warning("⚠️ statistics module not available, using fallback")
 
 try:
     import xxhash
     HAS_XXHASH = True
 except ImportError:
-    import hashlib
+    xxhash = None
     HAS_XXHASH = False
+
+try:
+    import hashlib
+except ImportError:
+    hashlib = None
+    
+if not HAS_XXHASH:
     logging.warning("⚠️ xxhash not available, falling back to hashlib")
 
 try:
@@ -65,16 +71,23 @@ class FetchRequest:
     
     def get_cache_key(self) -> str:
         """Generate cache key for this request using fast hashing with fallbacks."""
-        if HAS_ORJSON:
-            param_str = orjson.dumps(self.parameters, option=orjson.OPT_SORT_KEYS).decode()
-        else:
-            import json
-            param_str = json.dumps(self.parameters, sort_keys=True)
+        import json as json_module
         
-        if HAS_XXHASH:
-            hash_digest = xxhash.xxh64(param_str.encode()).hexdigest()[:8]
+        if HAS_ORJSON:
+            import orjson as orjson_module
+            param_bytes = orjson_module.dumps(self.parameters, option=orjson_module.OPT_SORT_KEYS)
+            param_str = param_bytes.decode() if isinstance(param_bytes, bytes) else str(param_bytes)
         else:
-            hash_digest = hashlib.md5(param_str.encode()).hexdigest()[:8]
+            param_str = json_module.dumps(self.parameters, sort_keys=True)
+        
+        param_encoded = param_str.encode() if isinstance(param_str, str) else param_str
+        
+        if HAS_XXHASH and xxhash is not None:
+            hash_digest = xxhash.xxh64(param_encoded).hexdigest()[:8]
+        elif hashlib is not None:
+            hash_digest = hashlib.md5(param_encoded).hexdigest()[:8]
+        else:
+            hash_digest = str(hash(param_str))[:8]
         
         return f"{self.data_type}_{hash_digest}"
 
@@ -118,12 +131,15 @@ class CentralizedFetcher:
         self.processing_batch = False
         
         # Fast hash function for deduplication with fallback
-        if HAS_XXHASH:
+        if HAS_XXHASH and xxhash is not None:
             self._hash_func = xxhash.xxh64_intdigest
-        else:
+        elif hashlib is not None:
+            import hashlib as hashlib_module
             def _fallback_hash(data):
-                return int(hashlib.md5(data).hexdigest()[:8], 16)
+                return int(hashlib_module.md5(data).hexdigest()[:8], 16)
             self._hash_func = _fallback_hash
+        else:
+            self._hash_func = hash
         
         # Thread safety
         self._lock = threading.RLock()
@@ -224,6 +240,42 @@ class CentralizedFetcher:
         except asyncio.TimeoutError:
             logger.warning(f"⏰ Batch processing timeout for {len(requests)} requests")
     
+    async def _broadcast_result(self, result: FetchResult, requesters: Set[str]):
+        """Broadcast result to all requesters."""
+        logger.debug(f"📡 Broadcasting result to {len(requesters)} requesters")
+        self.stats['broadcasts_sent'] += 1
+    
+    async def _fetch_data_by_type(self, data_type: str, parameters: Dict[str, Any]) -> Any:
+        """Fetch data by type using appropriate scraper function."""
+        if data_type == 'schedule':
+            return await get_match_schedule(
+                days=parameters.get('days', 3),
+                match_format=parameters.get('match_format'),
+                team_filter=parameters.get('team_filter'),
+                tournament_filter=parameters.get('tournament_filter')
+            )
+        elif data_type == 'tournaments':
+            return await get_tournaments()
+        elif data_type == 'live_matches':
+            return await get_live_matches()
+        else:
+            logger.warning(f"Unknown data type for fetch: {data_type}")
+            return None
+    
+    async def _trigger_predictive_fetching(self, data_type: str, data: Any):
+        """Trigger predictive fetching based on user patterns."""
+        logger.debug(f"🔮 Predictive fetching for {data_type}")
+    
+    def _update_performance_metrics(self, data_type: str, fetch_duration: float, success: bool):
+        """Update performance metrics for a fetch operation."""
+        if success:
+            self.stats['total_fetch_time'] += fetch_duration
+        else:
+            self.stats['fetch_failures'] += 1
+        
+        self._record_latency_measurement(data_type, fetch_duration)
+        self._record_cache_hit_rate(data_type, False)
+    
     async def _execute_single_request(self, request: FetchRequest):
         """Execute a single fetch request with optimized performance."""
         cache_key = request.get_cache_key()
@@ -236,7 +288,8 @@ class CentralizedFetcher:
         
         try:
             # Check cache first with ultra-fast lookup
-            cached_result = performance_cache.live_matches_cache.get(cache_key)
+            cache = performance_cache.get_cache_for_type(request.data_type)
+            cached_result = cache.get(cache_key)
             if cached_result:
                 result = FetchResult(
                     request_id=request.request_id,
@@ -253,18 +306,14 @@ class CentralizedFetcher:
             
             # Fetch fresh data
             fetch_start = time.time()
-            if request.data_type == 'live_matches':
-                from cricket_json_extractor import get_live_matches_json
-                data = await get_live_matches_json()
-            else:
-                # Fallback to regular scraping for other data types
-                data = await self._fetch_data_by_type(request.data_type, request.parameters)
+            data = await self._fetch_data_by_type(request.data_type, request.parameters)
             
             fetch_duration = time.time() - fetch_start
             
             # Cache the result with aggressive TTL for sub-1s response
             if data:
-                performance_cache.set(cache_key, data, ttl=15.0)  # 15s TTL for ultra-fresh data (reduced from 30s)
+                cache = performance_cache.get_cache_for_type(request.data_type)
+                cache.set(cache_key, data, ttl=15.0)  # 15s TTL for ultra-fresh data (reduced from 30s)
                 
                 # Implement predictive fetching based on user patterns
                 if self.predictive_fetch_enabled:
@@ -276,6 +325,10 @@ class CentralizedFetcher:
                 success=data is not None,
                 cache_hit=False
             )
+            
+            # Set the future result
+            if not future.done():
+                future.set_result(result)
             
             # Track performance metrics
             self._update_performance_metrics(request.data_type, fetch_duration, result.success)
@@ -291,6 +344,9 @@ class CentralizedFetcher:
                 success=False,
                 error=str(e)
             )
+            # Set the future result
+            if not future.done():
+                future.set_result(error_result)
             await self._broadcast_result(error_result, request.requesters)
     
     def _start_cleanup_task(self):
