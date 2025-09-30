@@ -75,6 +75,9 @@ class UserPreferences:
     referred_by: Optional[int] = None
     referral_count: int = 0
     referrals: List[int] = field(default_factory=list)
+    tour_completed: bool = False
+    onboarding_completed: bool = False
+    last_feature_update_seen: str = ""
     
     def update_activity(self):
         """Update last activity timestamp."""

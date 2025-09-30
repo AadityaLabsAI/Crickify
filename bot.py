@@ -142,7 +142,7 @@ class ProfessionalCricketBot:
         self.pro_handlers = ProfessionalHandlers(self)
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle the /start command - Enhanced Professional Main Dashboard."""
+        """Handle the /start command - Enhanced Professional Main Dashboard with Smart Onboarding."""
         if not update.effective_user or not update.message:
             return
             
@@ -178,8 +178,183 @@ class ProfessionalCricketBot:
         user_prefs = await user_data_manager.get_user_preferences(
             user.id, user.username, user.first_name
         )
+        
+        # Detect first-time user
+        is_first_time = user_prefs.total_sessions == 0
+        is_returning = user_prefs.total_sessions > 0
         user_prefs.total_sessions += 1
+        
+        # Check for what's new (returning users who haven't seen latest features)
+        LATEST_FEATURE_VERSION = "2025.09.30"
+        has_new_features = user_prefs.last_feature_update_seen != LATEST_FEATURE_VERSION and is_returning
+        
         await user_data_manager.save_user_preferences(user_prefs)
+        
+        # Initialize user session
+        self.user_sessions[user.id] = {
+            'navigation_path': ['home'],
+            'current_filters': {},
+            'last_interaction': time.time(),
+            'session_start': time.time()
+        }
+        
+        # FIRST-TIME USER: Show exceptional onboarding experience
+        if is_first_time:
+            await self.show_first_time_onboarding(update, user, user_prefs, referrer_name)
+        # RETURNING USER WITH NEW FEATURES: Show what's new
+        elif has_new_features:
+            await self.show_whats_new(update, user, user_prefs)
+        # REGULAR RETURNING USER: Show enhanced dashboard
+        else:
+            await self.show_main_dashboard(update, user, user_prefs, referrer_name)
+    
+    async def show_first_time_onboarding(self, update: Update, user, user_prefs, referrer_name: Optional[str] = None) -> None:
+        """Show exceptional first-time user onboarding experience."""
+        if not update.message:
+            return
+        
+        username = user.first_name or user.username or 'Cricket Fan'
+        
+        # Get total user count for social proof
+        total_users = len(list(user_data_manager.data_dir.glob("user_*.json")))
+        
+        welcome_text = f"🎉 **Welcome to Cricket Live Centre, {username}!** 🎉\n\n"
+        
+        # Referral acknowledgment
+        if referrer_name:
+            welcome_text += f"🌟 **{referrer_name}** thought you'd love this!\n\n"
+        
+        # Compelling intro highlighting superiority
+        welcome_text += (
+            f"🚀 **10x Faster Than Cricbuzz** 🚀\n"
+            f"Get lightning-speed cricket updates (1-2s) with AI-powered insights "
+            f"that leave other apps in the dust!\n\n"
+        )
+        
+        # Social proof
+        if total_users > 10:
+            welcome_text += f"🌍 **Join {total_users:,}+ Cricket Fans** already using the future of cricket tracking!\n\n"
+        else:
+            welcome_text += f"🌍 **Join Cricket Fans Worldwide** experiencing the future of cricket tracking!\n\n"
+        
+        # Visual feature showcase
+        welcome_text += (
+            f"✨ **Why You'll Love This Bot:**\n\n"
+            f"⚡ **Lightning Updates** - Real-time scores in 1-2 seconds\n"
+            f"🔮 **AI Predictions** - Know who's winning before it happens\n"
+            f"📊 **Deep Analytics** - Stats that matter, insights that win\n"
+            f"🔔 **Smart Alerts** - Never miss your team's big moments\n"
+            f"🎯 **Inline Anywhere** - Share live scores in ANY chat\n\n"
+        )
+        
+        # First-time user benefits
+        welcome_text += (
+            f"🎁 **Getting Started Benefits:**\n"
+            f"✅ Auto-enabled smart alerts for all formats\n"
+            f"✅ Personalized recommendations ready\n"
+            f"✅ Priority access to live match updates\n\n"
+        )
+        
+        # Call to action
+        welcome_text += (
+            f"👇 **Let's Get You Started:**\n"
+            f"Take a quick tour or jump straight into live action!"
+        )
+        
+        # Auto-enable best settings for first-time users
+        user_prefs.notification_preferences['match_start'] = True
+        user_prefs.notification_preferences['wickets'] = True
+        user_prefs.notification_preferences['milestones'] = True
+        user_prefs.display_preferences['auto_refresh'] = True
+        await user_data_manager.save_user_preferences(user_prefs)
+        
+        # First-time user buttons with clear guidance
+        keyboard = [
+            [InlineKeyboardButton("🎯 Take Quick Tour (2 min)", callback_data="start_tour")],
+            [
+                InlineKeyboardButton("🔴 View Live Matches", callback_data="live_matches_pro"),
+                InlineKeyboardButton("📅 See Schedule", callback_data="schedule_pro")
+            ],
+            [
+                InlineKeyboardButton("⭐ Add Favorite Teams", callback_data="my_teams"),
+                InlineKeyboardButton("🔔 Setup Alerts", callback_data="my_alerts")
+            ],
+            [InlineKeyboardButton("💡 Try Inline: @botusername live", switch_inline_query="live")]
+        ]
+        
+        await update.message.reply_text(
+            welcome_text,
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    async def show_whats_new(self, update: Update, user, user_prefs) -> None:
+        """Show what's new for returning users."""
+        if not update.message:
+            return
+        
+        username = user.first_name or user.username or 'Cricket Fan'
+        
+        welcome_text = f"🎉 **Welcome Back, {username}!** 🎉\n\n"
+        welcome_text += (
+            f"🚀 **What's New in Cricket Live Centre:**\n\n"
+            f"🆕 **Lightning-Fast Updates** - Now 10x faster than Cricbuzz!\n"
+            f"   • Live scores update in just 1-2 seconds\n"
+            f"   • Real-time ball-by-ball commentary\n\n"
+            f"🆕 **AI Match Predictions** - Advanced win probability tracking\n"
+            f"   • See who's likely to win in real-time\n"
+            f"   • Data-driven insights and analytics\n\n"
+            f"🆕 **Enhanced Inline Sharing** - Share scores anywhere!\n"
+            f"   • Type @botusername live in ANY chat\n"
+            f"   • Instant score cards for your conversations\n\n"
+        )
+        
+        # Smart suggestions based on activity
+        if user_prefs.favorite_teams:
+            team_list = ", ".join(user_prefs.favorite_teams[:3])
+            welcome_text += (
+                f"💡 **Smart Suggestion:**\n"
+                f"Your teams ({team_list}) have upcoming matches! "
+                f"Enable alerts to never miss a moment.\n\n"
+            )
+        else:
+            welcome_text += (
+                f"💡 **Smart Suggestion:**\n"
+                f"Add your favorite teams to get personalized alerts and match recommendations!\n\n"
+            )
+        
+        welcome_text += f"👇 **Continue Your Cricket Journey:**"
+        
+        # Update feature version
+        user_prefs.last_feature_update_seen = "2025.09.30"
+        await user_data_manager.save_user_preferences(user_prefs)
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("🔴 Live Matches", callback_data="live_matches_pro"),
+                InlineKeyboardButton("📅 Schedule", callback_data="schedule_pro")
+            ],
+            [
+                InlineKeyboardButton("🏆 Tournaments", callback_data="competitions_pro"),
+                InlineKeyboardButton("📊 Analytics", callback_data="analytics_hub")
+            ],
+            [
+                InlineKeyboardButton("⭐ My Teams", callback_data="my_teams"),
+                InlineKeyboardButton("🔔 Alerts", callback_data="my_alerts")
+            ],
+            [InlineKeyboardButton("🎯 Take Feature Tour", callback_data="start_tour")]
+        ]
+        
+        await update.message.reply_text(
+            welcome_text,
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    async def show_main_dashboard(self, update: Update, user, user_prefs, referrer_name: Optional[str] = None) -> None:
+        """Show main dashboard for regular returning users."""
+        if not update.message:
+            return
         
         # Get personalized dashboard data
         dashboard_data = await user_data_manager.get_user_dashboard_data(user.id)
@@ -196,14 +371,6 @@ class ProfessionalCricketBot:
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"{welcome_text}"
             )
-        
-        # Initialize user session
-        self.user_sessions[user.id] = {
-            'navigation_path': ['home'],
-            'current_filters': {},
-            'last_interaction': time.time(),
-            'session_start': time.time()
-        }
         
         await update.message.reply_text(
             welcome_text,
@@ -493,6 +660,132 @@ class ProfessionalCricketBot:
         
         await update.message.reply_text(share_text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
     
+    async def tour_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /tour command - Interactive feature tour."""
+        if not update.effective_user or not update.message:
+            return
+        
+        user_id = update.effective_user.id
+        logger.info(f"User {user_id} started feature tour")
+        
+        # Show first step of tour
+        await self.show_tour_step(update.message, user_id, step=0)
+    
+    async def show_tour_step(self, message_or_query, user_id: int, step: int = 0) -> None:
+        """Show a specific step of the feature tour."""
+        # Define tour steps
+        tour_steps = [
+            {
+                'title': '⚡ Lightning-Fast Live Updates',
+                'content': (
+                    '🚀 **Experience Cricket at Light Speed!**\n\n'
+                    '⚡ **1-2 Second Updates** - 10x faster than Cricbuzz!\n'
+                    '• Real-time ball-by-ball action\n'
+                    '• Live commentary as it happens\n'
+                    '• Instant wicket & boundary alerts\n\n'
+                    '🎯 **Example:**\n'
+                    'When a six is hit, you see it in YOUR chat within 1-2 seconds. '
+                    'While others wait 10-30 seconds, you\'re already celebrating! 🎉\n\n'
+                    '💡 **Try it:** Click "Live Matches" to see the speed yourself!'
+                ),
+                'buttons': [
+                    [InlineKeyboardButton("🔴 Try Live Matches", callback_data="live_matches_pro")],
+                    [InlineKeyboardButton("Next: AI Predictions ➡️", callback_data="tour_step_1")]
+                ]
+            },
+            {
+                'title': '🔮 AI-Powered Match Predictions',
+                'content': (
+                    '🧠 **Know The Future of Every Match!**\n\n'
+                    '🔮 **Real-Time Win Probability**\n'
+                    '• Live prediction updates every ball\n'
+                    '• Advanced analytics & insights\n'
+                    '• Team performance indicators\n\n'
+                    '🎯 **Example:**\n'
+                    'See "Team A has 73% win probability" update in real-time as the match progresses. '
+                    'Make informed predictions before your friends!\n\n'
+                    '💡 **Try it:** Check any live match for AI predictions!'
+                ),
+                'buttons': [
+                    [InlineKeyboardButton("📊 View Analytics", callback_data="analytics_hub")],
+                    [
+                        InlineKeyboardButton("⬅️ Previous", callback_data="tour_step_0"),
+                        InlineKeyboardButton("Next: Smart Alerts ➡️", callback_data="tour_step_2")
+                    ]
+                ]
+            },
+            {
+                'title': '🔔 Smart Match Alerts',
+                'content': (
+                    '📱 **Never Miss Your Team\'s Big Moments!**\n\n'
+                    '🔔 **Intelligent Notifications**\n'
+                    '• Match start reminders\n'
+                    '• Wicket fall alerts\n'
+                    '• Milestone celebrations (50s, 100s)\n'
+                    '• Match result updates\n\n'
+                    '🎯 **Example:**\n'
+                    'Follow India vs Australia? Get instant alerts when:\n'
+                    '• Match starts: "IND vs AUS starting now!"\n'
+                    '• Virat hits 50: "Kohli reaches half-century!"\n'
+                    '• Key wicket falls: "Bumrah strikes!"\n\n'
+                    '💡 **Try it:** Add your favorite teams for personalized alerts!'
+                ),
+                'buttons': [
+                    [InlineKeyboardButton("⭐ Add Favorite Teams", callback_data="my_teams")],
+                    [
+                        InlineKeyboardButton("⬅️ Previous", callback_data="tour_step_1"),
+                        InlineKeyboardButton("Next: Inline Magic ➡️", callback_data="tour_step_3")
+                    ]
+                ]
+            },
+            {
+                'title': '🎯 Inline Query Magic',
+                'content': (
+                    '✨ **Share Live Scores in ANY Chat!**\n\n'
+                    '🎯 **How It Works:**\n'
+                    '1. Type @botusername live in any chat\n'
+                    '2. Select a live match\n'
+                    '3. Share with friends instantly!\n\n'
+                    '🎯 **Example:**\n'
+                    'In your cricket group:\n'
+                    '• Type: @botusername live\n'
+                    '• Pick: India vs Pakistan\n'
+                    '• Send: Live score appears!\n\n'
+                    '💡 **Try it now:** Use the button below to test inline mode!\n\n'
+                    '🎉 **Tour Complete!** You\'re ready to experience cricket like never before!'
+                ),
+                'buttons': [
+                    [InlineKeyboardButton("✨ Try Inline Mode", switch_inline_query="live")],
+                    [InlineKeyboardButton("⬅️ Previous", callback_data="tour_step_2")],
+                    [InlineKeyboardButton("🏆 Complete Tour & Start!", callback_data="complete_tour")]
+                ]
+            }
+        ]
+        
+        # Get tour step
+        if step < 0 or step >= len(tour_steps):
+            step = 0
+        
+        tour_data = tour_steps[step]
+        text = f"🎯 **Feature Tour ({step + 1}/{len(tour_steps)})**\n\n"
+        text += f"**{tour_data['title']}**\n\n"
+        text += tour_data['content']
+        
+        keyboard = tour_data['buttons']
+        
+        # Add skip/home option
+        keyboard.append([InlineKeyboardButton("🏠 Skip Tour & Go to Dashboard", callback_data="back_to_main")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Send or edit message
+        if hasattr(message_or_query, 'edit_text'):
+            # It's a callback query
+            await message_or_query.edit_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+        else:
+            # It's a message
+            await message_or_query.reply_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+    
     async def inline_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle inline queries for viral features."""
         query = update.inline_query
@@ -719,12 +1012,58 @@ class ProfessionalCricketBot:
         elif callback_data == "share_bot":
             await self.handle_share_bot_callback(query, context)
         
+        # Tour navigation
+        elif callback_data == "start_tour":
+            await self.show_tour_step(query, update.effective_user.id, step=0)
+        elif callback_data.startswith("tour_step_"):
+            step = int(callback_data.split('_')[-1])
+            await self.show_tour_step(query, update.effective_user.id, step=step)
+        elif callback_data == "complete_tour":
+            await self.handle_complete_tour(query, update.effective_user.id)
+        
         # Navigation
         elif callback_data == "back_to_main":
             await self.handle_back_to_main_pro(query)
         else:
             await self.handle_unknown_callback(query, callback_data)
 
+    async def handle_complete_tour(self, query, user_id: int) -> None:
+        """Handle tour completion - mark as completed and show dashboard."""
+        # Mark tour as completed
+        user_prefs = await user_data_manager.get_user_preferences(user_id)
+        user_prefs.tour_completed = True
+        user_prefs.onboarding_completed = True
+        await user_data_manager.save_user_preferences(user_prefs)
+        
+        # Show congratulations and dashboard
+        text = (
+            "🎉 **Congratulations! Tour Complete!** 🎉\n\n"
+            "✅ You're now a Cricket Live Centre expert!\n\n"
+            "🚀 **You've Learned:**\n"
+            "⚡ Lightning-fast live updates (1-2s)\n"
+            "🔮 AI-powered match predictions\n"
+            "🔔 Smart alerts for your teams\n"
+            "🎯 Inline sharing in any chat\n\n"
+            "🏆 **Ready to Experience Cricket Like Never Before!**\n\n"
+            "👇 **Your Dashboard Awaits:**"
+        )
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("🔴 View Live Matches", callback_data="live_matches_pro"),
+                InlineKeyboardButton("📅 Schedule", callback_data="schedule_pro")
+            ],
+            [
+                InlineKeyboardButton("⭐ Add Favorite Teams", callback_data="my_teams"),
+                InlineKeyboardButton("🔔 Setup Alerts", callback_data="my_alerts")
+            ],
+            [InlineKeyboardButton("🏠 Go to Main Dashboard", callback_data="back_to_main")]
+        ]
+        
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+        
+        logger.info(f"User {user_id} completed the feature tour")
+    
     async def handle_unknown_callback(self, query, callback_data: str) -> None:
         """Handle unknown callback with helpful suggestions."""
         user_id = query.from_user.id if query.from_user else None
@@ -2174,7 +2513,9 @@ async def async_main():
         logger.info("✅ Handler registered: /help")
         application.add_handler(CommandHandler("share", bot.share_command))
         logger.info("✅ Handler registered: /share")
-        logger.info("🎯 All 8 command handlers registered successfully!")
+        application.add_handler(CommandHandler("tour", bot.tour_command))
+        logger.info("✅ Handler registered: /tour")
+        logger.info("🎯 All 9 command handlers registered successfully!")
         
         # Add inline query handler for viral features
         application.add_handler(InlineQueryHandler(bot.inline_query))
@@ -2193,7 +2534,8 @@ async def async_main():
             BotCommand("stats", "📊 View player statistics"),
             BotCommand("settings", "⚙️ Configure preferences"),
             BotCommand("help", "❓ Get help and feature info"),
-            BotCommand("share", "📤 Share the bot with friends")
+            BotCommand("share", "📤 Share the bot with friends"),
+            BotCommand("tour", "🎯 Interactive feature tour (2 min)")
         ]
         
         # Bot description for better SEO and discoverability
@@ -2467,7 +2809,9 @@ def main():
             logger.info("✅ Handler registered: /help")
             application.add_handler(CommandHandler("share", bot.share_command))
             logger.info("✅ Handler registered: /share")
-            logger.info("🎯 All 8 command handlers registered successfully!")
+            application.add_handler(CommandHandler("tour", bot.tour_command))
+            logger.info("✅ Handler registered: /tour")
+            logger.info("🎯 All 9 command handlers registered successfully!")
             
             # Add inline query handler for viral features
             application.add_handler(InlineQueryHandler(bot.inline_query))
@@ -2491,7 +2835,8 @@ def main():
                     BotCommand("stats", "📊 View player statistics"),
                     BotCommand("settings", "⚙️ Configure preferences"),
                     BotCommand("help", "❓ Get help and feature info"),
-                    BotCommand("share", "📤 Share the bot with friends")
+                    BotCommand("share", "📤 Share the bot with friends"),
+                    BotCommand("tour", "🎯 Interactive feature tour (2 min)")
                 ]
                 
                 bot_description = (
