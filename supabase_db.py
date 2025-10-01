@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Supabase PostgreSQL Database Module
+Supabase REST API Database Module
 ===================================
 
 High-performance database layer for cricket data storage and retrieval.
-Optimized for real-time updates and concurrent user access.
+Optimized for real-time updates and concurrent user access using Supabase REST API.
 """
 
 import asyncio
-import asyncpg
+import aiohttp
 import logging
 import os
 import time
@@ -22,27 +22,35 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DatabaseConfig:
     """Database configuration and connection settings."""
-    database_url: str
-    min_pool_size: int = 5
-    max_pool_size: int = 20
-    command_timeout: float = 10.0
-    max_queries: int = 50000
-    max_inactive_connection_lifetime: float = 300.0
+    supabase_url: str
+    supabase_key: str
+    timeout: float = 10.0
+    max_connections: int = 20
 
 class SupabaseDatabase:
     """
-    Supabase PostgreSQL database manager with connection pooling
-    and optimized schema for cricket data.
+    Supabase REST API database manager with optimized schema for cricket data.
+    Uses PostgREST API for all database operations.
     """
     
-    def __init__(self, database_url: Optional[str] = None):
+    def __init__(self, supabase_url: Optional[str] = None, supabase_key: Optional[str] = None):
         """Initialize database manager."""
-        self.database_url = database_url or os.getenv('SUPABASE_URL') or os.getenv('DATABASE_URL')
-        if not self.database_url:
-            raise ValueError("SUPABASE_URL or DATABASE_URL environment variable is required")
+        self.supabase_url = supabase_url or os.getenv('SUPABASE_URL')
+        self.supabase_key = supabase_key or os.getenv('SUPABASE_PUBLIC_KEY') or os.getenv('SUPABASE_KEY')
         
-        self.pool: Optional[asyncpg.Pool] = None
-        self.config = DatabaseConfig(database_url=self.database_url)
+        if not self.supabase_url:
+            raise ValueError("SUPABASE_URL environment variable is required")
+        if not self.supabase_key:
+            raise ValueError("SUPABASE_PUBLIC_KEY or SUPABASE_KEY environment variable is required")
+        
+        self.supabase_url = self.supabase_url.rstrip('/')
+        self.rest_url = f"{self.supabase_url}/rest/v1"
+        
+        self.session: Optional[aiohttp.ClientSession] = None
+        self.config = DatabaseConfig(
+            supabase_url=self.supabase_url,
+            supabase_key=self.supabase_key
+        )
         self._initialized = False
         
         # Performance metrics
@@ -55,162 +63,134 @@ class SupabaseDatabase:
             'cache_misses': 0
         }
         
+    def _get_headers(self, prefer: Optional[str] = None) -> Dict[str, str]:
+        """Get headers for Supabase REST API requests."""
+        headers = {
+            'apikey': self.supabase_key,
+            'Authorization': f'Bearer {self.supabase_key}',
+            'Content-Type': 'application/json'
+        }
+        if prefer:
+            headers['Prefer'] = prefer
+        return headers
+        
     async def initialize(self):
-        """Initialize database connection pool and schema."""
+        """Initialize database connection and verify tables exist."""
         if self._initialized:
             logger.info("✅ Database already initialized")
             return
         
         try:
-            logger.info("🔄 Initializing Supabase PostgreSQL connection...")
+            logger.info("🔄 Initializing Supabase REST API connection...")
             
-            # Create connection pool
-            self.pool = await asyncpg.create_pool(
-                self.database_url,
-                min_size=self.config.min_pool_size,
-                max_size=self.config.max_pool_size,
-                command_timeout=self.config.command_timeout,
-                max_queries=self.config.max_queries,
-                max_inactive_connection_lifetime=self.config.max_inactive_connection_lifetime
+            # Create aiohttp session with connection pooling
+            connector = aiohttp.TCPConnector(
+                limit=self.config.max_connections,
+                limit_per_host=self.config.max_connections
+            )
+            timeout = aiohttp.ClientTimeout(total=self.config.timeout)
+            self.session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=timeout
             )
             
-            logger.info("✅ Database connection pool created")
+            logger.info("✅ HTTP session created")
             
-            # Initialize schema
+            # Verify connection by testing a simple query
+            await self._verify_connection()
+            
+            # Initialize schema (graceful - tables should already exist)
             await self._initialize_schema()
             
             self._initialized = True
-            logger.info("🎉 Supabase database initialized successfully!")
+            logger.info("🎉 Supabase REST API database initialized successfully!")
             
         except Exception as e:
             logger.error(f"❌ Failed to initialize database: {e}")
+            if self.session:
+                await self.session.close()
+            raise
+    
+    async def _verify_connection(self):
+        """Verify connection to Supabase REST API."""
+        try:
+            url = f"{self.rest_url}/matches?limit=1"
+            async with self.session.get(url, headers=self._get_headers()) as response:
+                if response.status in [200, 404]:
+                    logger.info("✅ Connection to Supabase REST API verified")
+                else:
+                    logger.warning(f"⚠️  Unexpected response status: {response.status}")
+        except Exception as e:
+            logger.error(f"❌ Failed to verify connection: {e}")
             raise
     
     async def _initialize_schema(self):
-        """Create database tables if they don't exist."""
-        logger.info("📊 Initializing database schema...")
+        """
+        Note: Tables should be created via Supabase dashboard or migrations.
+        This method performs graceful checks and logs warnings if tables don't exist.
+        """
+        logger.info("📊 Verifying database schema...")
         
-        async with self.pool.acquire() as conn:
-            # Create matches table
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS matches (
-                    match_id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    match_type TEXT,
-                    venue TEXT,
-                    date TEXT,
-                    status TEXT NOT NULL,
-                    team1_name TEXT,
-                    team1_score TEXT,
-                    team2_name TEXT,
-                    team2_score TEXT,
-                    current_innings TEXT,
-                    overs TEXT,
-                    target TEXT,
-                    result TEXT,
-                    match_url TEXT,
-                    data JSONB,
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    updated_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
-            
-            # Create live_scores table for ultra-fast access
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS live_scores (
-                    match_id TEXT PRIMARY KEY,
-                    score_data JSONB NOT NULL,
-                    last_update TIMESTAMP DEFAULT NOW(),
-                    is_live BOOLEAN DEFAULT TRUE
-                )
-            """)
-            
-            # Create match_cache table for performance
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS match_cache (
-                    cache_key TEXT PRIMARY KEY,
-                    cache_data JSONB NOT NULL,
-                    expires_at TIMESTAMP NOT NULL,
-                    created_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
-            
-            # Create user_favorites table
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS user_favorites (
-                    user_id BIGINT NOT NULL,
-                    match_id TEXT NOT NULL,
-                    added_at TIMESTAMP DEFAULT NOW(),
-                    PRIMARY KEY (user_id, match_id)
-                )
-            """)
-            
-            # Create indexes for performance
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_matches_status 
-                ON matches(status)
-            """)
-            
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_live_scores_is_live 
-                ON live_scores(is_live)
-            """)
-            
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_match_cache_expires 
-                ON match_cache(expires_at)
-            """)
-            
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_matches_updated 
-                ON matches(updated_at DESC)
-            """)
-            
-            logger.info("✅ Database schema initialized with tables and indexes")
+        tables = ['matches', 'live_scores', 'match_cache', 'user_favorites']
+        
+        for table in tables:
+            try:
+                url = f"{self.rest_url}/{table}?limit=1"
+                async with self.session.get(url, headers=self._get_headers()) as response:
+                    if response.status == 200:
+                        logger.info(f"✅ Table '{table}' exists and is accessible")
+                    elif response.status == 404:
+                        logger.warning(f"⚠️  Table '{table}' may not exist - create it via Supabase dashboard")
+                    else:
+                        logger.warning(f"⚠️  Unexpected status {response.status} for table '{table}'")
+            except Exception as e:
+                logger.warning(f"⚠️  Could not verify table '{table}': {e}")
+        
+        logger.info("✅ Database schema verification complete")
     
     async def store_match(self, match_data: Dict[str, Any]) -> bool:
-        """Store or update match data."""
+        """Store or update match data using upsert."""
         try:
-            async with self.pool.acquire() as conn:
-                await conn.execute("""
-                    INSERT INTO matches (
-                        match_id, title, match_type, venue, date, status,
-                        team1_name, team1_score, team2_name, team2_score,
-                        current_innings, overs, target, result, match_url, data, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
-                    ON CONFLICT (match_id) 
-                    DO UPDATE SET
-                        title = EXCLUDED.title,
-                        status = EXCLUDED.status,
-                        team1_score = EXCLUDED.team1_score,
-                        team2_score = EXCLUDED.team2_score,
-                        current_innings = EXCLUDED.current_innings,
-                        overs = EXCLUDED.overs,
-                        target = EXCLUDED.target,
-                        result = EXCLUDED.result,
-                        data = EXCLUDED.data,
-                        updated_at = NOW()
-                """, 
-                    match_data.get('match_id'),
-                    match_data.get('title'),
-                    match_data.get('match_type'),
-                    match_data.get('venue'),
-                    match_data.get('date'),
-                    match_data.get('status'),
-                    match_data.get('team1_name'),
-                    match_data.get('team1_score'),
-                    match_data.get('team2_name'),
-                    match_data.get('team2_score'),
-                    match_data.get('current_innings'),
-                    match_data.get('overs'),
-                    match_data.get('target'),
-                    match_data.get('result'),
-                    match_data.get('match_url'),
-                    orjson.dumps(match_data).decode()
-                )
-                
-                self.metrics['successful_queries'] += 1
-                return True
+            start_time = time.time()
+            
+            # Prepare data for REST API
+            payload = {
+                'match_id': match_data.get('match_id'),
+                'title': match_data.get('title'),
+                'match_type': match_data.get('match_type'),
+                'venue': match_data.get('venue'),
+                'date': match_data.get('date'),
+                'status': match_data.get('status'),
+                'team1_name': match_data.get('team1_name'),
+                'team1_score': match_data.get('team1_score'),
+                'team2_name': match_data.get('team2_name'),
+                'team2_score': match_data.get('team2_score'),
+                'current_innings': match_data.get('current_innings'),
+                'overs': match_data.get('overs'),
+                'target': match_data.get('target'),
+                'result': match_data.get('result'),
+                'match_url': match_data.get('match_url'),
+                'data': match_data,
+                'updated_at': datetime.utcnow().isoformat()
+            }
+            
+            # Use upsert (resolution=merge-duplicates)
+            url = f"{self.rest_url}/matches"
+            headers = self._get_headers(prefer='resolution=merge-duplicates')
+            
+            async with self.session.post(url, headers=headers, json=payload) as response:
+                if response.status in [200, 201]:
+                    self.metrics['successful_queries'] += 1
+                    query_time = time.time() - start_time
+                    self.metrics['avg_query_time'] = (
+                        self.metrics['avg_query_time'] * 0.9 + query_time * 0.1
+                    )
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"❌ Error storing match (status {response.status}): {error_text}")
+                    self.metrics['failed_queries'] += 1
+                    return False
                 
         except Exception as e:
             logger.error(f"❌ Error storing match: {e}")
@@ -218,21 +198,28 @@ class SupabaseDatabase:
             return False
     
     async def store_live_score(self, match_id: str, score_data: Dict[str, Any]) -> bool:
-        """Store live score for ultra-fast retrieval."""
+        """Store live score for ultra-fast retrieval using upsert."""
         try:
-            async with self.pool.acquire() as conn:
-                await conn.execute("""
-                    INSERT INTO live_scores (match_id, score_data, last_update, is_live)
-                    VALUES ($1, $2, NOW(), $3)
-                    ON CONFLICT (match_id)
-                    DO UPDATE SET
-                        score_data = EXCLUDED.score_data,
-                        last_update = NOW(),
-                        is_live = EXCLUDED.is_live
-                """, match_id, orjson.dumps(score_data).decode(), score_data.get('is_live', True))
-                
-                self.metrics['successful_queries'] += 1
-                return True
+            payload = {
+                'match_id': match_id,
+                'score_data': score_data,
+                'last_update': datetime.utcnow().isoformat(),
+                'is_live': score_data.get('is_live', True)
+            }
+            
+            # Use upsert
+            url = f"{self.rest_url}/live_scores"
+            headers = self._get_headers(prefer='resolution=merge-duplicates')
+            
+            async with self.session.post(url, headers=headers, json=payload) as response:
+                if response.status in [200, 201]:
+                    self.metrics['successful_queries'] += 1
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"❌ Error storing live score (status {response.status}): {error_text}")
+                    self.metrics['failed_queries'] += 1
+                    return False
                 
         except Exception as e:
             logger.error(f"❌ Error storing live score: {e}")
@@ -244,33 +231,53 @@ class SupabaseDatabase:
         try:
             start_time = time.time()
             
-            async with self.pool.acquire() as conn:
-                rows = await conn.fetch("""
-                    SELECT m.*, ls.score_data, ls.last_update
-                    FROM matches m
-                    LEFT JOIN live_scores ls ON m.match_id = ls.match_id
-                    WHERE m.status IN ('Live', 'In Progress', 'live')
-                    ORDER BY m.updated_at DESC
-                    LIMIT 50
-                """)
-                
-                matches = []
-                for row in rows:
-                    match_dict = dict(row)
-                    if match_dict.get('score_data'):
-                        match_dict['score_data'] = orjson.loads(match_dict['score_data'])
-                    if match_dict.get('data'):
-                        match_dict['data'] = orjson.loads(match_dict['data'])
-                    matches.append(match_dict)
-                
-                query_time = time.time() - start_time
-                self.metrics['successful_queries'] += 1
-                self.metrics['avg_query_time'] = (
-                    self.metrics['avg_query_time'] * 0.9 + query_time * 0.1
-                )
-                
-                logger.info(f"✅ Retrieved {len(matches)} live matches in {query_time*1000:.1f}ms")
-                return matches
+            # Query matches with live status
+            url = (
+                f"{self.rest_url}/matches"
+                f"?select=*"
+                f"&status=in.(Live,In Progress,live)"
+                f"&order=updated_at.desc"
+                f"&limit=50"
+            )
+            
+            async with self.session.get(url, headers=self._get_headers()) as response:
+                if response.status == 200:
+                    matches = await response.json()
+                    
+                    # Fetch corresponding live scores
+                    if matches:
+                        match_ids = [m['match_id'] for m in matches]
+                        live_scores_url = (
+                            f"{self.rest_url}/live_scores"
+                            f"?select=*"
+                            f"&match_id=in.({','.join(match_ids)})"
+                        )
+                        
+                        async with self.session.get(live_scores_url, headers=self._get_headers()) as ls_response:
+                            if ls_response.status == 200:
+                                live_scores = await ls_response.json()
+                                
+                                # Merge live scores with matches
+                                live_scores_map = {ls['match_id']: ls for ls in live_scores}
+                                for match in matches:
+                                    if match['match_id'] in live_scores_map:
+                                        ls = live_scores_map[match['match_id']]
+                                        match['score_data'] = ls.get('score_data')
+                                        match['last_update'] = ls.get('last_update')
+                    
+                    query_time = time.time() - start_time
+                    self.metrics['successful_queries'] += 1
+                    self.metrics['avg_query_time'] = (
+                        self.metrics['avg_query_time'] * 0.9 + query_time * 0.1
+                    )
+                    
+                    logger.info(f"✅ Retrieved {len(matches)} live matches in {query_time*1000:.1f}ms")
+                    return matches
+                else:
+                    error_text = await response.text()
+                    logger.error(f"❌ Error getting live matches (status {response.status}): {error_text}")
+                    self.metrics['failed_queries'] += 1
+                    return []
                 
         except Exception as e:
             logger.error(f"❌ Error getting live matches: {e}")
@@ -280,25 +287,33 @@ class SupabaseDatabase:
     async def get_match(self, match_id: str) -> Optional[Dict[str, Any]]:
         """Get specific match data."""
         try:
-            async with self.pool.acquire() as conn:
-                row = await conn.fetchrow("""
-                    SELECT m.*, ls.score_data, ls.last_update
-                    FROM matches m
-                    LEFT JOIN live_scores ls ON m.match_id = ls.match_id
-                    WHERE m.match_id = $1
-                """, match_id)
-                
-                if row:
-                    match_dict = dict(row)
-                    if match_dict.get('score_data'):
-                        match_dict['score_data'] = orjson.loads(match_dict['score_data'])
-                    if match_dict.get('data'):
-                        match_dict['data'] = orjson.loads(match_dict['data'])
+            # Query specific match
+            url = f"{self.rest_url}/matches?match_id=eq.{match_id}&limit=1"
+            
+            async with self.session.get(url, headers=self._get_headers()) as response:
+                if response.status == 200:
+                    matches = await response.json()
                     
-                    self.metrics['successful_queries'] += 1
-                    return match_dict
-                
-                return None
+                    if matches:
+                        match = matches[0]
+                        
+                        # Fetch live score if available
+                        ls_url = f"{self.rest_url}/live_scores?match_id=eq.{match_id}&limit=1"
+                        async with self.session.get(ls_url, headers=self._get_headers()) as ls_response:
+                            if ls_response.status == 200:
+                                live_scores = await ls_response.json()
+                                if live_scores:
+                                    match['score_data'] = live_scores[0].get('score_data')
+                                    match['last_update'] = live_scores[0].get('last_update')
+                        
+                        self.metrics['successful_queries'] += 1
+                        return match
+                    
+                    return None
+                else:
+                    logger.error(f"❌ Error getting match (status {response.status})")
+                    self.metrics['failed_queries'] += 1
+                    return None
                 
         except Exception as e:
             logger.error(f"❌ Error getting match {match_id}: {e}")
@@ -308,16 +323,29 @@ class SupabaseDatabase:
     async def cleanup_old_matches(self, days: int = 7) -> int:
         """Remove old completed matches to save space."""
         try:
-            async with self.pool.acquire() as conn:
-                result = await conn.execute("""
-                    DELETE FROM matches
-                    WHERE status NOT IN ('Live', 'In Progress', 'live')
-                    AND updated_at < NOW() - INTERVAL '%s days'
-                """, days)
-                
-                deleted = int(result.split()[-1]) if result else 0
-                logger.info(f"🧹 Cleaned up {deleted} old matches")
-                return deleted
+            # Calculate cutoff date
+            cutoff_date = (datetime.utcnow() - timedelta(days=days)).isoformat()
+            
+            # Delete old matches not in live status
+            url = (
+                f"{self.rest_url}/matches"
+                f"?status=not.in.(Live,In Progress,live)"
+                f"&updated_at=lt.{cutoff_date}"
+            )
+            
+            async with self.session.delete(url, headers=self._get_headers(prefer='return=representation')) as response:
+                if response.status in [200, 204]:
+                    try:
+                        deleted_records = await response.json()
+                        deleted = len(deleted_records) if deleted_records else 0
+                    except:
+                        deleted = 0
+                    
+                    logger.info(f"🧹 Cleaned up {deleted} old matches")
+                    return deleted
+                else:
+                    logger.error(f"❌ Error cleaning up matches (status {response.status})")
+                    return 0
                 
         except Exception as e:
             logger.error(f"❌ Error cleaning up matches: {e}")
@@ -326,16 +354,26 @@ class SupabaseDatabase:
     async def cleanup_expired_cache(self) -> int:
         """Remove expired cache entries."""
         try:
-            async with self.pool.acquire() as conn:
-                result = await conn.execute("""
-                    DELETE FROM match_cache
-                    WHERE expires_at < NOW()
-                """)
-                
-                deleted = int(result.split()[-1]) if result else 0
-                if deleted > 0:
-                    logger.info(f"🧹 Cleaned up {deleted} expired cache entries")
-                return deleted
+            # Get current timestamp
+            now = datetime.utcnow().isoformat()
+            
+            # Delete expired cache entries
+            url = f"{self.rest_url}/match_cache?expires_at=lt.{now}"
+            
+            async with self.session.delete(url, headers=self._get_headers(prefer='return=representation')) as response:
+                if response.status in [200, 204]:
+                    try:
+                        deleted_records = await response.json()
+                        deleted = len(deleted_records) if deleted_records else 0
+                    except:
+                        deleted = 0
+                    
+                    if deleted > 0:
+                        logger.info(f"🧹 Cleaned up {deleted} expired cache entries")
+                    return deleted
+                else:
+                    logger.error(f"❌ Error cleaning up cache (status {response.status})")
+                    return 0
                 
         except Exception as e:
             logger.error(f"❌ Error cleaning up cache: {e}")
@@ -344,31 +382,53 @@ class SupabaseDatabase:
     async def get_statistics(self) -> Dict[str, Any]:
         """Get database statistics."""
         try:
-            async with self.pool.acquire() as conn:
-                total_matches = await conn.fetchval("SELECT COUNT(*) FROM matches")
-                live_matches = await conn.fetchval(
-                    "SELECT COUNT(*) FROM matches WHERE status IN ('Live', 'In Progress', 'live')"
-                )
-                cache_entries = await conn.fetchval("SELECT COUNT(*) FROM match_cache")
-                
-                return {
-                    'total_matches': total_matches,
-                    'live_matches': live_matches,
-                    'cache_entries': cache_entries,
-                    'pool_size': self.pool.get_size() if self.pool else 0,
-                    'pool_free': self.pool.get_idle_size() if self.pool else 0,
-                    **self.metrics
-                }
+            stats = {}
+            
+            # Get total matches count
+            url = f"{self.rest_url}/matches?select=count"
+            async with self.session.get(url, headers=self._get_headers(prefer='count=exact')) as response:
+                if response.status == 200:
+                    count_header = response.headers.get('Content-Range', '0-0/0')
+                    total_matches = int(count_header.split('/')[-1])
+                    stats['total_matches'] = total_matches
+                else:
+                    stats['total_matches'] = 0
+            
+            # Get live matches count
+            url = f"{self.rest_url}/matches?status=in.(Live,In Progress,live)&select=count"
+            async with self.session.get(url, headers=self._get_headers(prefer='count=exact')) as response:
+                if response.status == 200:
+                    count_header = response.headers.get('Content-Range', '0-0/0')
+                    live_matches = int(count_header.split('/')[-1])
+                    stats['live_matches'] = live_matches
+                else:
+                    stats['live_matches'] = 0
+            
+            # Get cache entries count
+            url = f"{self.rest_url}/match_cache?select=count"
+            async with self.session.get(url, headers=self._get_headers(prefer='count=exact')) as response:
+                if response.status == 200:
+                    count_header = response.headers.get('Content-Range', '0-0/0')
+                    cache_entries = int(count_header.split('/')[-1])
+                    stats['cache_entries'] = cache_entries
+                else:
+                    stats['cache_entries'] = 0
+            
+            # Add session info
+            stats['session_active'] = self.session is not None and not self.session.closed
+            stats['max_connections'] = self.config.max_connections
+            
+            return {**stats, **self.metrics}
                 
         except Exception as e:
             logger.error(f"❌ Error getting statistics: {e}")
             return self.metrics
     
     async def close(self):
-        """Close database connection pool."""
-        if self.pool:
-            await self.pool.close()
-            logger.info("🔒 Database connection pool closed")
+        """Close HTTP session."""
+        if self.session and not self.session.closed:
+            await self.session.close()
+            logger.info("🔒 HTTP session closed")
 
 # Global database instance
 supabase_db = SupabaseDatabase()
