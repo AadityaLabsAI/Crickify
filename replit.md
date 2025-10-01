@@ -1,7 +1,15 @@
 # Cricket Live Match Centre Telegram Bot
 
 ## Overview
-The Cricket Live Match Centre is a production-ready Telegram bot designed to deliver a superior cricket experience that outperforms Cricbuzz and ESPNCricinfo. Built with advanced performance optimization, ultra-fast JSON extraction, intelligent caching, and comprehensive monitoring, this bot provides real-time cricket updates with sub-2-second response times. The bot features a zero-typing interface with emoji-rich formatting, making it the fastest and most user-friendly cricket bot available.
+The Cricket Live Match Centre is a production-ready Telegram bot designed to deliver a superior cricket experience. Built with advanced performance optimization, ultra-fast JSON extraction, intelligent caching, and comprehensive monitoring, this bot provides real-time cricket updates with sub-2-second response times. The bot features a zero-typing interface with simplified, user-friendly formatting, making it clean and easy to use.
+
+## Recent Changes (October 2025)
+- **UI Simplification**: Simplified the user interface by reducing excessive emojis and animations
+- **Score Prominence**: Scores are now displayed in **BOLD** format to stand out clearly
+- **Menu Cleanup**: Reduced menu emojis to essentials only (🏏 for cricket, 🔴 for live, ⚙️ for settings)
+- **Progress Bars**: Simplified progress bars to use clean ▰▱ characters
+- **Status Indicators**: Streamlined match status indicators for better readability
+- **Bug Fixes**: Fixed progress bar overflow and removed unused parameters
 
 ## User Preferences
 - I prefer simple language and clear explanations.
@@ -18,7 +26,8 @@ The bot is built with modern Python async/await patterns, emphasizing a modular 
 
 ### UI/UX Decisions
 - **Zero-typing Interface**: All interactions are via inline Telegram keyboard buttons.
-- **Emoji-rich Formatting**: Enhances readability and user engagement.
+- **Simplified Formatting**: Clean, easy-to-read design with essential emojis only.
+- **Prominent Scores**: Match scores displayed in **BOLD** for easy visibility.
 - **Intuitive Navigation**: Clear menu system with back/forward controls.
 - **Auto-updating Dashboards**: Live match displays are designed to refresh periodically (currently with demo data).
 
@@ -115,9 +124,10 @@ All other configuration is handled automatically by the deployment system!
 
 ### User Experience
 - **Zero-typing interface** - all interactions via buttons
-- **Rich emoji formatting** for better readability
+- **Simplified, clean formatting** with essential emojis only
+- **Prominent score display** with bold formatting
 - **Auto-updating dashboards** with live match data
-- **Intelligent navigation** with contextual menus
+- **Intuitive navigation** with contextual menus
 
 ### Reliability
 - **Multiple data sources** with automatic failover

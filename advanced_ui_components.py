@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Advanced UI Components for Professional Cricket Bot
-=================================================
+UI Components for Cricket Bot
+==============================
 
-Rich UI components with superior design and functionality beyond Cricbuzz/ESPNCricinfo.
+Clean and readable UI components for cricket match updates.
 """
 
 import asyncio
@@ -16,141 +16,52 @@ from cricket_scraper import Match, Team, MatchStatus
 logger = logging.getLogger(__name__)
 
 class UIComponents:
-    """Advanced UI components for professional cricket experience superior to Cricbuzz/ESPNCricinfo."""
+    """Clean UI components for cricket match updates."""
     
     @staticmethod
     def create_progress_bar(current: int, total: int, length: int = 15, style: str = "default") -> str:
-        """Create stunning visual progress bar with multiple styles and animations."""
+        """Create simple progress bar."""
         if total == 0:
             return "▱" * length
         
-        filled = int((current / total) * length)
+        filled = min(length, max(0, int((current / total) * length)))
         percentage = int((current / total) * 100)
         
+        filled_char = "▰"
+        empty_char = "▱"
+        bar = filled_char * filled + empty_char * (length - filled)
+        
         if style == "overs":
-            # Cricket overs progress with special styling
-            filled_char = "🟢" if percentage < 50 else "🟡" if percentage < 85 else "🔴"
-            empty_char = "⚪"
-            bar = filled_char * (filled // 3) + empty_char * ((length - filled) // 3)
-            return f"{bar} {current}/{total} ov ({percentage}%)"
-        
-        elif style == "chase":
-            # Target chase progress with dramatic coloring
-            if percentage >= 100:
-                filled_char = "🏆"  # Victory!
-            elif percentage >= 90:
-                filled_char = "🔥"  # Close!
-            elif percentage >= 70:
-                filled_char = "🟡"  # Getting there
-            else:
-                filled_char = "🟢"  # Comfortable
-            
-            empty_char = "▱"
-            bar = filled_char * filled + empty_char * (length - filled)
-            return f"{bar} {percentage}%"
-        
-        elif style == "live_animated":
-            # Animated progress for live matches
-            filled_char = "🔴" if percentage > 75 else "🟡" if percentage > 50 else "🟢"
-            pulse_char = "💫" if filled > 0 else "⚡"
-            empty_char = "▱"
-            
-            # Add pulsing effect at the edge
-            bar = filled_char * max(0, filled - 1) + (pulse_char if filled > 0 else "") + empty_char * (length - filled)
-            return f"{bar} {percentage}%"
-        
+            return f"{bar} {current}/{total} ov"
         else:
-            # Default enhanced progress bar
-            filled_char = "▰"
-            empty_char = "▱"
-            bar = filled_char * filled + empty_char * (length - filled)
             return f"{bar} {percentage}%"
     
     @staticmethod
     def create_run_rate_indicator(current_rr: float, required_rr: Optional[float] = None, is_live: bool = False) -> str:
-        """Create stunning visual run rate indicator with advanced animations and cricket context."""
+        """Create run rate indicator."""
         if required_rr is None:
-            # Live match current run rate with enhanced visuals
-            if current_rr < 4:
-                emoji = "🐌" if not is_live else "🟢"
-                context = "Slow" if not is_live else "LIVE 🔴"
-            elif current_rr < 6:
-                emoji = "🟢" if not is_live else "💚"
-                context = "Good" if not is_live else "LIVE 🔴"
-            elif current_rr < 8:
-                emoji = "🟡" if not is_live else "💛"
-                context = "Brisk" if not is_live else "LIVE 🔴"
-            elif current_rr < 10:
-                emoji = "🟠" if not is_live else "🧡"
-                context = "Fast" if not is_live else "LIVE 🔴"
-            elif current_rr < 12:
-                emoji = "🔴" if not is_live else "❤️"
-                context = "Rapid" if not is_live else "LIVE 🔴"
-            else:
-                emoji = "🚀" if not is_live else "💥"
-                context = "Explosive!" if not is_live else "LIVE 🔴"
-            
-            if is_live:
-                return f"{emoji} **{current_rr:.2f}** RR • {context}"
-            else:
-                return f"{emoji} **{current_rr:.2f}** ({context})"
+            return f"RR: **{current_rr:.2f}**"
         else:
-            # Chase situation with dramatic visualization
             diff = current_rr - required_rr
-            
-            if diff > 3:
-                emoji = "🏆"
-                status = f"**Cruising!** Ahead by {diff:.1f}"
-                color = "🟢"
-            elif diff > 1:
-                emoji = "✅"
-                status = f"**On Track** +{diff:.1f}"
-                color = "🟢"
-            elif diff > -1:
-                emoji = "⚡"
-                status = f"**Close Race** {diff:+.1f}"
-                color = "🟡"
-            elif diff > -3:
-                emoji = "🔥"
-                status = f"**Pressure!** Need {abs(diff):.1f} more"
-                color = "🟠"
+            if diff > 0:
+                status = f"Ahead by {diff:.1f}"
+            elif diff < 0:
+                status = f"Behind by {abs(diff):.1f}"
             else:
-                emoji = "🚨"
-                status = f"**Crisis!** Behind by {abs(diff):.1f}"
-                color = "🔴"
-            
-            if is_live:
-                return f"{color} {emoji} **{current_rr:.2f}** vs **{required_rr:.2f}** • {status} 🔴"
-            else:
-                return f"{color} {emoji} **{current_rr:.2f}** vs **{required_rr:.2f}** • {status}"
+                status = "On track"
+            return f"**{current_rr:.2f}** vs **{required_rr:.2f}** ({status})"
     
     @staticmethod
-    def create_match_status_indicator(status: MatchStatus, additional_info: str = "", is_animated: bool = True) -> str:
-        """Create stunning match status indicators with animations and superior visual design."""
+    def create_match_status_indicator(status: MatchStatus, additional_info: str = "") -> str:
+        """Create match status indicator."""
         if status == MatchStatus.LIVE:
-            if is_animated:
-                # Pulsing live indicator
-                base_status = "🔴 **LIVE** 🔴"
-                if additional_info:
-                    return f"⚡ {base_status} ⚡ • {additional_info}"
-                return f"⚡ {base_status} ⚡"
-            else:
-                base_status = "🔴 **LIVE**"
-        
+            base_status = "🔴 **LIVE**"
         elif status == MatchStatus.UPCOMING:
-            if is_animated:
-                base_status = "🕐 **UPCOMING** 📅"
-            else:
-                base_status = "🕐 **UPCOMING**"
-        
+            base_status = "**UPCOMING**"
         elif status == MatchStatus.COMPLETED:
-            if is_animated:
-                base_status = "✅ **FINISHED** 🏆"
-            else:
-                base_status = "✅ **FINISHED**"
-        
+            base_status = "**FINISHED**"
         else:
-            base_status = "📊 **UNKNOWN**"
+            base_status = "**UNKNOWN**"
         
         if additional_info:
             return f"{base_status} • {additional_info}"
@@ -158,322 +69,163 @@ class UIComponents:
     
     @staticmethod
     def create_team_performance_indicator(team: Team, is_batting: bool = True, is_live: bool = False) -> str:
-        """Create stunning visual team performance indicators with cricket context."""
-        if is_batting:
-            # Enhanced batting performance with cricket context
-            if team.run_rate > 15:
-                emoji = "💥" if is_live else "🚀"
-                status = "**EXPLOSIVE!**" if is_live else "Explosive"
-            elif team.run_rate > 12:
-                emoji = "🚀" if is_live else "🔥"
-                status = "**FLYING!**" if is_live else "Flying"
-            elif team.run_rate > 10:
-                emoji = "🔥" if is_live else "⚡"
-                status = "**ON FIRE!**" if is_live else "On Fire"
-            elif team.run_rate > 8:
-                emoji = "⚡" if is_live else "🟡"
-                status = "**AGGRESSIVE**" if is_live else "Aggressive"
-            elif team.run_rate > 6:
-                emoji = "📈" if is_live else "🟢"
-                status = "**STEADY**" if is_live else "Steady"
-            elif team.run_rate > 4:
-                emoji = "🟢" if is_live else "🐢"
-                status = "**BUILDING**" if is_live else "Building"
-            else:
-                emoji = "🐌" if is_live else "🟤"
-                status = "**SLOW**" if is_live else "Slow"
-        else:
-            # Enhanced bowling performance indicators
-            if team.run_rate < 4:
-                emoji = "🛡️" if is_live else "🏆"
-                status = "**DOMINANT!**" if is_live else "Dominant"
-            elif team.run_rate < 6:
-                emoji = "🏆" if is_live else "🛡️"
-                status = "**EXCELLENT**" if is_live else "Excellent"
-            elif team.run_rate < 8:
-                emoji = "⚖️" if is_live else "🟢"
-                status = "**BALANCED**" if is_live else "Balanced"
-            elif team.run_rate < 10:
-                emoji = "🟡" if is_live else "🟠"
-                status = "**UNDER PRESSURE**" if is_live else "Under Pressure"
-            else:
-                emoji = "🔥" if is_live else "🔴"
-                status = "**STRUGGLING!**" if is_live else "Struggling"
-        
-        if is_live:
-            return f"{emoji} **{team.short_name}** • {status} 🔴"
-        else:
-            return f"{emoji} **{team.short_name}** ({status})"
+        """Create team performance indicator."""
+        return f"**{team.short_name}**"
     
     @staticmethod
     def create_boundary_alert(runs: int, is_live: bool = True) -> str:
-        """Create stunning boundary alerts with animations superior to cricket apps."""
+        """Create boundary alert."""
         if runs == 6:
-            if is_live:
-                return "🚀💥 **SIX!** 💥🚀 • 🔴 LIVE"
-            else:
-                return "🚀 **MAXIMUM!** 🚀 (+6)"
+            return "**SIX!** (+6)"
         elif runs == 4:
-            if is_live:
-                return "⚡🏏 **FOUR!** 🏏⚡ • 🔴 LIVE"
-            else:
-                return "⚡ **BOUNDARY!** ⚡ (+4)"
+            return "**FOUR!** (+4)"
         else:
-            return f"🏏 **{runs} runs** 🏏"
+            return f"**{runs} runs**"
     
     @staticmethod
     def create_wicket_alert(wicket_type: str = "", is_live: bool = True) -> str:
-        """Create dramatic wicket fall animations with superior visual impact."""
-        wicket_emojis = {
-            "bowled": "🎯💥",
-            "caught": "🤲💫",
-            "lbw": "🦵⚖️", 
-            "stumped": "⚡🥅",
-            "run out": "🏃💨",
-            "hit wicket": "🏏💥"
-        }
-        
-        base_emoji = wicket_emojis.get(wicket_type.lower(), "💥🏏")
-        
-        if is_live:
-            return f"{base_emoji} **WICKET!** {base_emoji} • 🔴 LIVE • {wicket_type.upper() if wicket_type else 'OUT!'}"
+        """Create wicket alert."""
+        if wicket_type:
+            return f"**WICKET!** ({wicket_type.title()})"
         else:
-            return f"{base_emoji} **OUT!** • {wicket_type.title() if wicket_type else 'Wicket'}"
+            return "**WICKET!**"
     
     @staticmethod
     def create_milestone_celebration(milestone_type: str, player_name: str = "", value: int = 0, is_live: bool = True) -> str:
-        """Create milestone celebrations with broadcast-quality visual effects."""
+        """Create milestone celebration."""
         celebrations = {
-            "fifty": "🏏🎉 **FIFTY!** 🎉🏏",
-            "century": "💯🔥 **CENTURY!** 🔥💯",
-            "double_century": "💯💯 **DOUBLE TON!** 💯💯",
-            "partnership_50": "🤝✨ **50 PARTNERSHIP** ✨🤝",
-            "partnership_100": "🤝🔥 **CENTURY STAND** 🔥🤝",
-            "hat_trick": "🎩⚡ **HAT-TRICK!** ⚡🎩"
+            "fifty": "**FIFTY!**",
+            "century": "**CENTURY!**",
+            "double_century": "**DOUBLE CENTURY!**",
+            "partnership_50": "**50 PARTNERSHIP**",
+            "partnership_100": "**CENTURY PARTNERSHIP**",
+            "hat_trick": "**HAT-TRICK!**"
         }
         
-        celebration = celebrations.get(milestone_type, f"🎉 **MILESTONE!** 🎉")
+        celebration = celebrations.get(milestone_type, "**MILESTONE!**")
         
         if player_name:
-            if is_live:
-                return f"{celebration} • **{player_name}** ({value}) • 🔴 LIVE"
-            else:
-                return f"{celebration} • **{player_name}** ({value})"
+            return f"{celebration} - {player_name} ({value})"
         else:
-            if is_live:
-                return f"{celebration} • 🔴 LIVE"
-            else:
-                return celebration
+            return celebration
     
     @staticmethod
     def create_live_pulse_effect(text: str) -> str:
-        """Create pulsing effect for live content superior to existing platforms."""
-        return f"⚡ {text} ⚡"
+        """Create live content indicator."""
+        return text
     
     @staticmethod
     def create_overs_visualization(current_overs: str, total_overs: int = 20, recent_balls: Optional[List[str]] = None) -> str:
-        """Create dynamic overs visualization with ball-by-ball graphics."""
+        """Create overs visualization."""
         try:
             overs_float = float(current_overs)
             completed_overs = int(overs_float)
-            balls_in_current = int((overs_float - completed_overs) * 6)
             
-            # Progress visualization
             progress = UIComponents.create_progress_bar(completed_overs, total_overs, 12, "overs")
+            result = f"**Overs:** {current_overs}/{total_overs}\n{progress}\n"
             
-            # Current over visualization
-            current_over_display = "🔴" * balls_in_current + "⚪" * (6 - balls_in_current)
-            
-            result = f"🏏 **Overs:** {current_overs}/{total_overs}\n"
-            result += f"📊 {progress}\n"
-            result += f"🎯 Current Over: {current_over_display}\n"
-            
-            # Recent balls with enhanced visuals
             if recent_balls:
-                result += f"📈 **Recent:** "
-                for ball in recent_balls[-6:]:
-                    if '4' in ball:
-                        result += "⚡"
-                    elif '6' in ball:
-                        result += "🚀"
-                    elif 'W' in ball.upper():
-                        result += "💥"
-                    elif ball == '0':
-                        result += "⚪"
-                    else:
-                        result += "🟢"
-                result += "\n"
+                result += f"Recent: {' '.join(recent_balls[-6:])}\n"
             
             return result
         except:
-            return f"🏏 **Overs:** {current_overs}\n"
+            return f"**Overs:** {current_overs}\n"
     
     @staticmethod
     def create_chase_visualization(current_score: int, target: int, balls_remaining: int = 0, required_rate: float = 0.0) -> str:
-        """Create dramatic chase visualization superior to broadcast graphics."""
+        """Create chase visualization."""
         runs_needed = target - current_score
         
         if runs_needed <= 0:
-            return "🏆🎉 **TARGET ACHIEVED!** 🎉🏆"
+            return "**TARGET ACHIEVED!**"
         
-        # Chase progress bar
-        chase_progress = UIComponents.create_progress_bar(current_score, target, 15, "chase")
+        result = f"Target: **{target}** runs\n"
+        result += f"Need: **{runs_needed}** runs"
         
-        # Pressure indicator
         if balls_remaining > 0:
-            required_per_ball = runs_needed / balls_remaining
-            if required_per_ball > 2:
-                pressure = "🚨 **HIGH PRESSURE!**"
-            elif required_per_ball > 1:
-                pressure = "🟡 **TIGHT CHASE**"
-            else:
-                pressure = "🟢 **COMFORTABLE**"
-            
-            balls_display = f"⚾ **{balls_remaining} balls**"
-        else:
-            pressure = ""
-            balls_display = ""
-        
-        result = f"🎯 **TARGET:** {target} runs\n"
-        result += f"📊 {chase_progress}\n"
-        result += f"🏃 **NEED:** {runs_needed} runs"
-        
-        if balls_display:
-            result += f" in {balls_display}\n"
+            result += f" in {balls_remaining} balls\n"
         else:
             result += "\n"
             
         if required_rate > 0:
-            rr_indicator = UIComponents.create_run_rate_indicator(0, required_rate, True)
-            result += f"📈 Required RR: {rr_indicator}\n"
-        
-        if pressure:
-            result += f"{pressure}\n"
+            result += f"Required RR: **{required_rate:.2f}**\n"
         
         return result
     
     @staticmethod
     def format_live_score_card(match: Match, include_animations: bool = True) -> str:
-        """Create breathtaking live score card superior to Cricbuzz/ESPNCricinfo."""
-        # Enhanced header with live animations
-        if match.status == MatchStatus.LIVE and include_animations:
-            header = f"🏏 **{match.title}** 🏏\n"
-            header += f"{UIComponents.create_match_status_indicator(match.status, is_animated=True)}\n"
-        else:
-            header = f"🏏 **{match.title}**\n"
-            header += f"{UIComponents.create_match_status_indicator(match.status, is_animated=False)}\n"
-        
-        header += f"📍 **{match.venue}** | 📅 {match.date}\n"
+        """Create live score card with prominent scores."""
+        header = f"🏏 **{match.title}**\n"
+        header += f"{UIComponents.create_match_status_indicator(match.status)}\n"
+        header += f"{match.venue} | {match.date}\n"
         
         if match.series_name:
-            header += f"🏆 {match.series_name}\n"
+            header += f"{match.series_name}\n"
         
-        # Add visual separator
         header += "\n━━━━━━━━━━━━━━━━━━━━\n\n"
         
-        # Enhanced team scores with performance indicators
         if match.status == MatchStatus.LIVE:
-            # Team 1 (Batting) with enhanced visuals
-            team1_perf = UIComponents.create_team_performance_indicator(match.team1, True, True)
-            header += f"{team1_perf}\n"
+            header += f"{UIComponents.create_team_performance_indicator(match.team1, True, True)}\n"
+            header += f"**{match.team1.score}/{match.team1.wickets}** ({match.team1.overs} ov)\n"
+            header += f"{UIComponents.create_run_rate_indicator(match.team1.run_rate, is_live=True)}\n"
             
-            # Enhanced score display with visual hierarchy
-            score_display = f"🏏 **{match.team1.score}/{match.team1.wickets}** ({match.team1.overs} ov)"
-            if include_animations:
-                score_display = UIComponents.create_live_pulse_effect(score_display)
-            header += f"{score_display}\n"
-            
-            # Advanced run rate with live indicator
-            rr_display = UIComponents.create_run_rate_indicator(match.team1.run_rate, is_live=True)
-            header += f"📊 {rr_display}\n"
-            
-            # Overs visualization
             if match.team1.overs:
                 try:
                     total_overs = 20 if 'T20' in match.format else 50 if 'ODI' in match.format else 90
                     overs_viz = UIComponents.create_overs_visualization(match.team1.overs, total_overs, match.recent_overs)
-                    header += f"{overs_viz}\n"
+                    header += f"{overs_viz}"
                 except:
                     pass
             
             header += "\n"
+            header += f"{UIComponents.create_team_performance_indicator(match.team2, False, True)}\n"
             
-            # Team 2 (Bowling/Waiting) with enhanced visuals
-            team2_perf = UIComponents.create_team_performance_indicator(match.team2, False, True)
-            header += f"{team2_perf}\n"
-            
-            if match.team2.score > 0:  # Second innings
-                score_display2 = f"🏏 **{match.team2.score}/{match.team2.wickets}** ({match.team2.overs} ov)"
-                if include_animations:
-                    score_display2 = UIComponents.create_live_pulse_effect(score_display2)
-                header += f"{score_display2}\n"
+            if match.team2.score > 0:
+                header += f"**{match.team2.score}/{match.team2.wickets}** ({match.team2.overs} ov)\n"
                 
-                # Chase scenario visualization
-                if match.team1.score > 0:  # Target known
+                if match.team1.score > 0:
                     target = match.team1.score + 1
                     chase_viz = UIComponents.create_chase_visualization(
                         match.team2.score, target, 0, match.team2.run_rate
                     )
-                    header += f"{chase_viz}\n"
+                    header += f"{chase_viz}"
             else:
-                header += f"🕐 **Yet to bat**\n"
+                header += f"Yet to bat\n"
             
             header += "\n"
             
-            # Advanced live information with better formatting
             if match.current_partnership:
-                partnership_text = f"🤝 **Current Partnership:** {match.current_partnership}"
-                if include_animations:
-                    partnership_text = UIComponents.create_live_pulse_effect(partnership_text)
-                header += f"{partnership_text}\n"
+                header += f"Partnership: {match.current_partnership}\n"
             
             if match.toss:
-                header += f"🪙 **Toss:** {match.toss}\n"
+                header += f"Toss: {match.toss}\n"
             
-            # Enhanced recent overs with cricket-specific formatting
             if match.recent_overs:
-                header += f"\n📊 **Recent Overs:**\n"
-                formatted_overs = []
-                for over in match.recent_overs[-6:]:
-                    # Add visual indicators for boundaries and wickets
-                    if '6' in over:
-                        formatted_overs.append(UIComponents.create_boundary_alert(6, False))
-                    elif '4' in over:
-                        formatted_overs.append(UIComponents.create_boundary_alert(4, False))
-                    elif 'W' in over.upper():
-                        formatted_overs.append(UIComponents.create_wicket_alert("", False))
-                    else:
-                        formatted_overs.append(f"🏏 {over}")
-                
-                overs_display = " • ".join(formatted_overs)
-                header += f"`{overs_display}`\n"
+                header += f"\nRecent Overs: {' | '.join(match.recent_overs[-6:])}\n"
         
         elif match.status == MatchStatus.UPCOMING:
-            # Enhanced upcoming match display
-            header += f"🆚 **{match.team1.short_name}** vs **{match.team2.short_name}**\n"
+            header += f"**{match.team1.short_name}** vs **{match.team2.short_name}**\n"
             if match.start_time:
-                header += f"🕐 **Start Time:** {match.start_time}\n"
+                header += f"Start Time: {match.start_time}\n"
             if match.toss:
-                header += f"🪙 **Toss:** {match.toss}\n"
+                header += f"Toss: {match.toss}\n"
         
         elif match.status == MatchStatus.COMPLETED:
-            # Enhanced completed match display
-            header += UIComponents.create_team_performance_indicator(match.team1, True, False) + "\n"
-            header += f"🏏 **{match.team1.score}/{match.team1.wickets}** ({match.team1.overs} ov)\n\n"
+            header += f"{UIComponents.create_team_performance_indicator(match.team1, True, False)}\n"
+            header += f"**{match.team1.score}/{match.team1.wickets}** ({match.team1.overs} ov)\n\n"
             
-            header += UIComponents.create_team_performance_indicator(match.team2, False, False) + "\n"
-            header += f"🏏 **{match.team2.score}/{match.team2.wickets}** ({match.team2.overs} ov)\n\n"
+            header += f"{UIComponents.create_team_performance_indicator(match.team2, False, False)}\n"
+            header += f"**{match.team2.score}/{match.team2.wickets}** ({match.team2.overs} ov)\n\n"
             
-            header += f"🏆 **Match Completed**\n"
             if match.match_status_detail:
-                header += f"🎆 **Result:** {match.match_status_detail}\n"
+                header += f"Result: {match.match_status_detail}\n"
         
         return header
     
     @staticmethod
     def create_match_action_buttons(match_id: str, user_following: bool = False, 
                                   user_alerts: bool = False, match_status: str = "live") -> InlineKeyboardMarkup:
-        """Create professional match action buttons superior to existing cricket sites."""
+        """Create match action buttons."""
         buttons = []
         
         # Row 1: Primary engagement actions with visual feedback
@@ -529,163 +281,60 @@ class UIComponents:
     
     @staticmethod
     def create_main_dashboard_menu(user_data: Dict[str, Any]) -> Tuple[str, InlineKeyboardMarkup]:
-        """Create sophisticated main dashboard superior to existing cricket apps with real cricket data."""
+        """Create main dashboard menu."""
         username = user_data.get('username', 'Cricket Fan')
         favorite_teams = user_data.get('favorite_teams', [])
-        recent_matches = user_data.get('recent_matches', [])
         active_alerts = user_data.get('active_alerts', 0)
-        
-        # Enhanced data with real cricket information
-        live_matches = user_data.get('live_matches', [])
-        upcoming_matches = user_data.get('upcoming_matches', [])
-        active_tournaments = user_data.get('active_tournaments', [])
         total_live_matches = user_data.get('total_live_matches', 0)
-        favorite_live_matches = user_data.get('favorite_live_matches', 0)
-        upcoming_favorite_matches = user_data.get('upcoming_favorite_matches', 0)
         
-        # Enhanced welcome message with personalization and real cricket data
-        welcome = f"🏏 **Cricket Live Match Centre Pro** 🏏\n\n"
-        welcome += f"🌟 Welcome back, **{username}**! Ready for cricket? 🌟\n\n"
+        welcome = f"🏏 **Cricket Match Centre**\n\n"
+        welcome += f"Welcome, **{username}**!\n\n"
         
-        # Live cricket status with real data
         if total_live_matches > 0:
-            welcome += f"🔴 **LIVE NOW:** {total_live_matches} matches happening!\n"
-            if favorite_live_matches > 0:
-                welcome += f"⭐ **Your Teams:** {favorite_live_matches} matches featuring your favorites\n"
-            welcome += "\n"
+            welcome += f"🔴 **{total_live_matches}** live matches now\n"
         else:
-            welcome += f"🕐 **No live matches** currently. Check schedule for upcoming action!\n\n"
+            welcome += f"No live matches currently\n"
         
-        # Visual dashboard stats with cricket theming and real data
-        welcome += f"📊 **Your Cricket Command Center:**\n"
-        welcome += f"⭐ Favorite Teams: {len(favorite_teams) if favorite_teams else '🔧 Setup needed'}\n"
-        welcome += f"🔔 Smart Alerts: {active_alerts} active\n"
-        welcome += f"👀 Recent Views: {len(recent_matches)} matches\n"
-        if upcoming_favorite_matches > 0:
-            welcome += f"📅 Upcoming: {upcoming_favorite_matches} matches for your teams\n"
-        welcome += "\n"
+        welcome += f"\nFavorite Teams: {len(favorite_teams) if favorite_teams else 'None'}\n"
+        welcome += f"Alerts: {active_alerts} active\n"
         
-        # Live match highlights from real data
-        if live_matches:
-            welcome += f"🔥 **Live Match Highlights:**\n"
-            for match in live_matches[:2]:  # Show top 2 live matches
-                status_emoji = "⭐" if match.get('is_favorite') else "🏏"
-                welcome += f"{status_emoji} **{match['title']}** - {match['score1']} vs {match['score2']}\n"
-            if len(live_matches) > 2:
-                welcome += f"... and {len(live_matches) - 2} more live matches!\n"
-            welcome += "\n"
-        
-        # Upcoming matches for user's teams
-        if upcoming_matches:
-            welcome += f"📅 **Your Teams' Next Matches:**\n"
-            for match in upcoming_matches[:2]:  # Show next 2 upcoming
-                welcome += f"🏏 **{match['title']}** - {match['format']} in {match['tournament']}\n"
-            welcome += "\n"
-        
-        # Tournament activity
-        if active_tournaments:
-            welcome += f"🏆 **Active Tournaments:** {len(active_tournaments)} competitions running\n"
-            for tournament in active_tournaments[:2]:  # Show top 2 tournaments
-                welcome += f"• {tournament['name']} ({tournament['format']}) - {tournament['status']}\n"
-            welcome += "\n"
-        
-        # Quick insights with cricket context
-        if recent_matches:
-            last_match = recent_matches[-1]
-            welcome += f"🕐 **Last Viewed:** {last_match.get('match_title', 'Unknown')[:28]}...\n\n"
-        
-        # Premium feature highlights with cricket emojis
-        welcome += f"⚡ **Premium Cricket Features:**\n"
-        welcome += f"• 🚀 Lightning-fast live updates (1-2s)\n"
-        welcome += f"• 🧠 AI-powered match predictions\n"
-        welcome += f"• 🎯 Advanced team analytics\n"
-        welcome += f"• 📱 Smart notification system\n"
-        welcome += f"• 🔗 Inline queries from any chat\n"
-        welcome += f"• 📤 Share scores with friends\n\n"
-        
-        welcome += f"💡 **Quick Tip:** Type @botusername live in any chat to share live scores!\n\n"
-        
-        welcome += f"🎪 **Choose Your Cricket Adventure:**"
-        
-        # Create professional menu with cricket-themed organization
         buttons = []
         
-        # Main action row: Live action prioritized
         row1 = [
-            InlineKeyboardButton("🔴 Live Cricket", callback_data="live_matches_pro"),
-            InlineKeyboardButton("📅 Smart Schedule", callback_data="schedule_pro")
+            InlineKeyboardButton("🔴 Live Matches", callback_data="live_matches_pro"),
+            InlineKeyboardButton("Schedule", callback_data="schedule_pro")
         ]
         buttons.append(row1)
         
-        # Tournament & Competition row
         row2 = [
-            InlineKeyboardButton("🏆 Tournaments", callback_data="competitions_pro"),
-            InlineKeyboardButton("📊 Analytics Hub", callback_data="analytics_hub")
+            InlineKeyboardButton("🏏 Tournaments", callback_data="competitions_pro"),
+            InlineKeyboardButton("Analytics", callback_data="analytics_hub")
         ]
         buttons.append(row2)
         
-        # Personalization row with visual priority
-        fav_label = f"❤️ My Teams ({len(favorite_teams)})" if favorite_teams else "❤️ Add Teams"
-        alert_label = f"🔔 Alerts ({active_alerts})" if active_alerts > 0 else "🔔 Set Alerts"
+        fav_label = f"My Teams ({len(favorite_teams)})" if favorite_teams else "Add Teams"
         row3 = [
             InlineKeyboardButton(fav_label, callback_data="my_teams"),
-            InlineKeyboardButton(alert_label, callback_data="my_alerts")
+            InlineKeyboardButton("Alerts", callback_data="my_alerts")
         ]
         buttons.append(row3)
         
-        # Advanced AI features row
         row4 = [
-            InlineKeyboardButton("🎯 AI Predictions", callback_data="match_predictions"),
-            InlineKeyboardButton("🔥 Trending Now", callback_data="trending_now")
+            InlineKeyboardButton("⚙️ Settings", callback_data="user_settings"),
+            InlineKeyboardButton("Help", callback_data="help_tips")
         ]
         buttons.append(row4)
-        
-        # Quick access row for power users
-        row5 = [
-            InlineKeyboardButton("⚡ Quick Match", callback_data="quick_match_finder"),
-            InlineKeyboardButton("🎪 Highlights", callback_data="match_highlights")
-        ]
-        buttons.append(row5)
-        
-        # Settings and support row
-        row6 = [
-            InlineKeyboardButton("⚙️ Settings", callback_data="user_settings"),
-            InlineKeyboardButton("💡 Pro Tips", callback_data="help_tips")
-        ]
-        buttons.append(row6)
-        
-        # Share and help row
-        row7 = [
-            InlineKeyboardButton("📤 Share Bot", callback_data="share_bot"),
-            InlineKeyboardButton("❓ Help", callback_data="help_tips")
-        ]
-        buttons.append(row7)
         
         return welcome, InlineKeyboardMarkup(buttons)
     
     @staticmethod
     def create_breadcrumb_navigation(path: List[str]) -> str:
-        """Create breadcrumb navigation for better UX."""
+        """Create breadcrumb navigation."""
         if not path:
             return ""
         
-        breadcrumb_emojis = {
-            "home": "🏠",
-            "live_matches": "🔴",
-            "schedule": "📅",
-            "competitions": "🏆",
-            "analytics": "📊",
-            "teams": "👥",
-            "players": "🏃",
-            "settings": "⚙️"
-        }
-        
-        breadcrumbs = []
-        for item in path:
-            emoji = breadcrumb_emojis.get(item.lower(), "📍")
-            breadcrumbs.append(f"{emoji} {item.title()}")
-        
-        return " ➤ ".join(breadcrumbs) + "\n\n"
+        breadcrumbs = [item.title() for item in path]
+        return " > ".join(breadcrumbs) + "\n\n"
     
     @staticmethod
     def create_quick_filters_keyboard(current_filters: Dict[str, str]) -> InlineKeyboardMarkup:
@@ -805,27 +454,16 @@ class UIComponents:
     @staticmethod
     def create_live_matches_grid(matches: List[Match], user_favorites: Optional[List[str]] = None, 
                                current_page: int = 1, total_pages: int = 1) -> Tuple[str, InlineKeyboardMarkup]:
-        """Create professional live matches grid with enhanced visual design."""
+        """Create live matches grid."""
         if not matches:
             return UIComponents._create_no_matches_display()
         
         user_favorites = user_favorites or []
         
-        # Enhanced header with live indicators
-        text = "🔴 **LIVE CRICKET MATCHES** 🔴\n\n"
-        text += f"⚡ **{len(matches)} Live Matches** | 🔄 Auto-updating\n\n"
+        text = f"🔴 **LIVE MATCHES** ({len(matches)})\n\n"
         
         buttons = []
         
-        # Quick filter row
-        filter_row = [
-            InlineKeyboardButton("⭐ My Teams", callback_data="filter_favorites"),
-            InlineKeyboardButton("🏏 All Formats", callback_data="filter_formats"),
-            InlineKeyboardButton("🌍 All Regions", callback_data="filter_regions")
-        ]
-        buttons.append(filter_row)
-        
-        # Match rows (2 matches per row for better mobile experience)
         for i in range(0, len(matches), 2):
             match_row = []
             
@@ -833,12 +471,9 @@ class UIComponents:
                 if i + j < len(matches):
                     match = matches[i + j]
                     
-                    # Create match button with status and favorite indicators
-                    match_emoji = "⭐" if any(team in user_favorites for team in [match.team1.short_name, match.team2.short_name]) else "🏏"
-                    
-                    button_text = f"{match_emoji} {match.team1.short_name} vs {match.team2.short_name}"
+                    button_text = f"{match.team1.short_name} vs {match.team2.short_name}"
                     if len(button_text) > 25:
-                        button_text = f"{match_emoji} {match.team1.short_name} v {match.team2.short_name}"
+                        button_text = f"{match.team1.short_name} v {match.team2.short_name}"
                     
                     match_row.append(InlineKeyboardButton(
                         button_text, 
@@ -848,52 +483,33 @@ class UIComponents:
             if match_row:
                 buttons.append(match_row)
         
-        # Action buttons
-        action_row1 = [
-            InlineKeyboardButton("🔄 Refresh All", callback_data="refresh_live_matches"),
-            InlineKeyboardButton("📊 Match Analytics", callback_data="live_analytics")
+        action_row = [
+            InlineKeyboardButton("🔄 Refresh", callback_data="refresh_live_matches"),
+            InlineKeyboardButton("🏠 Dashboard", callback_data="back_to_main")
         ]
-        buttons.append(action_row1)
-        
-        action_row2 = [
-            InlineKeyboardButton("🔔 Bulk Alerts", callback_data="bulk_alerts"),
-            InlineKeyboardButton("⚙️ Customize View", callback_data="customize_live_view")
-        ]
-        buttons.append(action_row2)
-        
-        # Navigation
-        nav_row = [
-            InlineKeyboardButton("🏠 Dashboard", callback_data="back_to_main"),
-            InlineKeyboardButton("📅 Schedule", callback_data="schedule_pro")
-        ]
-        buttons.append(nav_row)
+        buttons.append(action_row)
         
         return text, InlineKeyboardMarkup(buttons)
     
     @staticmethod
     def _create_no_matches_display() -> Tuple[str, InlineKeyboardMarkup]:
-        """Create professional no matches display with alternatives."""
+        """Create no matches display."""
         text = (
-            "🏏 **Live Cricket Hub** 🏏\n\n"
-            "🔍 **No live matches right now**\n\n"
-            "🌅 Perfect time to explore:\n"
-            "• 📅 Upcoming exciting matches\n"
-            "• 🏆 Tournament standings\n"
-            "• 📊 Team analytics & insights\n"
-            "• ⭐ Setup your favorite teams\n\n"
-            "💡 **Pro Tip:** Set alerts for your teams!"
+            "🏏 **Live Cricket**\n\n"
+            "No live matches right now\n\n"
+            "Check:\n"
+            "• Schedule for upcoming matches\n"
+            "• Tournaments\n"
+            "• Set alerts for your teams"
         )
         
         buttons = [
             [
-                InlineKeyboardButton("📅 Smart Schedule", callback_data="schedule_pro"),
+                InlineKeyboardButton("📅 Schedule", callback_data="schedule_pro"),
                 InlineKeyboardButton("🏆 Tournaments", callback_data="competitions_pro")
             ],
             [
-                InlineKeyboardButton("⭐ Add Teams", callback_data="my_teams"),
-                InlineKeyboardButton("🔔 Set Alerts", callback_data="my_alerts")
-            ],
-            [
+                InlineKeyboardButton("My Teams", callback_data="my_teams"),
                 InlineKeyboardButton("🏠 Dashboard", callback_data="back_to_main")
             ]
         ]
