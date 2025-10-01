@@ -36,12 +36,49 @@ class SupabaseDatabase:
     def __init__(self, supabase_url: Optional[str] = None, supabase_key: Optional[str] = None):
         """Initialize database manager."""
         self.supabase_url = supabase_url or os.getenv('SUPABASE_URL')
-        self.supabase_key = supabase_key or os.getenv('SUPABASE_PUBLIC_KEY') or os.getenv('SUPABASE_KEY')
+        self.supabase_key = supabase_key or os.getenv('SUPABASE_KEY') or os.getenv('SUPABASE_PUBLIC_KEY')
         
-        if not self.supabase_url:
-            raise ValueError("SUPABASE_URL environment variable is required")
-        if not self.supabase_key:
-            raise ValueError("SUPABASE_PUBLIC_KEY or SUPABASE_KEY environment variable is required")
+        # Don't raise error here - allow graceful degradation
+        # Errors will be raised during initialize() if credentials are actually needed
+        if not self.supabase_url or not self.supabase_key:
+            logger.warning("⚠️  SUPABASE_URL or SUPABASE_KEY not set - database features will be disabled")
+            self.supabase_url = None
+            self.supabase_key = None
+            self.rest_url = None
+            self.session = None
+            self.config = None
+            self._initialized = False
+            # Performance metrics
+            self.metrics = {
+                'total_queries': 0,
+                'successful_queries': 0,
+                'failed_queries': 0,
+                'avg_query_time': 0.0,
+                'cache_hits': 0,
+                'cache_misses': 0
+            }
+            return
+        
+        # Security warning: Check if using anon key instead of service_role key
+        if self.supabase_key and 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9' in self.supabase_key:
+            # This is a JWT token - check if it's anon key (insecure for production)
+            import base64
+            import json
+            try:
+                # Decode JWT payload to check role
+                parts = self.supabase_key.split('.')
+                if len(parts) >= 2:
+                    # Add padding if needed
+                    payload = parts[1]
+                    payload += '=' * (4 - len(payload) % 4)
+                    decoded = base64.b64decode(payload)
+                    token_data = json.loads(decoded)
+                    if token_data.get('role') == 'anon':
+                        logger.warning("⚠️  SECURITY WARNING: Using anon key for database operations!")
+                        logger.warning("⚠️  For production, use SUPABASE_KEY with service_role key")
+                        logger.warning("⚠️  Anon keys have limited permissions and are insecure for writes")
+            except Exception:
+                pass  # If we can't decode, continue anyway
         
         self.supabase_url = self.supabase_url.rstrip('/')
         self.rest_url = f"{self.supabase_url}/rest/v1"
@@ -79,6 +116,10 @@ class SupabaseDatabase:
         if self._initialized:
             logger.info("✅ Database already initialized")
             return
+        
+        # Check if credentials are available
+        if not self.supabase_url or not self.supabase_key:
+            raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables are required for database initialization")
         
         try:
             logger.info("🔄 Initializing Supabase REST API connection...")
@@ -148,8 +189,128 @@ class SupabaseDatabase:
         
         logger.info("✅ Database schema verification complete")
     
+    async def _handle_rate_limit(self, response: aiohttp.ClientResponse, attempt: int = 0) -> float:
+        """Handle rate limiting with Retry-After backoff."""
+        if response.status == 429:
+            retry_after = response.headers.get('Retry-After')
+            if retry_after:
+                try:
+                    wait_time = float(retry_after)
+                except ValueError:
+                    wait_time = 2 ** attempt  # Exponential backoff
+            else:
+                wait_time = 2 ** attempt  # Exponential backoff
+            
+            logger.warning(f"⚠️  Rate limited (429), waiting {wait_time}s before retry")
+            return wait_time
+        return 0
+    
+    async def _execute_with_retry(self, method: str, url: str, headers: Dict, json_data: Any = None, max_retries: int = 3) -> tuple:
+        """Execute HTTP request with exponential backoff on failures."""
+        for attempt in range(max_retries):
+            try:
+                if method.upper() == 'POST':
+                    response = await self.session.post(url, headers=headers, json=json_data)
+                elif method.upper() == 'GET':
+                    response = await self.session.get(url, headers=headers)
+                elif method.upper() == 'DELETE':
+                    response = await self.session.delete(url, headers=headers)
+                else:
+                    raise ValueError(f"Unsupported method: {method}")
+                
+                async with response:
+                    # Handle rate limiting
+                    if response.status == 429:
+                        wait_time = await self._handle_rate_limit(response, attempt)
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(wait_time)
+                            continue
+                    
+                    # Return response status and body
+                    if response.status in [200, 201, 204]:
+                        try:
+                            body = await response.json()
+                        except:
+                            body = await response.text()
+                        return response.status, body
+                    else:
+                        error_text = await response.text()
+                        if attempt < max_retries - 1:
+                            # Exponential backoff on other errors
+                            wait_time = 2 ** attempt
+                            logger.warning(f"⚠️  Request failed (status {response.status}), retrying in {wait_time}s...")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        return response.status, error_text
+                        
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"⚠️  Request exception: {e}, retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    raise
+        
+        return 500, "Max retries exceeded"
+    
+    async def batch_store_matches(self, matches_data: List[Dict[str, Any]]) -> int:
+        """Batch upsert multiple matches in a single POST request for optimal performance."""
+        if not matches_data:
+            return 0
+        
+        try:
+            start_time = time.time()
+            
+            # Prepare batch payload
+            batch_payload = []
+            for match_data in matches_data:
+                payload = {
+                    'match_id': match_data.get('match_id'),
+                    'title': match_data.get('title'),
+                    'match_type': match_data.get('match_type'),
+                    'venue': match_data.get('venue'),
+                    'date': match_data.get('date'),
+                    'status': match_data.get('status'),
+                    'team1_name': match_data.get('team1_name'),
+                    'team1_score': match_data.get('team1_score'),
+                    'team2_name': match_data.get('team2_name'),
+                    'team2_score': match_data.get('team2_score'),
+                    'current_innings': match_data.get('current_innings'),
+                    'overs': match_data.get('overs'),
+                    'target': match_data.get('target'),
+                    'result': match_data.get('result'),
+                    'match_url': match_data.get('match_url'),
+                    'data': match_data,
+                    'updated_at': datetime.utcnow().isoformat()
+                }
+                batch_payload.append(payload)
+            
+            # Use batch upsert with proper headers
+            url = f"{self.rest_url}/matches"
+            headers = self._get_headers(prefer='resolution=merge-duplicates,return=representation')
+            
+            status, body = await self._execute_with_retry('POST', url, headers, batch_payload)
+            
+            if status in [200, 201]:
+                self.metrics['successful_queries'] += 1
+                query_time = time.time() - start_time
+                self.metrics['avg_query_time'] = (
+                    self.metrics['avg_query_time'] * 0.9 + query_time * 0.1
+                )
+                logger.info(f"✅ Batch stored {len(matches_data)} matches in {query_time*1000:.1f}ms")
+                return len(matches_data)
+            else:
+                logger.error(f"❌ Error batch storing matches (status {status}): {body}")
+                self.metrics['failed_queries'] += 1
+                return 0
+                
+        except Exception as e:
+            logger.error(f"❌ Error batch storing matches: {e}")
+            self.metrics['failed_queries'] += 1
+            return 0
+    
     async def store_match(self, match_data: Dict[str, Any]) -> bool:
-        """Store or update match data using upsert."""
+        """Store or update match data using upsert with proper on_conflict handling."""
         try:
             start_time = time.time()
             
@@ -174,23 +335,23 @@ class SupabaseDatabase:
                 'updated_at': datetime.utcnow().isoformat()
             }
             
-            # Use upsert (resolution=merge-duplicates)
+            # Use proper upsert with resolution=merge-duplicates header for conflict resolution
             url = f"{self.rest_url}/matches"
-            headers = self._get_headers(prefer='resolution=merge-duplicates')
+            headers = self._get_headers(prefer='resolution=merge-duplicates,return=representation')
             
-            async with self.session.post(url, headers=headers, json=payload) as response:
-                if response.status in [200, 201]:
-                    self.metrics['successful_queries'] += 1
-                    query_time = time.time() - start_time
-                    self.metrics['avg_query_time'] = (
-                        self.metrics['avg_query_time'] * 0.9 + query_time * 0.1
-                    )
-                    return True
-                else:
-                    error_text = await response.text()
-                    logger.error(f"❌ Error storing match (status {response.status}): {error_text}")
-                    self.metrics['failed_queries'] += 1
-                    return False
+            status, body = await self._execute_with_retry('POST', url, headers, payload)
+            
+            if status in [200, 201]:
+                self.metrics['successful_queries'] += 1
+                query_time = time.time() - start_time
+                self.metrics['avg_query_time'] = (
+                    self.metrics['avg_query_time'] * 0.9 + query_time * 0.1
+                )
+                return True
+            else:
+                logger.error(f"❌ Error storing match (status {status}): {body}")
+                self.metrics['failed_queries'] += 1
+                return False
                 
         except Exception as e:
             logger.error(f"❌ Error storing match: {e}")

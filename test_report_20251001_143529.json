@@ -1,0 +1,124 @@
+{
+  "test_summary": {
+    "total_tests": 10,
+    "passed": 5,
+    "failed": 5,
+    "success_rate": "50.0%",
+    "total_errors": 1
+  },
+  "performance_metrics": {
+    "database_operations": {
+      "initialization": {
+        "avg_ms": 959.0890407562256,
+        "min_ms": 959.0890407562256,
+        "max_ms": 959.0890407562256,
+        "total_calls": 1,
+        "successful_calls": 1
+      },
+      "get_live_matches": {
+        "avg_ms": 37.331581115722656,
+        "min_ms": 37.331581115722656,
+        "max_ms": 37.331581115722656,
+        "total_calls": 1,
+        "successful_calls": 1
+      },
+      "get_statistics": {
+        "avg_ms": 105.05962371826172,
+        "min_ms": 105.05962371826172,
+        "max_ms": 105.05962371826172,
+        "total_calls": 1,
+        "successful_calls": 1
+      }
+    },
+    "scraper_operations": {
+      "get_live_matches": {
+        "avg_ms": 216.53079986572266,
+        "min_ms": 216.53079986572266,
+        "max_ms": 216.53079986572266,
+        "total_calls": 1,
+        "successful_calls": 1
+      }
+    },
+    "worker_operations": {},
+    "end_to_end_tests": {}
+  },
+  "test_results": [
+    {
+      "test": "Database Initialization",
+      "passed": true,
+      "duration_ms": 959.0890407562256,
+      "message": "Database initialized",
+      "timestamp": "2025-10-01T14:35:23.933273"
+    },
+    {
+      "test": "Store Match Data",
+      "passed": false,
+      "duration_ms": 48.60067367553711,
+      "message": "Store failed",
+      "timestamp": "2025-10-01T14:35:24.483089"
+    },
+    {
+      "test": "Get Match by ID",
+      "passed": false,
+      "duration_ms": 33.707380294799805,
+      "message": "Match not found",
+      "timestamp": "2025-10-01T14:35:25.017749"
+    },
+    {
+      "test": "Store Live Score",
+      "passed": false,
+      "duration_ms": 22.554874420166016,
+      "message": "Store failed",
+      "timestamp": "2025-10-01T14:35:25.541445"
+    },
+    {
+      "test": "Get Live Matches",
+      "passed": true,
+      "duration_ms": 37.331581115722656,
+      "message": "Retrieved 0 matches",
+      "timestamp": "2025-10-01T14:35:26.080188"
+    },
+    {
+      "test": "Database Statistics",
+      "passed": true,
+      "duration_ms": 105.05962371826172,
+      "message": "Statistics retrieved",
+      "timestamp": "2025-10-01T14:35:26.686500"
+    },
+    {
+      "test": "Cricket Scraper",
+      "passed": true,
+      "duration_ms": 216.53079986572266,
+      "message": "Scraped 14 matches",
+      "timestamp": "2025-10-01T14:35:27.404449"
+    },
+    {
+      "test": "End-to-End Data Flow",
+      "passed": false,
+      "duration_ms": 145.62177658081055,
+      "message": "'Match' object has no attribute 'current_innings'",
+      "timestamp": "2025-10-01T14:35:28.051976"
+    },
+    {
+      "test": "Concurrent Operations",
+      "passed": false,
+      "duration_ms": 258.9685916900635,
+      "message": "Too many failures",
+      "timestamp": "2025-10-01T14:35:28.812192"
+    },
+    {
+      "test": "Error Handling",
+      "passed": true,
+      "duration_ms": 0,
+      "message": "Error handling validated",
+      "timestamp": "2025-10-01T14:35:29.384999"
+    }
+  ],
+  "errors": [
+    {
+      "test": "End-to-End Data Flow",
+      "error": "'Match' object has no attribute 'current_innings'",
+      "timestamp": "2025-10-01T14:35:28.051985"
+    }
+  ]
+}

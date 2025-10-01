@@ -1,4 +1,4 @@
-modules = ["python-3.11", "python3"]
+modules = ["python-3.11", "python3", "postgresql-16"]
 [agent]
 expertMode = true
 integrations = ["web_scraper:1.0.0"]

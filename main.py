@@ -29,6 +29,13 @@ RAILWAY_ENV = bool(os.getenv('RAILWAY_ENVIRONMENT_NAME'))
 RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'cricket-bot')
 DEPLOYMENT_ID = os.getenv('RAILWAY_DEPLOYMENT_ID', 'local')
 
+# Helper function to check for Supabase credentials (backwards compatible)
+def has_supabase_credentials():
+    """Check if Supabase credentials are available (supports both old and new env var names)."""
+    url = os.getenv('SUPABASE_URL')
+    key = os.getenv('SUPABASE_KEY') or os.getenv('SUPABASE_PUBLIC_KEY')
+    return url and key
+
 # Configure comprehensive logging for Railway.com deployment
 # Railway treats stderr as error level, so force all logs to stdout
 LOG_FORMAT = (
@@ -70,13 +77,35 @@ class RailwayOptimizedLauncher:
             logger.info(f"🛑 Received {signal_name} signal - initiating graceful shutdown...")
             self.shutdown_requested = True
             
-            # Graceful shutdown of monitoring systems
+            # Graceful shutdown of all systems
+            async def cleanup():
+                try:
+                    # Stop database worker
+                    await db_worker.stop()
+                    logger.info("🛑 Database worker stopped")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error stopping database worker: {e}")
+                
+                try:
+                    # Close aiohttp session
+                    await supabase_db.close()
+                    logger.info("🛑 Database session closed")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error closing database session: {e}")
+                
+                try:
+                    # Stop monitoring systems
+                    if self.monitoring_started:
+                        await stop_railway_monitoring()
+                        logger.info("🛑 Railway monitoring stopped")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error stopping monitoring: {e}")
+            
+            # Run cleanup
             try:
-                if self.monitoring_started:
-                    asyncio.create_task(stop_railway_monitoring())
-                    logger.info("🛑 Railway monitoring stopped")
+                asyncio.create_task(cleanup())
             except Exception as e:
-                logger.warning(f"⚠️ Error stopping monitoring: {e}")
+                logger.warning(f"⚠️ Error during cleanup: {e}")
             
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGINT, signal_handler)
@@ -108,11 +137,12 @@ class RailwayOptimizedLauncher:
             
         logger.info("🔒 Environment verification:")
         logger.info(f"✅ TELEGRAM_BOT_TOKEN: {'SET' if os.getenv('TELEGRAM_BOT_TOKEN') else '❌ MISSING'}")
-        logger.info(f"🗄️  DATABASE_URL: {'SET' if os.getenv('DATABASE_URL') else 'NOT SET (will use live scraping)'}")
+        logger.info(f"🗄️  SUPABASE_URL: {'SET' if os.getenv('SUPABASE_URL') else 'NOT SET (will use live scraping)'}")
+        logger.info(f"🔑 SUPABASE_KEY: {'SET' if has_supabase_credentials() else 'NOT SET (will use live scraping)'}")
         logger.info(f"🌍 Railway Environment: {'YES' if RAILWAY_ENV else 'NO (local)'}")
         logger.info(f"📊 Monitoring Enabled: {'YES' if RAILWAY_ENV else 'LIMITED (local)'}")
         logger.info(f"🔥 Cache Warming: {'ENABLED' if RAILWAY_ENV else 'DISABLED (local)'}")
-        logger.info(f"🔄 Database Worker: {'ENABLED' if os.getenv('DATABASE_URL') else 'DISABLED'}")
+        logger.info(f"🔄 Database Worker: {'ENABLED' if has_supabase_credentials() else 'DISABLED'}")
         logger.info("=" * 70)
         
     def check_health(self):
@@ -189,7 +219,7 @@ class RailwayOptimizedLauncher:
                 logger.info("✅ [DEPLOYMENT] Railway monitoring started")
             
             # Phase 1.5: Database Initialization
-            if os.getenv('DATABASE_URL'):
+            if has_supabase_credentials():
                 logger.info("🗄️  [DEPLOYMENT] Phase 1.5: Initializing Supabase database...")
                 try:
                     await supabase_db.initialize()
@@ -203,7 +233,7 @@ class RailwayOptimizedLauncher:
                     logger.error(f"❌ [DEPLOYMENT] Database initialization failed: {e}")
                     logger.warning("⚠️ [DEPLOYMENT] Bot will continue with live scraping fallback")
             else:
-                logger.info("⏭️ [DEPLOYMENT] Skipping database initialization (DATABASE_URL not set)")
+                logger.info("⏭️ [DEPLOYMENT] Skipping database initialization (SUPABASE_URL/SUPABASE_KEY not set)")
             
             # Phase 2: Cache Warm-start (Railway only)
             if RAILWAY_ENV:
@@ -318,6 +348,8 @@ class RailwayOptimizedLauncher:
                 
                 # Cleanup on error
                 try:
+                    asyncio.run(db_worker.stop())
+                    asyncio.run(supabase_db.close())
                     if self.monitoring_started:
                         asyncio.run(stop_railway_monitoring())
                 except:
