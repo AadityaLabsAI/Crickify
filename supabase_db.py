@@ -37,9 +37,9 @@ class SupabaseDatabase:
     
     def __init__(self, database_url: Optional[str] = None):
         """Initialize database manager."""
-        self.database_url = database_url or os.getenv('DATABASE_URL')
+        self.database_url = database_url or os.getenv('SUPABASE_URL') or os.getenv('DATABASE_URL')
         if not self.database_url:
-            raise ValueError("DATABASE_URL environment variable is required")
+            raise ValueError("SUPABASE_URL or DATABASE_URL environment variable is required")
         
         self.pool: Optional[asyncpg.Pool] = None
         self.config = DatabaseConfig(database_url=self.database_url)
