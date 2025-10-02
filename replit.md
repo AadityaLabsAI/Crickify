@@ -4,17 +4,19 @@
 The Cricket Live Match Centre is a production-ready Telegram bot built with love ❤️ for cricket fans. This bot provides real-time cricket updates with a simple, clean architecture that's easy to deploy and maintain. Only requires 2 environment variables: TELEGRAM_BOT_TOKEN and SUPABASE_DIRECT_URL (optional PostgreSQL connection string).
 
 ## Recent Changes (October 2, 2025)
-- **Complete Rebuild**: Simplified architecture from scratch for better maintainability
-- **Comprehensive Data Models**: Created Match, Team, Player, Tournament, InningsData, TournamentStanding dataclasses
-- **Unified Cricket Scraper**: Built comprehensive BeautifulSoup-based scraper for Cricbuzz
-  - Live matches with scores, wickets, overs, partnerships
-  - Match schedules with dates, venues, formats
-  - Full match details with innings, commentary, fall of wickets
-  - Tournaments and standings
-  - Player statistics (batting/bowling)
-  - Team statistics (squad, form, rankings)
-- **Supabase Database Schema**: Designed complete schema with 6 tables, indexes, triggers, and views
-- **Simplified Requirements**: Only TELEGRAM_BOT_TOKEN and SUPABASE_DIRECT_URL (optional) needed for deployment
+- **Complete Feature-Rich Bot**: Built comprehensive cricket bot with all major features
+- **Supabase Integration**: Migrated from asyncpg to Supabase Python client library
+  - Uses SUPABASE_URL and SUPABASE_ANON_KEY for authentication
+  - Full database support for user preferences and favorites
+- **Advanced Features Implemented**:
+  - Live matches with detailed ball-by-ball commentary
+  - Player statistics search with batting/bowling records
+  - ICC team rankings for T20, ODI, and Test formats
+  - Tournament standings and points tables
+  - Favorite teams/players with database persistence
+  - Rich interactive UI with emojis and inline keyboards
+- **Production Ready**: Fully configured for Railway deployment with Procfile and nixpacks.toml
+- **Simplified Requirements**: Only TELEGRAM_BOT_TOKEN + optional SUPABASE_URL & SUPABASE_ANON_KEY
 
 ## User Preferences
 - I prefer simple language and clear explanations.
