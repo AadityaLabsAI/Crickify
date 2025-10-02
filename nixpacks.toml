@@ -52,7 +52,7 @@ cmds = [
     "python -c 'import sys; print(f\"✅ Python {sys.version}\")'",
     "python -c 'import platform; print(f\"✅ Platform: {platform.system()} {platform.machine()}\")'",
     "python -c 'import main; print(\"✅ Main module imports successfully\")'",
-    "python -c 'from bot import ProfessionalCricketBot; print(\"✅ Bot class loads successfully\")'",
+    "python -c 'from bot import ComprehensiveCricketBot; print(\"✅ Bot class loads successfully\")'",
     "echo '🔍 Validating critical imports...'",
     "python -c 'import asyncio, logging, os; print(\"✅ Core modules available\")'",
     "echo '🏗️ Creating runtime directories...'",
