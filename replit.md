@@ -1,7 +1,7 @@
 # Cricket Live Match Centre Telegram Bot
 
 ## Overview
-The Cricket Live Match Centre is a production-ready Telegram bot built with love ❤️ for cricket fans. This bot provides real-time cricket updates with a simple, clean architecture that's easy to deploy and maintain. Only requires 3 environment variables: TELEGRAM_BOT_TOKEN, SUPABASE_URL, and SUPABASE_KEY.
+The Cricket Live Match Centre is a production-ready Telegram bot built with love ❤️ for cricket fans. This bot provides real-time cricket updates with a simple, clean architecture that's easy to deploy and maintain. Only requires 2 environment variables: TELEGRAM_BOT_TOKEN and SUPABASE_DIRECT_URL (optional PostgreSQL connection string).
 
 ## Recent Changes (October 2, 2025)
 - **Complete Rebuild**: Simplified architecture from scratch for better maintainability
@@ -14,7 +14,7 @@ The Cricket Live Match Centre is a production-ready Telegram bot built with love
   - Player statistics (batting/bowling)
   - Team statistics (squad, form, rankings)
 - **Supabase Database Schema**: Designed complete schema with 6 tables, indexes, triggers, and views
-- **Simplified Requirements**: Only TELEGRAM_BOT_TOKEN, SUPABASE_URL, SUPABASE_KEY needed for deployment
+- **Simplified Requirements**: Only TELEGRAM_BOT_TOKEN and SUPABASE_DIRECT_URL (optional) needed for deployment
 
 ## User Preferences
 - I prefer simple language and clear explanations.
@@ -83,13 +83,14 @@ The bot is built with modern Python async/await patterns, emphasizing a modular 
 
 ## Railway Deployment
 
-### Simple Setup - Only 1 Environment Variable Required!
+### Simple Setup - Only 2 Environment Variables!
 
-The bot is optimized for Railway.com deployment and requires **only ONE environment variable** from the developer:
+The bot is optimized for Railway.com deployment and requires these environment variables:
 
 1. **TELEGRAM_BOT_TOKEN** (required) - Get this from [@BotFather](https://t.me/botfather) on Telegram
+2. **SUPABASE_DIRECT_URL** (optional) - PostgreSQL connection string (e.g., postgresql://user:password@host:port/database)
 
-All other configuration is handled automatically by the deployment system!
+The database is optional - the bot will use live scraping only if SUPABASE_DIRECT_URL is not provided.
 
 ### Deployment Steps
 
