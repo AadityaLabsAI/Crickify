@@ -367,9 +367,8 @@ class UserDataManager:
                     active_tournaments.append({
                         'name': tournament.name,
                         'format': tournament.format,
-                        'status': tournament.status,
                         'current_stage': tournament.current_stage,
-                        'total_teams': len(tournament.teams) if tournament.teams else 0
+                        'total_teams': len(tournament.participating_teams) if tournament.participating_teams else 0
                     })
             
             dashboard_data['active_tournaments'] = active_tournaments

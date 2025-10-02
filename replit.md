@@ -1,15 +1,20 @@
 # Cricket Live Match Centre Telegram Bot
 
 ## Overview
-The Cricket Live Match Centre is a production-ready Telegram bot designed to deliver a superior cricket experience. Built with advanced performance optimization, ultra-fast JSON extraction, intelligent caching, and comprehensive monitoring, this bot provides real-time cricket updates with sub-2-second response times. The bot features a zero-typing interface with simplified, user-friendly formatting, making it clean and easy to use.
+The Cricket Live Match Centre is a production-ready Telegram bot built with love ❤️ for cricket fans. This bot provides real-time cricket updates with a simple, clean architecture that's easy to deploy and maintain. Only requires 3 environment variables: TELEGRAM_BOT_TOKEN, SUPABASE_URL, and SUPABASE_KEY.
 
-## Recent Changes (October 2025)
-- **UI Simplification**: Simplified the user interface by reducing excessive emojis and animations
-- **Score Prominence**: Scores are now displayed in **BOLD** format to stand out clearly
-- **Menu Cleanup**: Reduced menu emojis to essentials only (🏏 for cricket, 🔴 for live, ⚙️ for settings)
-- **Progress Bars**: Simplified progress bars to use clean ▰▱ characters
-- **Status Indicators**: Streamlined match status indicators for better readability
-- **Bug Fixes**: Fixed progress bar overflow and removed unused parameters
+## Recent Changes (October 2, 2025)
+- **Complete Rebuild**: Simplified architecture from scratch for better maintainability
+- **Comprehensive Data Models**: Created Match, Team, Player, Tournament, InningsData, TournamentStanding dataclasses
+- **Unified Cricket Scraper**: Built comprehensive BeautifulSoup-based scraper for Cricbuzz
+  - Live matches with scores, wickets, overs, partnerships
+  - Match schedules with dates, venues, formats
+  - Full match details with innings, commentary, fall of wickets
+  - Tournaments and standings
+  - Player statistics (batting/bowling)
+  - Team statistics (squad, form, rankings)
+- **Supabase Database Schema**: Designed complete schema with 6 tables, indexes, triggers, and views
+- **Simplified Requirements**: Only TELEGRAM_BOT_TOKEN, SUPABASE_URL, SUPABASE_KEY needed for deployment
 
 ## User Preferences
 - I prefer simple language and clear explanations.
