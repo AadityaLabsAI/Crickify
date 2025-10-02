@@ -27,23 +27,189 @@ class MatchStatus(Enum):
     UPCOMING = "upcoming"
     COMPLETED = "completed"
 
+class PlayerRole(Enum):
+    """Enum for player role."""
+    BATSMAN = "batsman"
+    BOWLER = "bowler"
+    ALL_ROUNDER = "all_rounder"
+    WICKET_KEEPER = "wicket_keeper"
+
 @dataclass
 class Team:
-    """Data model for a cricket team."""
+    """Data model for a cricket team.
+    
+    Attributes:
+        name: Full name of the team
+        short_name: Abbreviated team name (auto-generated if not provided)
+        score: Current score
+        wickets: Number of wickets fallen
+        overs: Overs bowled (e.g., "15.4")
+        run_rate: Current run rate
+        logo_url: Optional URL to team logo
+        players: List of player names in the team
+        batting_team: Whether this team is currently batting
+        extras: Extra runs (wides, no-balls, byes, leg-byes)
+    """
     name: str
     short_name: str = ""
     score: int = 0
     wickets: int = 0
     overs: str = "0.0"
     run_rate: float = 0.0
+    logo_url: str = ""
+    players: List[str] = field(default_factory=list)
+    batting_team: bool = False
+    extras: int = 0
     
     def __post_init__(self):
         if not self.short_name:
             self.short_name = self.name[:3].upper()
 
 @dataclass
+class InningsData:
+    """Data model for innings data.
+    
+    Attributes:
+        innings_number: Innings number (1st, 2nd, etc.)
+        batting_team: Name of the batting team
+        bowling_team: Name of the bowling team
+        score: Current score
+        wickets: Number of wickets fallen
+        overs: Overs bowled (e.g., "15.4")
+        run_rate: Current run rate
+        batsmen: List of current batsmen details
+        bowlers: List of current bowlers details
+        fall_of_wickets: List of wicket fall details
+    """
+    innings_number: int
+    batting_team: str
+    bowling_team: str
+    score: int = 0
+    wickets: int = 0
+    overs: str = "0.0"
+    run_rate: float = 0.0
+    batsmen: List[Dict[str, Any]] = field(default_factory=list)
+    bowlers: List[Dict[str, Any]] = field(default_factory=list)
+    fall_of_wickets: List[Dict[str, Any]] = field(default_factory=list)
+
+@dataclass
+class Player:
+    """Data model for a cricket player.
+    
+    Attributes:
+        player_id: Unique identifier for the player
+        name: Full name of the player
+        team: Team the player belongs to
+        role: Player's primary role (BATSMAN, BOWLER, ALL_ROUNDER, WICKET_KEEPER)
+        player_status: Current status (batting, bowling, fielding, out, not-playing)
+        batting_stats: Dictionary containing cumulative batting statistics
+            - runs: Total runs scored
+            - balls: Balls faced
+            - fours: Number of fours hit
+            - sixes: Number of sixes hit
+            - strike_rate: Strike rate (runs per 100 balls)
+        bowling_stats: Dictionary containing cumulative bowling statistics
+            - overs: Overs bowled
+            - runs_conceded: Runs given away
+            - wickets: Wickets taken
+            - economy_rate: Economy rate (runs per over)
+        innings_batting_stats: Per-innings batting statistics (keyed by innings number)
+        innings_bowling_stats: Per-innings bowling statistics (keyed by innings number)
+        recent_form: List of recent scores/performances
+    """
+    player_id: str
+    name: str
+    team: str = ""
+    role: Optional[PlayerRole] = None
+    player_status: str = ""
+    batting_stats: Dict[str, Any] = field(default_factory=dict)
+    bowling_stats: Dict[str, Any] = field(default_factory=dict)
+    innings_batting_stats: Dict[int, Dict[str, Any]] = field(default_factory=dict)
+    innings_bowling_stats: Dict[int, Dict[str, Any]] = field(default_factory=dict)
+    recent_form: List[str] = field(default_factory=list)
+
+@dataclass
+class TournamentStanding:
+    """Data model for tournament standings.
+    
+    Attributes:
+        team_name: Name of the team
+        played: Number of matches played
+        won: Number of matches won
+        lost: Number of matches lost
+        tied: Number of tied matches
+        no_result: Number of matches with no result
+        points: Total points
+        net_run_rate: Net run rate
+        position: Position in the standings
+    """
+    team_name: str
+    played: int = 0
+    won: int = 0
+    lost: int = 0
+    tied: int = 0
+    no_result: int = 0
+    points: int = 0
+    net_run_rate: float = 0.0
+    position: int = 0
+
+@dataclass
+class Tournament:
+    """Data model for a cricket tournament.
+    
+    Attributes:
+        tournament_id: Unique identifier for the tournament
+        name: Name of the tournament (e.g., "ICC World Cup 2024")
+        format: Match format (T20, ODI, Test)
+        start_date: Tournament start date
+        end_date: Tournament end date
+        participating_teams: List of team names participating
+        current_stage: Current stage (group stage, knockout, finals, etc.)
+        standings: Optional list of team standings/leaderboard
+    """
+    tournament_id: str
+    name: str
+    format: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    participating_teams: List[str] = field(default_factory=list)
+    current_stage: str = ""
+    standings: List[TournamentStanding] = field(default_factory=list)
+
+@dataclass
 class Match:
-    """Data model for a cricket match."""
+    """Data model for a cricket match.
+    
+    Attributes:
+        match_id: Unique identifier for the match
+        title: Match title/description
+        team1: First team
+        team2: Second team
+        status: Current match status (LIVE, UPCOMING, COMPLETED)
+        venue: Match venue/stadium
+        date: Match date
+        format: Match format (T20, ODI, Test, etc.)
+        toss: Toss result information
+        current_partnership: Current batting partnership details
+        recent_overs: List of recent over summaries
+        series_name: Name of the series
+        tournament_name: Name of the tournament
+        start_time: Match start time
+        match_status_detail: Detailed match status message
+        match_number: Match number in the series/tournament
+        commentary: Recent ball-by-ball commentary
+        fall_of_wickets: List of wicket fall details (score, player, etc.)
+        player_of_match: Name of player of the match (if awarded)
+        umpires: List of umpire names
+        target: Target score to chase (for second innings)
+        result: Final match result summary
+        innings: List of innings data for the match
+        participating_players: List of player IDs participating in the match
+        scheduled_time: Scheduled time for the match (for alerts)
+        last_event_time: Timestamp of last match event (for auto-updates)
+        last_wicket_time: Timestamp of last wicket (for alerts)
+        last_milestone_time: Timestamp of last milestone (for alerts)
+    """
     match_id: str
     title: str
     team1: Team
@@ -59,6 +225,19 @@ class Match:
     tournament_name: str = ""
     start_time: str = ""
     match_status_detail: str = ""
+    match_number: int = 0
+    commentary: List[str] = field(default_factory=list)
+    fall_of_wickets: List[Dict[str, Any]] = field(default_factory=list)
+    player_of_match: Optional[str] = None
+    umpires: List[str] = field(default_factory=list)
+    target: int = 0
+    result: str = ""
+    innings: List[InningsData] = field(default_factory=list)
+    participating_players: List[str] = field(default_factory=list)
+    scheduled_time: Optional[str] = None
+    last_event_time: Optional[str] = None
+    last_wicket_time: Optional[str] = None
+    last_milestone_time: Optional[str] = None
 
 async def get_live_matches() -> List[Match]:
     """Get live cricket matches from Cricbuzz."""
