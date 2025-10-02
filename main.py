@@ -31,7 +31,8 @@ def main_entry_point():
     
     # Load and validate required environment variables
     telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
-    supabase_direct_url = os.getenv('SUPABASE_DIRECT_URL')
+    supabase_url = os.getenv('SUPABASE_URL')
+    supabase_anon_key = os.getenv('SUPABASE_ANON_KEY')
     
     # Validate critical environment variable
     if not telegram_token:
@@ -41,12 +42,16 @@ def main_entry_point():
     
     logger.info("✅ TELEGRAM_BOT_TOKEN: SET")
     
-    # Optional environment variables
-    if supabase_direct_url:
-        logger.info("✅ SUPABASE_DIRECT_URL: SET")
+    # Optional environment variables for database
+    if supabase_url and supabase_anon_key:
+        logger.info("✅ SUPABASE_URL: SET")
+        logger.info("✅ SUPABASE_ANON_KEY: SET")
         logger.info("🗄️  Database features enabled")
     else:
-        logger.info("⚠️  SUPABASE_DIRECT_URL not set")
+        if not supabase_url:
+            logger.info("⚠️  SUPABASE_URL not set")
+        if not supabase_anon_key:
+            logger.info("⚠️  SUPABASE_ANON_KEY not set")
         logger.info("📡 Bot will use live scraping only")
     
     logger.info("=" * 50)
