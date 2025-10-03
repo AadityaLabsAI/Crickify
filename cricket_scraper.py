@@ -1384,11 +1384,12 @@ def _parse_team_rankings(html: str) -> Optional[Dict[str, int]]:
 def _parse_cricbuzz_live_matches(html: str) -> List[Match]:
     """Parse live matches from Cricbuzz HTML with full details."""
     matches = []
+    seen_match_ids = set()
     
     try:
         soup = BeautifulSoup(html, 'html.parser')
         
-        match_cards = soup.find_all('div', class_=re.compile(r'cb-mtch-lst|cb-col-100|cb-col'))
+        match_cards = soup.find_all('div', class_=re.compile(r'cb-mtch-lst'))
         
         logger.info(f"🔍 Found {len(match_cards)} potential match containers")
         
@@ -1406,7 +1407,13 @@ def _parse_cricbuzz_live_matches(html: str) -> List[Match]:
                 match_url = f"https://www.cricbuzz.com{href_str}" if not href_str.startswith('http') else href_str
                 
                 match_id_match = re.search(r'/live-cricket-scores/(\d+)/', match_url)
-                match_id = match_id_match.group(1) if match_id_match else f"cb_{i}_{int(time.time())}"
+                if not match_id_match:
+                    continue
+                match_id = match_id_match.group(1)
+                
+                if match_id in seen_match_ids:
+                    continue
+                seen_match_ids.add(match_id)
                 
                 title_attr = link.get('title')
                 title = str(title_attr) if title_attr else link.get_text(strip=True)
@@ -1419,6 +1426,9 @@ def _parse_cricbuzz_live_matches(html: str) -> List[Match]:
                     teams = [td.get_text(strip=True) for td in team_divs[:2]]
                     if len(teams) < 2:
                         continue
+                
+                if not teams[0].strip() or not teams[1].strip():
+                    continue
                 
                 team1_data = _parse_score_string(score_divs[0].get_text(strip=True) if len(score_divs) > 0 else "")
                 team2_data = _parse_score_string(score_divs[1].get_text(strip=True) if len(score_divs) > 1 else "")
@@ -1501,11 +1511,12 @@ def _parse_cricbuzz_live_matches(html: str) -> List[Match]:
 def _parse_cricbuzz_schedule(html: str) -> List[Match]:
     """Parse schedule from Cricbuzz HTML with complete details."""
     matches = []
+    seen_match_ids = set()
     
     try:
         soup = BeautifulSoup(html, 'html.parser')
         
-        schedule_items = soup.find_all('div', class_=re.compile(r'cb-sch-lst|cb-col-100'))
+        schedule_items = soup.find_all('div', class_=re.compile(r'cb-sch-lst'))
         
         for i, item in enumerate(schedule_items[:20]):
             try:
@@ -1518,12 +1529,21 @@ def _parse_cricbuzz_schedule(html: str) -> List[Match]:
                 
                 href = link.get('href')
                 match_id_match = re.search(r'/live-cricket-scores/(\d+)/', str(href))
-                match_id = match_id_match.group(1) if match_id_match else f"sched_{i}_{int(time.time())}"
+                if not match_id_match:
+                    continue
+                match_id = match_id_match.group(1)
+                
+                if match_id in seen_match_ids:
+                    continue
+                seen_match_ids.add(match_id)
                 
                 title = link.get_text(strip=True)
                 teams = _parse_team_names(title)
                 
                 if len(teams) < 2:
+                    continue
+                
+                if not teams[0].strip() or not teams[1].strip():
                     continue
                 
                 date_elem = item.find('span', class_=re.compile(r'cb-font-12|schedule-date'))

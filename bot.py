@@ -63,18 +63,19 @@ class CricketBot:
         )
         
         welcome_text = (
-            f"🏏 **Cricket Live Score & Stats Hub** 🏏\n\n"
-            f"Welcome, **{user.first_name or 'Cricket Fan'}**! ⭐\n\n"
-            f"Your ultimate cricket companion - better than Cricbuzz!\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"**📋 Quick Access:**\n"
-            f"🔴 Live Matches & Scores\n"
-            f"📊 Detailed Match Analytics\n"
-            f"👤 Player Stats & Records\n"
-            f"🏆 ICC Rankings\n"
-            f"⭐ Tournament Standings\n"
-            f"❤️ Save Your Favorites\n\n"
-            f"Use buttons below to explore! 👇"
+            f"╔═══════════════════════════╗\n"
+            f"   🏏 <b><u>Cricket Live Score & Stats Hub</u></b> 🏏\n"
+            f"╚═══════════════════════════╝\n\n"
+            f"Welcome, <b><i>{user.first_name or 'Cricket Fan'}</i></b>! ⭐\n\n"
+            f"<i>Your ultimate cricket companion - better than Cricbuzz!</i>\n\n\n"
+            f"<b>━━━ 📋 QUICK ACCESS ━━━</b>\n\n"
+            f"🔴 <b>Live Matches & Scores</b>\n"
+            f"📊 <i>Detailed Match Analytics</i>\n"
+            f"👤 <i>Player Stats & Records</i>\n"
+            f"🏆 <u>ICC Rankings</u>\n"
+            f"⭐ <u>Tournament Standings</u>\n"
+            f"❤️ <i>Save Your Favorites</i>\n\n\n"
+            f"<b>Use buttons below to explore! 👇</b>"
         )
         
         keyboard = [
@@ -95,7 +96,7 @@ class CricketBot:
         
         await update.message.reply_text(
             welcome_text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -106,29 +107,33 @@ class CricketBot:
         
         logger.info(f"User {update.effective_user.id} used /live")
         
-        loading_msg = await update.message.reply_text("🔄 Fetching live matches...", parse_mode='Markdown')
+        loading_msg = await update.message.reply_text("🔄 <b><i>Fetching live matches...</i></b>", parse_mode='HTML')
         
         try:
             matches = await get_live_matches()
             
             if matches:
-                text = "🔴 **Live Cricket Matches** 🔴\n\n"
+                text = "╔══════════════════════════╗\n"
+                text += "   ⚡ <b><u>LIVE CRICKET MATCHES</u></b> ⚡\n"
+                text += "╚══════════════════════════╝\n\n"
                 keyboard = []
                 
                 for i, match in enumerate(matches[:8]):
-                    text += f"**{i+1}. {match.title}**\n"
-                    text += f"📍 {match.venue}\n"
+                    text += f"<b><u>{i+1}. {match.title}</u></b>\n"
+                    text += f"📍 <i>{match.venue}</i>\n\n"
                     
                     if match.status.value == "live":
-                        text += f"🔴 **LIVE**\n"
-                        text += f"⚡ {match.team1.short_name}: **{match.team1.score}/{match.team1.wickets}** ({match.team1.overs} ov)\n"
+                        text += f"<b><i>🔴 🔥 LIVE NOW 🔥 🔴</i></b>\n\n"
+                        text += f"<pre>"
+                        text += f"⚡ {match.team1.short_name}: {match.team1.score}/{match.team1.wickets} ({match.team1.overs} ov)\n"
                         
                         if match.team2.score > 0:
-                            text += f"⚡ {match.team2.short_name}: **{match.team2.score}/{match.team2.wickets}** ({match.team2.overs} ov)\n"
+                            text += f"⚡ {match.team2.short_name}: {match.team2.score}/{match.team2.wickets} ({match.team2.overs} ov)"
+                        text += f"</pre>\n"
                     else:
-                        text += f"⚡ {match.team1.short_name} vs {match.team2.short_name}\n"
+                        text += f"⚡ <b>{match.team1.short_name}</b> vs <b>{match.team2.short_name}</b>\n"
                     
-                    text += f"🏆 {match.format}\n"
+                    text += f"🏆 <u>{match.format}</u>\n"
                     
                     keyboard.append([InlineKeyboardButton(
                         f"📊 {match.team1.short_name} vs {match.team2.short_name} Details",
@@ -136,16 +141,18 @@ class CricketBot:
                     )])
                     
                     if i < len(matches[:8]) - 1:
-                        text += "\n━━━━━━━━━━━━━━━━━━━━\n\n"
+                        text += "\n<b>━━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
                 
-                text += f"\n\n📊 **Total: {len(matches)} live matches**"
+                text += f"\n\n📊 <b><i>Total: {len(matches)} live matches</i></b>"
                 
                 keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="live")])
                 keyboard.append([InlineKeyboardButton("🏠 Main Menu", callback_data="start")])
             else:
                 text = (
-                    "🔴 **Live Matches** 🔴\n\n"
-                    "No live matches at the moment. 😴\n\n"
+                    "╔══════════════════════════╗\n"
+                    "   🔴 <b><u>LIVE MATCHES</u></b> 🔴\n"
+                    "╚══════════════════════════╝\n\n"
+                    "<i>No live matches at the moment.</i> 😴\n\n"
                     "Check the schedule for upcoming matches!"
                 )
                 keyboard = [
@@ -155,15 +162,15 @@ class CricketBot:
             
             await loading_msg.edit_text(
                 text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
         except Exception as e:
             logger.error(f"Error in /live: {e}")
             await loading_msg.edit_text(
-                "⚠️ Unable to fetch live matches. Try again later!",
-                parse_mode='Markdown'
+                "⚠️ <b><u>Unable to fetch live matches.</u></b> <i>Try again later!</i>",
+                parse_mode='HTML'
             )
     
     async def details_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -173,7 +180,7 @@ class CricketBot:
         
         await update.message.reply_text(
             "Please select a match from /live to see detailed stats!",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
     
     async def player_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -182,9 +189,11 @@ class CricketBot:
             return
         
         text = (
-            "👤 **Player Stats Search** 👤\n\n"
-            "Type a player name to search:\n"
-            "Example: *Virat Kohli* or *Steve Smith*\n\n"
+            "╔═══════════════════════════╗\n"
+            "   👤 <b><u>PLAYER STATS SEARCH</u></b> 👤\n"
+            "╚═══════════════════════════╝\n\n"
+            "<i>Type a player name to search:</i>\n"
+            "<b>Example:</b> Virat Kohli or Steve Smith\n\n"
             "Or use popular players below! 👇"
         )
         
@@ -206,7 +215,7 @@ class CricketBot:
         
         await update.message.reply_text(
             text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -216,12 +225,14 @@ class CricketBot:
             return
         
         text = (
-            "🏆 **ICC Team Rankings** 🏆\n\n"
-            "Select a format to view rankings:\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "⚡ **T20I** - Fast-paced cricket\n"
-            "🏏 **ODI** - One Day International\n"
-            "🎯 **Test** - Traditional format\n"
+            "╔═══════════════════════════╗\n"
+            "   🏆 <b><u>ICC TEAM RANKINGS</u></b> 🏆\n"
+            "╚═══════════════════════════╝\n\n"
+            "<i>Select a format to view rankings:</i>\n\n"
+            "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+            "⚡ <b>T20I</b> - <i>Fast-paced cricket</i>\n"
+            "🏏 <b>ODI</b> - <i>One Day International</i>\n"
+            "🎯 <b>Test</b> - <i>Traditional format</i>\n"
         )
         
         keyboard = [
@@ -237,7 +248,7 @@ class CricketBot:
         
         await update.message.reply_text(
             text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -249,26 +260,28 @@ class CricketBot:
         user = update.effective_user
         prefs = await user_data_manager.get_user_preferences(user.id)
         
-        text = "❤️ **My Favorites** ❤️\n\n"
+        text = "╔══════════════════════════╗\n"
+        text += "   ❤️ <b><u>MY FAVORITES</u></b> ❤️\n"
+        text += "╚══════════════════════════╝\n\n"
         
         if prefs.favorite_teams:
-            text += "**Your Favorite Teams:**\n"
+            text += "<b>━━━ YOUR FAVORITE TEAMS ━━━</b>\n\n"
             for team in prefs.favorite_teams:
-                text += f"⭐ {team}\n"
+                text += f"  ⭐ <b>{team}</b>\n"
             text += "\n"
         else:
-            text += "No favorite teams yet!\n\n"
+            text += "<i>No favorite teams yet!</i>\n\n"
         
         if prefs.favorite_players:
-            text += "**Your Favorite Players:**\n"
+            text += "<b>━━━ YOUR FAVORITE PLAYERS ━━━</b>\n\n"
             for player in prefs.favorite_players:
-                text += f"👤 {player}\n"
+                text += f"  👤 <u>{player}</u>\n"
             text += "\n"
         else:
-            text += "No favorite players yet!\n\n"
+            text += "<i>No favorite players yet!</i>\n\n"
         
-        text += "━━━━━━━━━━━━━━━━━━━━\n\n"
-        text += "Use buttons below to manage favorites:"
+        text += "<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        text += "<i>Use buttons below to manage favorites:</i>"
         
         keyboard = [
             [
@@ -284,7 +297,7 @@ class CricketBot:
         
         await update.message.reply_text(
             text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -293,20 +306,22 @@ class CricketBot:
         if not update.effective_user or not update.message:
             return
         
-        loading_msg = await update.message.reply_text("🔄 Loading tournaments...", parse_mode='Markdown')
+        loading_msg = await update.message.reply_text("🔄 <b><i>Loading tournaments...</i></b>", parse_mode='HTML')
         
         try:
             tournaments = await get_tournaments()
             
             if tournaments:
-                text = "⭐ **Ongoing Tournaments** ⭐\n\n"
+                text = "╔══════════════════════════╗\n"
+                text += "   ⭐ <b><u>ONGOING TOURNAMENTS</u></b> ⭐\n"
+                text += "╚══════════════════════════╝\n\n"
                 keyboard = []
                 
                 for i, tournament in enumerate(tournaments[:10]):
-                    text += f"**{i+1}. {tournament.name}**\n"
-                    text += f"🏆 Format: {tournament.format}\n"
+                    text += f"<b>{i+1}. <u>{tournament.name}</u></b>\n"
+                    text += f"🏆 <b>Format:</b> <i>{tournament.format}</i>\n"
                     text += f"📅 {tournament.start_date} to {tournament.end_date}\n"
-                    text += f"📍 Stage: {tournament.current_stage}\n\n"
+                    text += f"📍 <b>Stage:</b> <u>{tournament.current_stage}</u>\n\n"
                     
                     keyboard.append([InlineKeyboardButton(
                         f"📊 {tournament.name[:40]} Standings",
@@ -320,15 +335,15 @@ class CricketBot:
             
             await loading_msg.edit_text(
                 text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
         except Exception as e:
             logger.error(f"Error in /tournament: {e}")
             await loading_msg.edit_text(
-                "⚠️ Unable to fetch tournaments. Try again later!",
-                parse_mode='Markdown'
+                "⚠️ <b><u>Unable to fetch tournaments.</u></b> <i>Try again later!</i>",
+                parse_mode='HTML'
             )
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -337,32 +352,34 @@ class CricketBot:
             return
         
         help_text = (
-            "❓ **Cricket Bot Help** ❓\n\n"
-            "**Available Commands:**\n\n"
-            "🔴 /live - View live matches\n"
-            "📅 /schedule - View upcoming matches\n"
-            "📊 /details - Detailed match stats\n"
-            "👤 /player or /stats - Player statistics\n"
-            "🏆 /rankings - ICC team rankings\n"
-            "⭐ /tournament - Tournament standings\n"
-            "❤️ /favorites - Manage favorites\n"
-            "❓ /help - Show this help\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "**Features:**\n"
-            "• Real-time live scores\n"
-            "• Ball-by-ball commentary\n"
-            "• Player & team statistics\n"
-            "• Save favorite teams/players\n"
-            "• Tournament points tables\n"
-            "• ICC rankings for all formats\n\n"
-            "Enjoy cricket like never before! 🏏"
+            "╔═══════════════════════════╗\n"
+            "   ❓ <b><u>CRICKET BOT HELP</u></b> ❓\n"
+            "╚═══════════════════════════╝\n\n"
+            "<b>━━━ AVAILABLE COMMANDS ━━━</b>\n\n"
+            "🔴 <b>/live</b> - <i>View live matches</i>\n"
+            "📅 <b>/schedule</b> - <i>View upcoming matches</i>\n"
+            "📊 <b>/details</b> - <i>Detailed match stats</i>\n"
+            "👤 <b>/player</b> or <b>/stats</b> - <i>Player statistics</i>\n"
+            "🏆 <b>/rankings</b> - <i>ICC team rankings</i>\n"
+            "⭐ <b>/tournament</b> - <i>Tournament standings</i>\n"
+            "❤️ <b>/favorites</b> - <i>Manage favorites</i>\n"
+            "❓ <b>/help</b> - <i>Show this help</i>\n\n"
+            "<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+            "<b>━━━ FEATURES ━━━</b>\n\n"
+            "• <u>Real-time live scores</u>\n"
+            "• <u>Ball-by-ball commentary</u>\n"
+            "• <i>Player & team statistics</i>\n"
+            "• <i>Save favorite teams/players</i>\n"
+            "• <i>Tournament points tables</i>\n"
+            "• <i>ICC rankings for all formats</i>\n\n"
+            "<b><i>Enjoy cricket like never before! 🏏</i></b>"
         )
         
         keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data="start")]]
         
         await update.message.reply_text(
             help_text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -371,29 +388,33 @@ class CricketBot:
         if not update.effective_user or not update.message:
             return
         
-        loading_msg = await update.message.reply_text("🔄 Loading schedule...", parse_mode='Markdown')
+        loading_msg = await update.message.reply_text("🔄 <b><i>Loading schedule...</i></b>", parse_mode='HTML')
         
         try:
             matches = await get_match_schedule()
             
             if matches:
-                text = "📅 **Upcoming Cricket Matches** 📅\n\n"
+                text = "╔═══════════════════════════╗\n"
+                text += "   📅 <b><u>UPCOMING MATCHES</u></b> 📅\n"
+                text += "╚═══════════════════════════╝\n\n"
                 
                 for i, match in enumerate(matches[:12]):
-                    text += f"**{i+1}. {match.title}**\n"
-                    text += f"⚡ {match.team1.short_name} vs {match.team2.short_name}\n"
-                    text += f"📍 {match.venue}\n"
-                    text += f"📅 {match.date}\n"
+                    text += f"<b>{i+1}. <u>{match.title}</u></b>\n"
+                    text += f"⚡ <b>{match.team1.short_name}</b> <i>vs</i> <b>{match.team2.short_name}</b>\n"
+                    text += f"📍 <i>{match.venue}</i>\n"
+                    text += f"📅 <u>{match.date}</u>\n"
                     text += f"🏆 {match.format}\n\n"
                     
                     if i < len(matches[:12]) - 1:
-                        text += "━━━━━━━━━━━━━━\n\n"
+                        text += "<b>━━━━━━━━━━━━━━</b>\n\n"
                 
-                text += f"\n📊 **Total: {len(matches)} upcoming matches**"
+                text += f"\n📊 <b><i>Total: {len(matches)} upcoming matches</i></b>"
             else:
                 text = (
-                    "📅 **Schedule** 📅\n\n"
-                    "No upcoming matches found.\n\n"
+                    "╔═══════════════════════════╗\n"
+                    "   📅 <b><u>SCHEDULE</u></b> 📅\n"
+                    "╚═══════════════════════════╝\n\n"
+                    "<i>No upcoming matches found.</i>\n\n"
                     "Check back later!"
                 )
             
@@ -404,15 +425,15 @@ class CricketBot:
             
             await loading_msg.edit_text(
                 text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
         except Exception as e:
             logger.error(f"Error in /schedule: {e}")
             await loading_msg.edit_text(
-                "⚠️ Unable to fetch schedule. Try again later!",
-                parse_mode='Markdown'
+                "⚠️ <b><u>Unable to fetch schedule.</u></b> <i>Try again later!</i>",
+                parse_mode='HTML'
             )
     
     async def text_message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -520,17 +541,18 @@ class CricketBot:
         user = query.from_user
         
         welcome_text = (
-            f"🏏 **Cricket Live Score & Stats Hub** 🏏\n\n"
-            f"Welcome back, **{user.first_name or 'Cricket Fan'}**! ⭐\n\n"
-            f"Your ultimate cricket companion!\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"**📋 Quick Access:**\n"
-            f"🔴 Live Matches & Scores\n"
-            f"📊 Detailed Match Analytics\n"
-            f"👤 Player Stats & Records\n"
-            f"🏆 ICC Rankings\n"
-            f"⭐ Tournament Standings\n"
-            f"❤️ Save Your Favorites\n"
+            f"╔═══════════════════════════╗\n"
+            f"   🏏 <b><u>Cricket Live Score & Stats Hub</u></b> 🏏\n"
+            f"╚═══════════════════════════╝\n\n"
+            f"Welcome back, <b><i>{user.first_name or 'Cricket Fan'}</i></b>! ⭐\n\n"
+            f"<i>Your ultimate cricket companion!</i>\n\n\n"
+            f"<b>━━━ 📋 QUICK ACCESS ━━━</b>\n\n"
+            f"🔴 <b>Live Matches & Scores</b>\n"
+            f"📊 <i>Detailed Match Analytics</i>\n"
+            f"👤 <i>Player Stats & Records</i>\n"
+            f"🏆 <u>ICC Rankings</u>\n"
+            f"⭐ <u>Tournament Standings</u>\n"
+            f"❤️ <i>Save Your Favorites</i>\n"
         )
         
         keyboard = [
@@ -551,35 +573,39 @@ class CricketBot:
         
         await query.edit_message_text(
             welcome_text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     async def _show_live_matches(self, query) -> None:
         """Show live matches."""
-        await query.edit_message_text("🔄 Fetching live matches...", parse_mode='Markdown')
+        await query.edit_message_text("🔄 <b>Fetching live matches...</b>", parse_mode='HTML')
         
         try:
             matches = await get_live_matches()
             
             if matches:
-                text = "🔴 **Live Cricket Matches** 🔴\n\n"
+                text = "╔══════════════════════════╗\n"
+                text += "   ⚡ <b><u>LIVE CRICKET MATCHES</u></b> ⚡\n"
+                text += "╚══════════════════════════╝\n\n"
                 keyboard = []
                 
                 for i, match in enumerate(matches[:8]):
-                    text += f"**{i+1}. {match.title}**\n"
-                    text += f"📍 {match.venue}\n"
+                    text += f"<b><u>{i+1}. {match.title}</u></b>\n"
+                    text += f"📍 <i>{match.venue}</i>\n\n"
                     
                     if match.status.value == "live":
-                        text += f"🔴 **LIVE**\n"
-                        text += f"⚡ {match.team1.short_name}: **{match.team1.score}/{match.team1.wickets}** ({match.team1.overs} ov)\n"
+                        text += f"<b><i>🔴 🔥 LIVE NOW 🔥 🔴</i></b>\n\n"
+                        text += f"<pre>"
+                        text += f"⚡ {match.team1.short_name}: {match.team1.score}/{match.team1.wickets} ({match.team1.overs} ov)\n"
                         
                         if match.team2.score > 0:
-                            text += f"⚡ {match.team2.short_name}: **{match.team2.score}/{match.team2.wickets}** ({match.team2.overs} ov)\n"
+                            text += f"⚡ {match.team2.short_name}: {match.team2.score}/{match.team2.wickets} ({match.team2.overs} ov)"
+                        text += f"</pre>\n"
                     else:
-                        text += f"⚡ {match.team1.short_name} vs {match.team2.short_name}\n"
+                        text += f"⚡ <b>{match.team1.short_name}</b> vs <b>{match.team2.short_name}</b>\n"
                     
-                    text += f"🏆 {match.format}\n"
+                    text += f"🏆 <u>{match.format}</u>\n"
                     
                     keyboard.append([InlineKeyboardButton(
                         f"📊 {match.team1.short_name} vs {match.team2.short_name} Details",
@@ -587,16 +613,18 @@ class CricketBot:
                     )])
                     
                     if i < len(matches[:8]) - 1:
-                        text += "\n━━━━━━━━━━━━━━━━━━━━\n\n"
+                        text += "\n<b>━━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
                 
-                text += f"\n\n📊 **Total: {len(matches)} live matches**"
+                text += f"\n\n📊 <b><i>Total: {len(matches)} live matches</i></b>"
                 
                 keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="live")])
                 keyboard.append([InlineKeyboardButton("🏠 Main Menu", callback_data="start")])
             else:
                 text = (
-                    "🔴 **Live Matches** 🔴\n\n"
-                    "No live matches at the moment. 😴\n\n"
+                    "╔══════════════════════════╗\n"
+                    "   🔴 <b><u>LIVE MATCHES</u></b> 🔴\n"
+                    "╚══════════════════════════╝\n\n"
+                    "<i>No live matches at the moment.</i> 😴\n\n"
                     "Check the schedule for upcoming matches!"
                 )
                 keyboard = [
@@ -606,42 +634,46 @@ class CricketBot:
             
             await query.edit_message_text(
                 text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
         except Exception as e:
             logger.error(f"Error showing live matches: {e}")
             await query.edit_message_text(
-                "⚠️ Unable to fetch live matches. Try again later!",
-                parse_mode='Markdown'
+                "⚠️ <b><u>Unable to fetch live matches.</u></b> <i>Try again later!</i>",
+                parse_mode='HTML'
             )
     
     async def _show_schedule(self, query) -> None:
         """Show schedule."""
-        await query.edit_message_text("🔄 Loading schedule...", parse_mode='Markdown')
+        await query.edit_message_text("🔄 <b><i>Loading schedule...</i></b>", parse_mode='HTML')
         
         try:
             matches = await get_match_schedule()
             
             if matches:
-                text = "📅 **Upcoming Cricket Matches** 📅\n\n"
+                text = "╔═══════════════════════════╗\n"
+                text += "   📅 <b><u>UPCOMING MATCHES</u></b> 📅\n"
+                text += "╚═══════════════════════════╝\n\n"
                 
                 for i, match in enumerate(matches[:12]):
-                    text += f"**{i+1}. {match.title}**\n"
-                    text += f"⚡ {match.team1.short_name} vs {match.team2.short_name}\n"
-                    text += f"📍 {match.venue}\n"
-                    text += f"📅 {match.date}\n"
+                    text += f"<b>{i+1}. <u>{match.title}</u></b>\n"
+                    text += f"⚡ <b>{match.team1.short_name}</b> <i>vs</i> <b>{match.team2.short_name}</b>\n"
+                    text += f"📍 <i>{match.venue}</i>\n"
+                    text += f"📅 <u>{match.date}</u>\n"
                     text += f"🏆 {match.format}\n\n"
                     
                     if i < len(matches[:12]) - 1:
-                        text += "━━━━━━━━━━━━━━\n\n"
+                        text += "<b>━━━━━━━━━━━━━━</b>\n\n"
                 
-                text += f"\n📊 **Total: {len(matches)} upcoming matches**"
+                text += f"\n📊 <b><i>Total: {len(matches)} upcoming matches</i></b>"
             else:
                 text = (
-                    "📅 **Schedule** 📅\n\n"
-                    "No upcoming matches found.\n\n"
+                    "╔═══════════════════════════╗\n"
+                    "   📅 <b><u>SCHEDULE</u></b> 📅\n"
+                    "╚═══════════════════════════╝\n\n"
+                    "<i>No upcoming matches found.</i>\n\n"
                     "Check back later!"
                 )
             
@@ -652,52 +684,54 @@ class CricketBot:
             
             await query.edit_message_text(
                 text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
         except Exception as e:
             logger.error(f"Error showing schedule: {e}")
             await query.edit_message_text(
-                "⚠️ Unable to fetch schedule. Try again later!",
-                parse_mode='Markdown'
+                "⚠️ <b><u>Unable to fetch schedule.</u></b> <i>Try again later!</i>",
+                parse_mode='HTML'
             )
     
     async def _show_help(self, query) -> None:
         """Show help."""
         help_text = (
-            "❓ **Cricket Bot Help** ❓\n\n"
-            "**Available Commands:**\n\n"
-            "🔴 /live - View live matches\n"
-            "📅 /schedule - View upcoming matches\n"
-            "📊 /details - Detailed match stats\n"
-            "👤 /player or /stats - Player statistics\n"
-            "🏆 /rankings - ICC team rankings\n"
-            "⭐ /tournament - Tournament standings\n"
-            "❤️ /favorites - Manage favorites\n"
-            "❓ /help - Show this help\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "**Features:**\n"
-            "• Real-time live scores\n"
-            "• Ball-by-ball commentary\n"
-            "• Player & team statistics\n"
-            "• Save favorite teams/players\n"
-            "• Tournament points tables\n"
-            "• ICC rankings for all formats\n\n"
-            "Enjoy cricket like never before! 🏏"
+            "╔═══════════════════════════╗\n"
+            "   ❓ <b><u>CRICKET BOT HELP</u></b> ❓\n"
+            "╚═══════════════════════════╝\n\n"
+            "<b>━━━ AVAILABLE COMMANDS ━━━</b>\n\n"
+            "🔴 <b>/live</b> - <i>View live matches</i>\n"
+            "📅 <b>/schedule</b> - <i>View upcoming matches</i>\n"
+            "📊 <b>/details</b> - <i>Detailed match stats</i>\n"
+            "👤 <b>/player</b> or <b>/stats</b> - <i>Player statistics</i>\n"
+            "🏆 <b>/rankings</b> - <i>ICC team rankings</i>\n"
+            "⭐ <b>/tournament</b> - <i>Tournament standings</i>\n"
+            "❤️ <b>/favorites</b> - <i>Manage favorites</i>\n"
+            "❓ <b>/help</b> - <i>Show this help</i>\n\n"
+            "<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+            "<b>━━━ FEATURES ━━━</b>\n\n"
+            "• <u>Real-time live scores</u>\n"
+            "• <u>Ball-by-ball commentary</u>\n"
+            "• <i>Player & team statistics</i>\n"
+            "• <i>Save favorite teams/players</i>\n"
+            "• <i>Tournament points tables</i>\n"
+            "• <i>ICC rankings for all formats</i>\n\n"
+            "<b><i>Enjoy cricket like never before! 🏏</i></b>"
         )
         
         keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data="start")]]
         
         await query.edit_message_text(
             help_text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     async def _show_match_details(self, query, match_id: str) -> None:
         """Show detailed match information."""
-        await query.edit_message_text("🔄 Loading match details...", parse_mode='Markdown')
+        await query.edit_message_text("🔄 <b><i>Loading match details...</i></b>", parse_mode='HTML')
         
         try:
             match = await get_match_details(match_id)
@@ -705,65 +739,67 @@ class CricketBot:
             if not match:
                 await query.edit_message_text(
                     "⚠️ Match details not available.",
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
                 return
             
-            text = f"📊 **Match Details** 📊\n\n"
-            text += f"**{match.title}**\n\n"
+            text = f"╔══════════════════════════╗\n"
+            text += f"   📊 <b><u>MATCH DETAILS</u></b> 📊\n"
+            text += f"╚══════════════════════════╝\n\n"
+            text += f"<b><u>{match.title}</u></b>\n\n"
             
-            text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
             
-            text += f"📍 **Venue:** {match.venue}\n"
-            text += f"🏆 **Format:** {match.format}\n"
-            text += f"📅 **Date:** {match.date}\n\n"
+            text += f"📍 <b>Venue:</b> <i>{match.venue}</i>\n"
+            text += f"🏆 <b>Format:</b> <u>{match.format}</u>\n"
+            text += f"📅 <b>Date:</b> {match.date}\n\n"
             
             if match.toss:
-                text += f"🪙 **Toss:** {match.toss}\n\n"
+                text += f"🪙 <b>Toss:</b> <i>{match.toss}</i>\n\n"
             
-            text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
             
-            text += f"**{match.team1.name}**\n"
-            text += f"⚡ Score: **{match.team1.score}/{match.team1.wickets}**\n"
+            text += f"<b><u>{match.team1.name}</u></b>\n"
+            text += f"<pre>⚡ Score: {match.team1.score}/{match.team1.wickets}\n"
             text += f"📊 Overs: {match.team1.overs}\n"
-            text += f"📈 Run Rate: {match.team1.run_rate:.2f}\n\n"
+            text += f"📈 Run Rate: {match.team1.run_rate:.2f}</pre>\n\n"
             
-            text += f"**{match.team2.name}**\n"
+            text += f"<b><u>{match.team2.name}</u></b>\n"
             if match.team2.score > 0:
-                text += f"⚡ Score: **{match.team2.score}/{match.team2.wickets}**\n"
+                text += f"<pre>⚡ Score: {match.team2.score}/{match.team2.wickets}\n"
                 text += f"📊 Overs: {match.team2.overs}\n"
-                text += f"📈 Run Rate: {match.team2.run_rate:.2f}\n\n"
+                text += f"📈 Run Rate: {match.team2.run_rate:.2f}</pre>\n\n"
             else:
-                text += f"⚡ Yet to bat\n\n"
+                text += f"<i>⚡ Yet to bat</i>\n\n"
             
             if match.current_partnership:
-                text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                text += f"🤝 **Current Partnership:**\n{match.current_partnership}\n\n"
+                text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                text += f"🤝 <b><u>Current Partnership:</u></b>\n<i>{match.current_partnership}</i>\n\n"
             
             if match.fall_of_wickets:
-                text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                text += f"📉 **Fall of Wickets:**\n"
+                text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                text += f"📉 <b><u>Fall of Wickets:</u></b>\n"
                 for fow in match.fall_of_wickets[:5]:
-                    text += f"• {fow.get('score', 'N/A')} - {fow.get('player', 'N/A')}\n"
+                    text += f"  • <b>{fow.get('score', 'N/A')}</b> - <i>{fow.get('player', 'N/A')}</i>\n"
                 text += "\n"
             
             if match.recent_overs:
-                text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                text += f"📊 **Recent Overs:**\n"
+                text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                text += f"📊 <b><u>Recent Overs:</u></b>\n"
                 for over in match.recent_overs[:5]:
-                    text += f"• {over}\n"
+                    text += f"  • <code>{over}</code>\n"
                 text += "\n"
             
             if match.commentary:
-                text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                text += f"💬 **Recent Commentary:**\n"
+                text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                text += f"💬 <b><u>Recent Commentary:</u></b>\n"
                 for comm in match.commentary[:3]:
-                    text += f"• {comm}\n"
+                    text += f"  • <i>{comm}</i>\n"
                 text += "\n"
             
             if match.match_status_detail:
-                text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                text += f"ℹ️ **Status:** {match.match_status_detail}\n"
+                text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                text += f"ℹ️ <b>Status:</b> <u>{match.match_status_detail}</u>\n"
             
             keyboard = [
                 [InlineKeyboardButton("🔄 Refresh", callback_data=f"details:{match_id}")],
@@ -773,23 +809,25 @@ class CricketBot:
             
             await query.edit_message_text(
                 text[:4000],
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
         except Exception as e:
             logger.error(f"Error showing match details: {e}")
             await query.edit_message_text(
-                "⚠️ Unable to load match details. Try again later!",
-                parse_mode='Markdown'
+                "⚠️ <b><u>Unable to load match details.</u></b> <i>Try again later!</i>",
+                parse_mode='HTML'
             )
     
     async def _show_player_search(self, query) -> None:
         """Show player search menu."""
         text = (
-            "👤 **Player Stats Search** 👤\n\n"
-            "Type a player name to search:\n"
-            "Example: *Virat Kohli* or *Steve Smith*\n\n"
+            "╔═══════════════════════════╗\n"
+            "   👤 <b><u>PLAYER STATS SEARCH</u></b> 👤\n"
+            "╚═══════════════════════════╝\n\n"
+            "<i>Type a player name to search:</i>\n"
+            "<b>Example:</b> Virat Kohli or Steve Smith\n\n"
             "Or use popular players below! 👇"
         )
         
@@ -814,13 +852,13 @@ class CricketBot:
         
         await query.edit_message_text(
             text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     async def _show_player_stats(self, query, player_name: str) -> None:
         """Show player statistics."""
-        await query.edit_message_text(f"🔄 Loading stats for {player_name}...", parse_mode='Markdown')
+        await query.edit_message_text(f"🔄 <b><i>Loading stats for {player_name}...</i></b>", parse_mode='HTML')
         
         try:
             from cricket_scraper import get_player_stats
@@ -828,8 +866,10 @@ class CricketBot:
             
             if not player:
                 text = (
-                    f"⚠️ **Player Not Found** ⚠️\n\n"
-                    f"Could not find stats for **{player_name}**.\n\n"
+                    f"╔══════════════════════════╗\n"
+                    f"   ⚠️ <b><u>PLAYER NOT FOUND</u></b> ⚠️\n"
+                    f"╚══════════════════════════╝\n\n"
+                    f"<i>Could not find stats for</i> <b>{player_name}</b>.\n\n"
                     f"Please check the spelling or try another player."
                 )
                 keyboard = [
@@ -837,48 +877,51 @@ class CricketBot:
                     [InlineKeyboardButton("🏠 Main Menu", callback_data="start")]
                 ]
             else:
-                text = f"👤 **{player.name}** 👤\n\n"
-                text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                text = f"╔══════════════════════════╗\n"
+                text += f"   👤 <b><u>{player.name}</u></b> 👤\n"
+                text += f"╚══════════════════════════╝\n\n"
                 
                 if player.team:
-                    text += f"🏏 **Team:** {player.team}\n"
+                    text += f"🏏 <b>Team:</b> <u>{player.team}</u>\n"
                 if player.role:
-                    text += f"📋 **Role:** {player.role.value.replace('_', ' ').title()}\n"
+                    text += f"📋 <b>Role:</b> <i>{player.role.value.replace('_', ' ').title()}</i>\n"
                 text += "\n"
                 
                 if player.batting_stats:
-                    text += f"**🏏 Batting Stats:**\n"
+                    text += f"<b>━━━ 🏏 BATTING STATS ━━━</b>\n\n"
                     stats = player.batting_stats
+                    text += f"<pre>"
                     if 'runs' in stats:
-                        text += f"• Runs: {stats.get('runs', 'N/A')}\n"
+                        text += f"• Runs:        {stats.get('runs', 'N/A')}\n"
                     if 'balls' in stats:
-                        text += f"• Balls: {stats.get('balls', 'N/A')}\n"
+                        text += f"• Balls:       {stats.get('balls', 'N/A')}\n"
                     if 'average' in stats:
-                        text += f"• Average: {stats.get('average', 'N/A')}\n"
+                        text += f"• Average:     {stats.get('average', 'N/A')}\n"
                     if 'strike_rate' in stats:
                         text += f"• Strike Rate: {stats.get('strike_rate', 'N/A')}\n"
                     if 'fours' in stats:
-                        text += f"• Fours: {stats.get('fours', 'N/A')}\n"
+                        text += f"• Fours:       {stats.get('fours', 'N/A')}\n"
                     if 'sixes' in stats:
-                        text += f"• Sixes: {stats.get('sixes', 'N/A')}\n"
-                    text += "\n"
+                        text += f"• Sixes:       {stats.get('sixes', 'N/A')}"
+                    text += f"</pre>\n\n"
                 
                 if player.bowling_stats:
-                    text += f"**⚾ Bowling Stats:**\n"
+                    text += f"<b>━━━ ⚾ BOWLING STATS ━━━</b>\n\n"
                     stats = player.bowling_stats
+                    text += f"<pre>"
                     if 'wickets' in stats:
                         text += f"• Wickets: {stats.get('wickets', 'N/A')}\n"
                     if 'overs' in stats:
-                        text += f"• Overs: {stats.get('overs', 'N/A')}\n"
+                        text += f"• Overs:   {stats.get('overs', 'N/A')}\n"
                     if 'economy_rate' in stats:
                         text += f"• Economy: {stats.get('economy_rate', 'N/A')}\n"
                     if 'average' in stats:
-                        text += f"• Average: {stats.get('average', 'N/A')}\n"
-                    text += "\n"
+                        text += f"• Average: {stats.get('average', 'N/A')}"
+                    text += f"</pre>\n\n"
                 
                 if player.recent_form:
-                    text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                    text += f"📊 **Recent Form:** {' '.join(player.recent_form[:10])}\n"
+                    text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    text += f"📊 <b>Recent Form:</b> <code>{' '.join(player.recent_form[:10])}</code>\n"
                 
                 keyboard = [
                     [InlineKeyboardButton("❤️ Add to Favorites", callback_data=f"add_fav_player:{player.name}")],
@@ -888,7 +931,7 @@ class CricketBot:
             
             await query.edit_message_text(
                 text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
@@ -897,18 +940,20 @@ class CricketBot:
             await query.edit_message_text(
                 f"⚠️ Unable to load stats for {player_name}.\n\n"
                 f"Please try again later or search for another player.",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
     
     async def _show_rankings_menu(self, query) -> None:
         """Show rankings menu."""
         text = (
-            "🏆 **ICC Team Rankings** 🏆\n\n"
-            "Select a format to view rankings:\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "⚡ **T20I** - Fast-paced cricket\n"
-            "🏏 **ODI** - One Day International\n"
-            "🎯 **Test** - Traditional format\n"
+            "╔═══════════════════════════╗\n"
+            "   🏆 <b><u>ICC TEAM RANKINGS</u></b> 🏆\n"
+            "╚═══════════════════════════╝\n\n"
+            "<i>Select a format to view rankings:</i>\n\n"
+            "<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
+            "⚡ <b>T20I</b> - <i>Fast-paced cricket</i>\n"
+            "🏏 <b>ODI</b> - <i>One Day International</i>\n"
+            "🎯 <b>Test</b> - <i>Traditional format</i>\n"
         )
         
         keyboard = [
@@ -924,13 +969,13 @@ class CricketBot:
         
         await query.edit_message_text(
             text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     async def _show_rankings(self, query, format_type: str) -> None:
         """Show ICC rankings for a format."""
-        await query.edit_message_text(f"🔄 Loading {format_type} rankings...", parse_mode='Markdown')
+        await query.edit_message_text(f"🔄 <b><i>Loading {format_type} rankings...</i></b>", parse_mode='HTML')
         
         try:
             from cricket_scraper import get_icc_rankings
@@ -939,8 +984,9 @@ class CricketBot:
             emoji_map = {"T20": "⚡", "ODI": "🏏", "Test": "🎯"}
             emoji = emoji_map.get(format_type, "🏆")
             
-            text = f"{emoji} **{format_type} Team Rankings** {emoji}\n\n"
-            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+            text = f"╔══════════════════════════╗\n"
+            text += f"  {emoji} <b><u>{format_type} TEAM RANKINGS</u></b> {emoji}\n"
+            text += f"╚══════════════════════════╝\n\n"
             
             if rankings:
                 for ranking in rankings[:10]:
@@ -949,13 +995,13 @@ class CricketBot:
                     rating = ranking.get('rating', 'N/A')
                     points = ranking.get('points', rating)
                     
-                    text += f"**{rank}.** {team}\n"
-                    text += f"   📊 Rating: {rating} | Points: {points}\n\n"
+                    text += f"<b>{rank}.</b> <u>{team}</u>\n"
+                    text += f"   📊 <i>Rating:</i> <b>{rating}</b> | <i>Points:</i> <b>{points}</b>\n\n"
             else:
-                text += "No rankings data available.\n\n"
+                text += "<i>No rankings data available.</i>\n\n"
             
-            text += "━━━━━━━━━━━━━━━━━━━━\n\n"
-            text += "📅 Updated regularly from ICC official rankings"
+            text += "<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+            text += "📅 <i>Updated regularly from ICC official rankings</i>"
             
             keyboard = [
                 [InlineKeyboardButton("🔙 Back to Formats", callback_data="rankings")],
@@ -964,7 +1010,7 @@ class CricketBot:
             
             await query.edit_message_text(
                 text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
@@ -973,25 +1019,27 @@ class CricketBot:
             await query.edit_message_text(
                 f"⚠️ Unable to load {format_type} rankings.\n\n"
                 f"Please try again later.",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
     
     async def _show_tournaments(self, query) -> None:
         """Show tournaments."""
-        await query.edit_message_text("🔄 Loading tournaments...", parse_mode='Markdown')
+        await query.edit_message_text("🔄 <b><i>Loading tournaments...</i></b>", parse_mode='HTML')
         
         try:
             tournaments = await get_tournaments()
             
             if tournaments:
-                text = "⭐ **Ongoing Tournaments** ⭐\n\n"
+                text = "╔══════════════════════════╗\n"
+                text += "   ⭐ <b><u>ONGOING TOURNAMENTS</u></b> ⭐\n"
+                text += "╚══════════════════════════╝\n\n"
                 keyboard = []
                 
                 for i, tournament in enumerate(tournaments[:10]):
-                    text += f"**{i+1}. {tournament.name}**\n"
-                    text += f"🏆 Format: {tournament.format}\n"
+                    text += f"<b>{i+1}. <u>{tournament.name}</u></b>\n"
+                    text += f"🏆 <b>Format:</b> <i>{tournament.format}</i>\n"
                     text += f"📅 {tournament.start_date} to {tournament.end_date}\n"
-                    text += f"📍 Stage: {tournament.current_stage}\n\n"
+                    text += f"📍 <b>Stage:</b> <u>{tournament.current_stage}</u>\n\n"
                     
                     keyboard.append([InlineKeyboardButton(
                         f"📊 {tournament.name[:40]} Standings",
@@ -1005,35 +1053,37 @@ class CricketBot:
             
             await query.edit_message_text(
                 text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
         except Exception as e:
             logger.error(f"Error showing tournaments: {e}")
             await query.edit_message_text(
-                "⚠️ Unable to fetch tournaments. Try again later!",
-                parse_mode='Markdown'
+                "⚠️ <b><u>Unable to fetch tournaments.</u></b> <i>Try again later!</i>",
+                parse_mode='HTML'
             )
     
     async def _show_standings(self, query, tournament_id: str) -> None:
         """Show tournament standings."""
-        await query.edit_message_text("🔄 Loading standings...", parse_mode='Markdown')
+        await query.edit_message_text("🔄 <b><i>Loading standings...</i></b>", parse_mode='HTML')
         
         try:
             standings = await get_tournament_standings(tournament_id)
             
             if standings:
-                text = f"📊 **Tournament Standings** 📊\n\n"
-                text += "```\n"
+                text = f"╔══════════════════════════╗\n"
+                text += f"   📊 <b><u>TOURNAMENT STANDINGS</u></b> 📊\n"
+                text += f"╚══════════════════════════╝\n\n"
+                text += "<pre>\n"
                 text += f"{'Pos':<4} {'Team':<15} {'P':<3} {'W':<3} {'L':<3} {'Pts':<4} {'NRR':<6}\n"
-                text += "─" * 42 + "\n"
+                text += "━" * 42 + "\n"
                 
                 for standing in standings[:10]:
                     text += f"{standing.position:<4} {standing.team_name[:15]:<15} {standing.played:<3} {standing.won:<3} {standing.lost:<3} {standing.points:<4} {standing.net_run_rate:>5.2f}\n"
                 
-                text += "```\n\n"
-                text += "P=Played, W=Won, L=Lost, Pts=Points, NRR=Net Run Rate"
+                text += "</pre>\n\n"
+                text += "<i>P=Played, W=Won, L=Lost, Pts=Points, NRR=Net Run Rate</i>"
             else:
                 text = "No standings available for this tournament."
             
@@ -1044,15 +1094,15 @@ class CricketBot:
             
             await query.edit_message_text(
                 text,
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
         except Exception as e:
             logger.error(f"Error showing standings: {e}")
             await query.edit_message_text(
-                "⚠️ Unable to load standings. Try again later!",
-                parse_mode='Markdown'
+                "⚠️ <b><u>Unable to load standings.</u></b> <i>Try again later!</i>",
+                parse_mode='HTML'
             )
     
     async def _show_favorites(self, query) -> None:
@@ -1060,26 +1110,28 @@ class CricketBot:
         user = query.from_user
         prefs = await user_data_manager.get_user_preferences(user.id)
         
-        text = "❤️ **My Favorites** ❤️\n\n"
+        text = "╔══════════════════════════╗\n"
+        text += "   ❤️ <b><u>MY FAVORITES</u></b> ❤️\n"
+        text += "╚══════════════════════════╝\n\n"
         
         if prefs.favorite_teams:
-            text += "**Your Favorite Teams:**\n"
+            text += "<b>━━━ YOUR FAVORITE TEAMS ━━━</b>\n\n"
             for team in prefs.favorite_teams:
-                text += f"⭐ {team}\n"
+                text += f"  ⭐ <b>{team}</b>\n"
             text += "\n"
         else:
-            text += "No favorite teams yet!\n\n"
+            text += "<i>No favorite teams yet!</i>\n\n"
         
         if prefs.favorite_players:
-            text += "**Your Favorite Players:**\n"
+            text += "<b>━━━ YOUR FAVORITE PLAYERS ━━━</b>\n\n"
             for player in prefs.favorite_players:
-                text += f"👤 {player}\n"
+                text += f"  👤 <u>{player}</u>\n"
             text += "\n"
         else:
-            text += "No favorite players yet!\n\n"
+            text += "<i>No favorite players yet!</i>\n\n"
         
-        text += "━━━━━━━━━━━━━━━━━━━━\n\n"
-        text += "Use buttons below to manage favorites:"
+        text += "<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        text += "<i>Use buttons below to manage favorites:</i>"
         
         keyboard = [
             [
@@ -1095,17 +1147,19 @@ class CricketBot:
         
         await query.edit_message_text(
             text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     async def _prompt_add_team(self, query) -> None:
         """Prompt user to add a team."""
         text = (
-            "➕ **Add Favorite Team** ➕\n\n"
-            "Please type the team name:\n"
-            "Example: *India* or *England*\n\n"
-            "Popular teams:"
+            "╔══════════════════════════╗\n"
+            "   ➕ <b><u>ADD FAVORITE TEAM</u></b> ➕\n"
+            "╚══════════════════════════╝\n\n"
+            "<i>Please type the team name:</i>\n"
+            "<b>Example:</b> India or England\n\n"
+            "<b>Popular teams:</b>"
         )
         
         keyboard = [
@@ -1125,16 +1179,18 @@ class CricketBot:
         
         await query.edit_message_text(
             text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     async def _prompt_add_player(self, query) -> None:
         """Prompt user to add a player."""
         text = (
-            "➕ **Add Favorite Player** ➕\n\n"
-            "Please type the player name:\n"
-            "Example: *Virat Kohli*"
+            "╔══════════════════════════╗\n"
+            "   ➕ <b><u>ADD FAVORITE PLAYER</u></b> ➕\n"
+            "╚══════════════════════════╝\n\n"
+            "<i>Please type the player name:</i>\n"
+            "<b>Example:</b> Virat Kohli"
         )
         
         keyboard = [
@@ -1146,7 +1202,7 @@ class CricketBot:
         
         await query.edit_message_text(
             text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -1176,13 +1232,13 @@ class CricketBot:
         if prefs.add_favorite_team(team_name):
             await user_data_manager.save_user_preferences(prefs)
             await update.message.reply_text(
-                f"✅ Added **{team_name}** to your favorites!",
-                parse_mode='Markdown'
+                f"✅ <b>Added <u>{team_name}</u> to your favorites!</b>",
+                parse_mode='HTML'
             )
         else:
             await update.message.reply_text(
-                f"ℹ️ **{team_name}** is already in your favorites!",
-                parse_mode='Markdown'
+                f"ℹ️ <i><b>{team_name}</b> is already in your favorites!</i>",
+                parse_mode='HTML'
             )
     
     async def _add_favorite_player(self, update: Update, player_name: str) -> None:
@@ -1197,13 +1253,13 @@ class CricketBot:
             prefs.favorite_players.append(player_name)
             await user_data_manager.save_user_preferences(prefs)
             await update.message.reply_text(
-                f"✅ Added **{player_name}** to your favorites!",
-                parse_mode='Markdown'
+                f"✅ <b>Added <u>{player_name}</u> to your favorites!</b>",
+                parse_mode='HTML'
             )
         else:
             await update.message.reply_text(
-                f"ℹ️ **{player_name}** is already in your favorites!",
-                parse_mode='Markdown'
+                f"ℹ️ <i><b>{player_name}</b> is already in your favorites!</i>",
+                parse_mode='HTML'
             )
     
     async def _show_remove_team_menu(self, query) -> None:
@@ -1214,11 +1270,14 @@ class CricketBot:
         if not prefs.favorite_teams:
             await query.edit_message_text(
                 "You don't have any favorite teams to remove!",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             return
         
-        text = "🗑️ **Remove Favorite Team** 🗑️\n\nSelect a team to remove:"
+        text = "╔══════════════════════════╗\n"
+        text += "   🗑️ <b><u>REMOVE FAVORITE TEAM</u></b> 🗑️\n"
+        text += "╚══════════════════════════╝\n\n"
+        text += "<i>Select a team to remove:</i>"
         keyboard = []
         
         for team in prefs.favorite_teams:
@@ -1231,7 +1290,7 @@ class CricketBot:
         
         await query.edit_message_text(
             text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -1243,11 +1302,14 @@ class CricketBot:
         if not prefs.favorite_players:
             await query.edit_message_text(
                 "You don't have any favorite players to remove!",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
             return
         
-        text = "🗑️ **Remove Favorite Player** 🗑️\n\nSelect a player to remove:"
+        text = "╔══════════════════════════╗\n"
+        text += "   🗑️ <b><u>REMOVE FAVORITE PLAYER</u></b> 🗑️\n"
+        text += "╚══════════════════════════╝\n\n"
+        text += "<i>Select a player to remove:</i>"
         keyboard = []
         
         for player in prefs.favorite_players:
@@ -1260,7 +1322,7 @@ class CricketBot:
         
         await query.edit_message_text(
             text,
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
@@ -1409,8 +1471,8 @@ class CricketBot:
             return
         
         await update.message.reply_text(
-            f"🔄 Searching for **{player_name}**...",
-            parse_mode='Markdown'
+            f"🔄 <b><i>Searching for {player_name}...</i></b>",
+            parse_mode='HTML'
         )
         
         try:
@@ -1419,45 +1481,52 @@ class CricketBot:
             
             if not player:
                 text = (
-                    f"⚠️ **Player Not Found** ⚠️\n\n"
-                    f"Could not find stats for **{player_name}**.\n\n"
+                    f"╔══════════════════════════╗\n"
+                    f"   ⚠️ <b><u>PLAYER NOT FOUND</u></b> ⚠️\n"
+                    f"╚══════════════════════════╝\n\n"
+                    f"<i>Could not find stats for</i> <b>{player_name}</b>.\n\n"
                     f"Please check the spelling or try another player."
                 )
             else:
-                text = f"👤 **{player.name}** 👤\n\n"
+                text = f"╔══════════════════════════╗\n"
+                text += f"   👤 <b><u>{player.name}</u></b> 👤\n"
+                text += f"╚══════════════════════════╝\n\n"
                 
                 if player.team:
-                    text += f"🏏 **Team:** {player.team}\n"
+                    text += f"🏏 <b>Team:</b> <u>{player.team}</u>\n"
                 if player.role:
-                    text += f"📋 **Role:** {player.role.value.replace('_', ' ').title()}\n\n"
+                    text += f"📋 <b>Role:</b> <i>{player.role.value.replace('_', ' ').title()}</i>\n\n"
                 
-                text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
                 
                 if player.batting_stats:
-                    text += f"**🏏 Batting Stats:**\n"
+                    text += f"<b>━━━ 🏏 BATTING STATS ━━━</b>\n\n"
                     stats = player.batting_stats
+                    text += f"<pre>"
                     for key, value in stats.items():
                         text += f"• {key.replace('_', ' ').title()}: {value}\n"
-                    text += "\n"
+                    text += f"</pre>\n"
                 
                 if player.bowling_stats:
-                    text += f"**⚾ Bowling Stats:**\n"
+                    text += f"<b>━━━ ⚾ BOWLING STATS ━━━</b>\n\n"
                     stats = player.bowling_stats
+                    text += f"<pre>"
                     for key, value in stats.items():
                         text += f"• {key.replace('_', ' ').title()}: {value}\n"
-                    text += "\n"
+                    text += f"</pre>\n"
                 
                 if player.recent_form:
-                    text += f"📊 **Recent Form:** {' '.join(player.recent_form[:10])}\n"
+                    text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+                    text += f"📊 <b>Recent Form:</b> <code>{' '.join(player.recent_form[:10])}</code>\n"
             
-            await update.message.reply_text(text, parse_mode='Markdown')
+            await update.message.reply_text(text, parse_mode='HTML')
             
         except Exception as e:
             logger.error(f"Error searching for player: {e}")
             await update.message.reply_text(
                 f"⚠️ Unable to fetch stats for {player_name}.\n\n"
                 f"Please try again later.",
-                parse_mode='Markdown'
+                parse_mode='HTML'
             )
     
     async def initialize(self):
