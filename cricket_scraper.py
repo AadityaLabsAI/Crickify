@@ -354,12 +354,21 @@ async def get_live_matches() -> List[Match]:
     try:
         url = "https://www.cricbuzz.com/cricket-match/live-scores"
         
+        logger.info(f"🔍 Fetching live matches from Cricbuzz...")
+        
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 if response.status == 200:
                     html = await response.text()
+                    logger.info(f"✅ Successfully fetched HTML content")
+                    
                     matches = _parse_cricbuzz_live_matches(html)
-                    logger.info(f"✅ Found {len(matches)} live matches")
+                    
+                    logger.info(f"📊 Final result: {len(matches)} valid matches after validation and deduplication")
+                    
+                    if matches:
+                        match_ids = [m.match_id for m in matches]
+                        logger.info(f"🆔 Match IDs: {match_ids}")
                 else:
                     logger.warning(f"⚠️ HTTP {response.status} from Cricbuzz")
                     
@@ -1381,25 +1390,69 @@ def _parse_team_rankings(html: str) -> Optional[Dict[str, int]]:
     
     return None
 
+def _is_match_complete(match: Match) -> bool:
+    """Validate if a Match object has complete required data.
+    
+    Args:
+        match: Match object to validate
+        
+    Returns:
+        True if match has all required data, False otherwise
+    """
+    try:
+        if not match.match_id or not match.match_id.strip():
+            logger.debug("❌ Validation failed: Missing match_id")
+            return False
+        
+        if not match.team1.name or not match.team1.name.strip():
+            logger.debug(f"❌ Validation failed: Missing team1 name for match {match.match_id}")
+            return False
+        
+        if not match.team2.name or not match.team2.name.strip():
+            logger.debug(f"❌ Validation failed: Missing team2 name for match {match.match_id}")
+            return False
+        
+        if not match.title or not match.title.strip():
+            logger.debug(f"❌ Validation failed: Missing title for match {match.match_id}")
+            return False
+        
+        if not match.status:
+            logger.debug(f"❌ Validation failed: Missing status for match {match.match_id}")
+            return False
+        
+        if match.team1.name == match.team2.name:
+            logger.debug(f"❌ Validation failed: Same team names for match {match.match_id}")
+            return False
+        
+        logger.debug(f"✅ Validation passed for match {match.match_id}: {match.team1.name} vs {match.team2.name}")
+        return True
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Error validating match: {e}")
+        return False
+
 def _parse_cricbuzz_live_matches(html: str) -> List[Match]:
     """Parse live matches from Cricbuzz HTML with full details."""
-    matches = []
+    raw_matches = []
     seen_match_ids = set()
+    match_cards = []
     
     try:
         soup = BeautifulSoup(html, 'html.parser')
         
         match_cards = soup.find_all('div', class_=re.compile(r'cb-mtch-lst'))
         
-        logger.info(f"🔍 Found {len(match_cards)} potential match containers")
+        logger.info(f"🔍 Found {len(match_cards)} raw match card containers")
         
         for i, card in enumerate(match_cards[:20]):
             try:
                 if not isinstance(card, Tag):
+                    logger.debug(f"⚠️ Card {i} is not a Tag, skipping")
                     continue
                 
                 link = card.find('a', href=re.compile(r'/live-cricket-scores/\d+/'))
                 if not link or not isinstance(link, Tag):
+                    logger.debug(f"⚠️ Card {i} has no valid match link, skipping")
                     continue
                 
                 href = link.get('href')
@@ -1408,44 +1461,70 @@ def _parse_cricbuzz_live_matches(html: str) -> List[Match]:
                 
                 match_id_match = re.search(r'/live-cricket-scores/(\d+)/', match_url)
                 if not match_id_match:
+                    logger.debug(f"⚠️ Card {i} has no valid match ID in URL, skipping")
                     continue
                 match_id = match_id_match.group(1)
                 
                 if match_id in seen_match_ids:
+                    logger.debug(f"⚠️ Duplicate match ID {match_id} detected, skipping")
                     continue
                 seen_match_ids.add(match_id)
+                logger.info(f"🆔 Processing match ID: {match_id}")
                 
                 title_attr = link.get('title')
                 title = str(title_attr) if title_attr else link.get_text(strip=True)
+                
+                if not title or not title.strip():
+                    logger.warning(f"⚠️ Match {match_id} has no title, skipping")
+                    continue
                 
                 team_divs = card.find_all('div', class_=re.compile(r'cb-hmscg-tm-nm|cb-hmscg-bat-txt'))
                 score_divs = card.find_all('div', class_=re.compile(r'cb-hmscg-tm-scr|cb-hmscg-scr-txt'))
                 
                 teams = _parse_team_names(title)
-                if len(teams) < 2:
-                    teams = [td.get_text(strip=True) for td in team_divs[:2]]
-                    if len(teams) < 2:
-                        continue
                 
-                if not teams[0].strip() or not teams[1].strip():
+                if len(teams) < 2:
+                    logger.debug(f"⚠️ Failed to parse teams from title, trying team divs for match {match_id}")
+                    teams = [td.get_text(strip=True) for td in team_divs[:2]]
+                    
+                if len(teams) < 2:
+                    logger.warning(f"⚠️ Match {match_id} has fewer than 2 teams, skipping")
+                    continue
+                
+                if not teams[0] or not teams[0].strip():
+                    logger.warning(f"⚠️ Match {match_id} has empty team1 name, skipping")
+                    continue
+                    
+                if not teams[1] or not teams[1].strip():
+                    logger.warning(f"⚠️ Match {match_id} has empty team2 name, skipping")
+                    continue
+                
+                if teams[0].strip() == teams[1].strip():
+                    logger.warning(f"⚠️ Match {match_id} has identical team names, skipping")
                     continue
                 
                 team1_data = _parse_score_string(score_divs[0].get_text(strip=True) if len(score_divs) > 0 else "")
                 team2_data = _parse_score_string(score_divs[1].get_text(strip=True) if len(score_divs) > 1 else "")
                 
                 status_div = card.find('div', class_=re.compile(r'cb-text-live|cb-text-complete|cb-text-upcoming'))
+                
+                if not status_div:
+                    status_div = card.find('div', class_=re.compile(r'cb-text-inprogress|cb-match-status'))
+                
                 status_text = status_div.get_text(strip=True) if status_div and isinstance(status_div, Tag) else title
                 status = _determine_status(status_text)
                 
                 venue_div = card.find('div', class_=re.compile(r'cb-font-12|cb-text-gray'))
+                if not venue_div:
+                    venue_div = card.find('span', class_=re.compile(r'cb-venue|venue'))
                 venue = venue_div.get_text(strip=True) if venue_div and isinstance(venue_div, Tag) else "Venue TBD"
                 
                 match_detail_div = card.find('div', class_=re.compile(r'cb-text-gray|cb-font-12'))
                 match_detail = match_detail_div.get_text(strip=True) if match_detail_div and isinstance(match_detail_div, Tag) else ""
                 
                 team1 = Team(
-                    name=teams[0],
-                    short_name=_short_name(teams[0]),
+                    name=teams[0].strip(),
+                    short_name=_short_name(teams[0].strip()),
                     score=team1_data.get('score', 0),
                     wickets=team1_data.get('wickets', 0),
                     overs=team1_data.get('overs', '0.0'),
@@ -1455,8 +1534,8 @@ def _parse_cricbuzz_live_matches(html: str) -> List[Match]:
                 )
                 
                 team2 = Team(
-                    name=teams[1],
-                    short_name=_short_name(teams[1]),
+                    name=teams[1].strip(),
+                    short_name=_short_name(teams[1].strip()),
                     score=team2_data.get('score', 0),
                     wickets=team2_data.get('wickets', 0),
                     overs=team2_data.get('overs', '0.0'),
@@ -1478,7 +1557,7 @@ def _parse_cricbuzz_live_matches(html: str) -> List[Match]:
                 
                 match = Match(
                     match_id=match_id,
-                    title=title,
+                    title=title.strip(),
                     team1=team1,
                     team2=team2,
                     status=status,
@@ -1497,16 +1576,33 @@ def _parse_cricbuzz_live_matches(html: str) -> List[Match]:
                 if required_run_rate > 0:
                     match.match_status_detail += f" | RRR: {required_run_rate:.2f}"
                 
-                matches.append(match)
-                logger.info(f"✅ Parsed: {teams[0]} ({team1.score}/{team1.wickets}) vs {teams[1]} ({team2.score}/{team2.wickets})")
+                if _is_match_complete(match):
+                    raw_matches.append(match)
+                    logger.info(f"✅ Valid match parsed: {teams[0]} ({team1.score}/{team1.wickets}) vs {teams[1]} ({team2.score}/{team2.wickets})")
+                else:
+                    logger.warning(f"⚠️ Match {match_id} failed validation, skipping")
                 
             except Exception as e:
-                logger.warning(f"⚠️ Error parsing match {i}: {e}")
+                logger.warning(f"⚠️ Error parsing match card {i}: {e}")
                 
     except Exception as e:
         logger.error(f"❌ Error parsing Cricbuzz HTML: {e}")
     
-    return matches
+    logger.info(f"📊 Parsing complete: {len(raw_matches)} valid matches from {len(match_cards)} raw cards")
+    logger.info(f"🔢 Unique match IDs tracked: {len(seen_match_ids)}")
+    
+    final_matches = []
+    final_match_ids = set()
+    for match in raw_matches:
+        if match.match_id not in final_match_ids:
+            final_matches.append(match)
+            final_match_ids.add(match.match_id)
+        else:
+            logger.warning(f"⚠️ Duplicate match {match.match_id} in final list, removing")
+    
+    logger.info(f"✅ Final deduplicated list: {len(final_matches)} matches")
+    
+    return final_matches
 
 def _parse_cricbuzz_schedule(html: str) -> List[Match]:
     """Parse schedule from Cricbuzz HTML with complete details."""

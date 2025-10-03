@@ -17,6 +17,7 @@ from cricket_scraper import (
 )
 from user_preferences import user_data_manager
 from supabase_db import CricketDatabase
+from message_formatter import MessageFormatter
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -112,49 +113,31 @@ class CricketBot:
         try:
             matches = await get_live_matches()
             
-            if matches:
-                text = "╔══════════════════════════╗\n"
-                text += "   ⚡ <b><u>LIVE CRICKET MATCHES</u></b> ⚡\n"
-                text += "╚══════════════════════════╝\n\n"
+            seen_match_ids = set()
+            unique_matches = []
+            for match in matches:
+                if match.match_id not in seen_match_ids:
+                    unique_matches.append(match)
+                    seen_match_ids.add(match.match_id)
+                else:
+                    logger.warning(f"⚠️ Duplicate match {match.match_id} detected in bot display, removing")
+            
+            logger.info(f"📊 Displaying {len(unique_matches)} unique matches to user")
+            
+            if unique_matches:
+                text = MessageFormatter.format_live_matches_list(unique_matches)
                 keyboard = []
                 
-                for i, match in enumerate(matches[:8]):
-                    text += f"<b><u>{i+1}. {match.title}</u></b>\n"
-                    text += f"📍 <i>{match.venue}</i>\n\n"
-                    
-                    if match.status.value == "live":
-                        text += f"<b><i>🔴 🔥 LIVE NOW 🔥 🔴</i></b>\n\n"
-                        text += f"<pre>"
-                        text += f"⚡ {match.team1.short_name}: {match.team1.score}/{match.team1.wickets} ({match.team1.overs} ov)\n"
-                        
-                        if match.team2.score > 0:
-                            text += f"⚡ {match.team2.short_name}: {match.team2.score}/{match.team2.wickets} ({match.team2.overs} ov)"
-                        text += f"</pre>\n"
-                    else:
-                        text += f"⚡ <b>{match.team1.short_name}</b> vs <b>{match.team2.short_name}</b>\n"
-                    
-                    text += f"🏆 <u>{match.format}</u>\n"
-                    
+                for match in unique_matches[:8]:
                     keyboard.append([InlineKeyboardButton(
                         f"📊 {match.team1.short_name} vs {match.team2.short_name} Details",
                         callback_data=f"details:{match.match_id}"
                     )])
-                    
-                    if i < len(matches[:8]) - 1:
-                        text += "\n<b>━━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                
-                text += f"\n\n📊 <b><i>Total: {len(matches)} live matches</i></b>"
                 
                 keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="live")])
                 keyboard.append([InlineKeyboardButton("🏠 Main Menu", callback_data="start")])
             else:
-                text = (
-                    "╔══════════════════════════╗\n"
-                    "   🔴 <b><u>LIVE MATCHES</u></b> 🔴\n"
-                    "╚══════════════════════════╝\n\n"
-                    "<i>No live matches at the moment.</i> 😴\n\n"
-                    "Check the schedule for upcoming matches!"
-                )
+                text = MessageFormatter.format_error_message("no_matches")
                 keyboard = [
                     [InlineKeyboardButton("📅 View Schedule", callback_data="schedule")],
                     [InlineKeyboardButton("🏠 Main Menu", callback_data="start")]
@@ -167,10 +150,16 @@ class CricketBot:
             )
             
         except Exception as e:
-            logger.error(f"Error in /live: {e}")
+            logger.error(f"❌ Error in /live: {e}", exc_info=True)
+            error_text = MessageFormatter.format_error_message("network")
+            keyboard = [
+                [InlineKeyboardButton("🔄 Try Again", callback_data="live")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="start")]
+            ]
             await loading_msg.edit_text(
-                "⚠️ <b><u>Unable to fetch live matches.</u></b> <i>Try again later!</i>",
-                parse_mode='HTML'
+                error_text,
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
     
     async def details_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -584,49 +573,31 @@ class CricketBot:
         try:
             matches = await get_live_matches()
             
-            if matches:
-                text = "╔══════════════════════════╗\n"
-                text += "   ⚡ <b><u>LIVE CRICKET MATCHES</u></b> ⚡\n"
-                text += "╚══════════════════════════╝\n\n"
+            seen_match_ids = set()
+            unique_matches = []
+            for match in matches:
+                if match.match_id not in seen_match_ids:
+                    unique_matches.append(match)
+                    seen_match_ids.add(match.match_id)
+                else:
+                    logger.warning(f"⚠️ Duplicate match {match.match_id} detected in callback display, removing")
+            
+            logger.info(f"📊 Callback displaying {len(unique_matches)} unique matches")
+            
+            if unique_matches:
+                text = MessageFormatter.format_live_matches_list(unique_matches)
                 keyboard = []
                 
-                for i, match in enumerate(matches[:8]):
-                    text += f"<b><u>{i+1}. {match.title}</u></b>\n"
-                    text += f"📍 <i>{match.venue}</i>\n\n"
-                    
-                    if match.status.value == "live":
-                        text += f"<b><i>🔴 🔥 LIVE NOW 🔥 🔴</i></b>\n\n"
-                        text += f"<pre>"
-                        text += f"⚡ {match.team1.short_name}: {match.team1.score}/{match.team1.wickets} ({match.team1.overs} ov)\n"
-                        
-                        if match.team2.score > 0:
-                            text += f"⚡ {match.team2.short_name}: {match.team2.score}/{match.team2.wickets} ({match.team2.overs} ov)"
-                        text += f"</pre>\n"
-                    else:
-                        text += f"⚡ <b>{match.team1.short_name}</b> vs <b>{match.team2.short_name}</b>\n"
-                    
-                    text += f"🏆 <u>{match.format}</u>\n"
-                    
+                for match in unique_matches[:8]:
                     keyboard.append([InlineKeyboardButton(
                         f"📊 {match.team1.short_name} vs {match.team2.short_name} Details",
                         callback_data=f"details:{match.match_id}"
                     )])
-                    
-                    if i < len(matches[:8]) - 1:
-                        text += "\n<b>━━━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                
-                text += f"\n\n📊 <b><i>Total: {len(matches)} live matches</i></b>"
                 
                 keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="live")])
                 keyboard.append([InlineKeyboardButton("🏠 Main Menu", callback_data="start")])
             else:
-                text = (
-                    "╔══════════════════════════╗\n"
-                    "   🔴 <b><u>LIVE MATCHES</u></b> 🔴\n"
-                    "╚══════════════════════════╝\n\n"
-                    "<i>No live matches at the moment.</i> 😴\n\n"
-                    "Check the schedule for upcoming matches!"
-                )
+                text = MessageFormatter.format_error_message("no_matches")
                 keyboard = [
                     [InlineKeyboardButton("📅 View Schedule", callback_data="schedule")],
                     [InlineKeyboardButton("🏠 Main Menu", callback_data="start")]
@@ -639,10 +610,16 @@ class CricketBot:
             )
             
         except Exception as e:
-            logger.error(f"Error showing live matches: {e}")
+            logger.error(f"❌ Error showing live matches: {e}", exc_info=True)
+            error_text = MessageFormatter.format_error_message("network")
+            keyboard = [
+                [InlineKeyboardButton("🔄 Try Again", callback_data="live")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="start")]
+            ]
             await query.edit_message_text(
-                "⚠️ <b><u>Unable to fetch live matches.</u></b> <i>Try again later!</i>",
-                parse_mode='HTML'
+                error_text,
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
     
     async def _show_schedule(self, query) -> None:
@@ -737,69 +714,19 @@ class CricketBot:
             match = await get_match_details(match_id)
             
             if not match:
+                error_text = MessageFormatter.format_error_message("general")
+                keyboard = [
+                    [InlineKeyboardButton("🔙 Back to Live", callback_data="live")],
+                    [InlineKeyboardButton("🏠 Main Menu", callback_data="start")]
+                ]
                 await query.edit_message_text(
-                    "⚠️ Match details not available.",
-                    parse_mode='HTML'
+                    error_text,
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
                 return
             
-            text = f"╔══════════════════════════╗\n"
-            text += f"   📊 <b><u>MATCH DETAILS</u></b> 📊\n"
-            text += f"╚══════════════════════════╝\n\n"
-            text += f"<b><u>{match.title}</u></b>\n\n"
-            
-            text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-            
-            text += f"📍 <b>Venue:</b> <i>{match.venue}</i>\n"
-            text += f"🏆 <b>Format:</b> <u>{match.format}</u>\n"
-            text += f"📅 <b>Date:</b> {match.date}\n\n"
-            
-            if match.toss:
-                text += f"🪙 <b>Toss:</b> <i>{match.toss}</i>\n\n"
-            
-            text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-            
-            text += f"<b><u>{match.team1.name}</u></b>\n"
-            text += f"<pre>⚡ Score: {match.team1.score}/{match.team1.wickets}\n"
-            text += f"📊 Overs: {match.team1.overs}\n"
-            text += f"📈 Run Rate: {match.team1.run_rate:.2f}</pre>\n\n"
-            
-            text += f"<b><u>{match.team2.name}</u></b>\n"
-            if match.team2.score > 0:
-                text += f"<pre>⚡ Score: {match.team2.score}/{match.team2.wickets}\n"
-                text += f"📊 Overs: {match.team2.overs}\n"
-                text += f"📈 Run Rate: {match.team2.run_rate:.2f}</pre>\n\n"
-            else:
-                text += f"<i>⚡ Yet to bat</i>\n\n"
-            
-            if match.current_partnership:
-                text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                text += f"🤝 <b><u>Current Partnership:</u></b>\n<i>{match.current_partnership}</i>\n\n"
-            
-            if match.fall_of_wickets:
-                text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                text += f"📉 <b><u>Fall of Wickets:</u></b>\n"
-                for fow in match.fall_of_wickets[:5]:
-                    text += f"  • <b>{fow.get('score', 'N/A')}</b> - <i>{fow.get('player', 'N/A')}</i>\n"
-                text += "\n"
-            
-            if match.recent_overs:
-                text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                text += f"📊 <b><u>Recent Overs:</u></b>\n"
-                for over in match.recent_overs[:5]:
-                    text += f"  • <code>{over}</code>\n"
-                text += "\n"
-            
-            if match.commentary:
-                text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                text += f"💬 <b><u>Recent Commentary:</u></b>\n"
-                for comm in match.commentary[:3]:
-                    text += f"  • <i>{comm}</i>\n"
-                text += "\n"
-            
-            if match.match_status_detail:
-                text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n"
-                text += f"ℹ️ <b>Status:</b> <u>{match.match_status_detail}</u>\n"
+            text = MessageFormatter.format_match_details(match)
             
             keyboard = [
                 [InlineKeyboardButton("🔄 Refresh", callback_data=f"details:{match_id}")],
@@ -814,10 +741,17 @@ class CricketBot:
             )
             
         except Exception as e:
-            logger.error(f"Error showing match details: {e}")
+            logger.error(f"❌ Error showing match details: {e}", exc_info=True)
+            error_text = MessageFormatter.format_error_message("network")
+            keyboard = [
+                [InlineKeyboardButton("🔄 Try Again", callback_data=f"details:{match_id}")],
+                [InlineKeyboardButton("🔙 Back to Live", callback_data="live")],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="start")]
+            ]
             await query.edit_message_text(
-                "⚠️ <b><u>Unable to load match details.</u></b> <i>Try again later!</i>",
-                parse_mode='HTML'
+                error_text,
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
     
     async def _show_player_search(self, query) -> None:
