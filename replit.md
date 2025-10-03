@@ -3,7 +3,23 @@
 ## Overview
 The Cricket Live Match Centre is a production-ready Telegram bot built with love ❤️ for cricket fans. This bot provides real-time cricket updates with a simple, clean architecture that's easy to deploy and maintain. Only requires 2 environment variables: TELEGRAM_BOT_TOKEN and SUPABASE_DIRECT_URL (optional PostgreSQL connection string).
 
-## Recent Changes (October 2, 2025)
+## Recent Changes
+
+### October 3, 2025 - Major Quality & UX Improvements
+- **Fixed Data Accuracy**: Comprehensive improvements to data fetching and validation
+  - Added multi-layer duplicate match prevention (scraper + display layers)
+  - Implemented match data validation to filter incomplete/invalid matches
+  - Enhanced defensive parsing with fallback selectors for robustness
+  - Added comprehensive logging to track data pipeline issues
+- **Rich Message Formatting**: Created new `message_formatter.py` module
+  - Professional webpage-like message styling with rich HTML formatting
+  - Status badges (🔴 LIVE, ✅ COMPLETED, ⚪ UPCOMING) with visual hierarchy
+  - Better use of emojis, Unicode symbols, and box-drawing characters
+  - Telegram-compliant HTML (no nested tags in code blocks)
+  - Consistent formatting across all message types (live, schedule, details, errors)
+- **Better Error Handling**: Graceful error messages with helpful user guidance
+
+### October 2, 2025
 - **Complete Feature-Rich Bot**: Built comprehensive cricket bot with all major features
 - **Supabase Integration**: Migrated from asyncpg to Supabase Python client library
   - Uses SUPABASE_URL and SUPABASE_ANON_KEY for authentication
