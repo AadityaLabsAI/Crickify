@@ -94,44 +94,32 @@ class LiveUpdateWorker:
             logger.error(f"❌ Error in update cycle: {e}")
     
     async def _process_match(self, match):
-        """Process a single match - update database and messages."""
+        """Process a single match - update messages only (simplified version)."""
         match_id = match.match_id
         
-        # Convert match object to dictionary for database
-        match_data = {
-            'match_id': match.match_id,
-            'tournament_id': match.tournament_id,
-            'title': match.title,
-            'venue': match.venue,
-            'format': match.format,
-            'team1_id': match.team1.team_id if match.team1 else None,
-            'team2_id': match.team2.team_id if match.team2 else None,
-            'match_date': match.date,
-            'status': match.status,
-            'team1_score': match.team1_score,
-            'team1_wickets': match.team1_wickets,
-            'team1_overs': match.team1_overs,
-            'team2_score': match.team2_score,
-            'team2_wickets': match.team2_wickets,
-            'team2_overs': match.team2_overs,
-            'current_innings': match.current_innings,
-            'total_innings': 2,
-            'result': match.result,
-            'winner_id': None,
-            'commentary': getattr(match, 'commentary', [])
+        # Create a simple state dict for tracking changes (using getattr for safety)
+        current_state = {
+            'team1_score': getattr(match.team1, 'score', 0) if match.team1 else 0,
+            'team1_wickets': getattr(match.team1, 'wickets', 0) if match.team1 else 0,
+            'team1_overs': getattr(match.team1, 'overs', '0.0') if match.team1 else '0.0',
+            'team2_score': getattr(match.team2, 'score', 0) if match.team2 else 0,
+            'team2_wickets': getattr(match.team2, 'wickets', 0) if match.team2 else 0,
+            'team2_overs': getattr(match.team2, 'overs', '0.0') if match.team2 else '0.0',
+            'status': getattr(match.status, 'value', str(match.status)) if match.status else 'unknown',
+            'result': getattr(match, 'result', ''),
         }
         
         # Check if match state has changed
-        if self._has_match_changed(match_id, match_data):
-            # Store updated match data in database
-            await db.store_match(match_data)
-            
-            # Update tracked messages
+        if self._has_match_changed(match_id, current_state):
+            # Update tracked messages (no database storage for now)
             await self._update_messages_for_match(match_id, match)
             
             # Update last known state
-            self.last_match_states[match_id] = match_data.copy()
-            logger.info(f"✅ Updated match {match_id}: {match.team1.short_name} vs {match.team2.short_name}")
+            self.last_match_states[match_id] = current_state.copy()
+            
+            team1_name = getattr(match.team1, 'short_name', 'Team1') if match.team1 else 'Team1'
+            team2_name = getattr(match.team2, 'short_name', 'Team2') if match.team2 else 'Team2'
+            logger.info(f"✅ Updated match {match_id}: {team1_name} vs {team2_name}")
     
     def _has_match_changed(self, match_id: str, current_state: dict) -> bool:
         """Check if match state has changed since last update."""
@@ -144,7 +132,7 @@ class LiveUpdateWorker:
         fields_to_compare = [
             'team1_score', 'team1_wickets', 'team1_overs',
             'team2_score', 'team2_wickets', 'team2_overs',
-            'status', 'result', 'current_innings'
+            'status', 'result'
         ]
         
         for field in fields_to_compare:
@@ -189,23 +177,10 @@ class LiveUpdateWorker:
                     logger.error(f"❌ Error updating message {msg['message_id']}: {e}")
     
     async def _cleanup_completed_matches(self):
-        """Deactivate messages for completed matches."""
-        try:
-            # Get all live matches from database
-            live_matches_db = await db.get_live_matches()
-            live_match_ids = {m['match_id'] for m in live_matches_db}
-            
-            # Get all active messages
-            all_messages = await db.get_active_live_messages()
-            
-            # Find messages for non-live matches
-            for msg in all_messages:
-                if msg['match_id'] not in live_match_ids:
-                    # Match is no longer live, deactivate message
-                    await db.deactivate_message(msg['chat_id'], msg['message_id'])
-                    logger.info(f"🏁 Deactivated message for completed match {msg['match_id']}")
-        except Exception as e:
-            logger.error(f"❌ Error in cleanup: {e}")
+        """Cleanup for completed matches (simplified - skipping for now)."""
+        # TODO: Re-implement when database storage is added back
+        # For now, we're focusing on real-time updates only
+        pass
 
 
 # Global worker instance

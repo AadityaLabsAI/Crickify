@@ -333,6 +333,69 @@ class CricketDatabase:
         except Exception as e:
             logger.error(f"❌ Error upserting user: {e}")
             return False
+    
+    # ============================================================================
+    # FAVORITES OPERATIONS
+    # ============================================================================
+    
+    async def add_favorite(self, user_id: int, favorite_type: str, favorite_id: str) -> bool:
+        """Add a favorite team or player for user."""
+        if not self.enabled or not self.pool:
+            return False
+        
+        if favorite_type not in ['team', 'player']:
+            logger.error(f"❌ Invalid favorite_type: {favorite_type}")
+            return False
+        
+        try:
+            async with self.get_connection() as conn:
+                await conn.execute("""
+                    INSERT INTO user_favorites (user_id, favorite_type, favorite_id)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (user_id, favorite_type, favorite_id) DO NOTHING
+                """, user_id, favorite_type, favorite_id)
+                logger.debug(f"✅ Favorite added: user={user_id}, type={favorite_type}, id={favorite_id}")
+                return True
+        except Exception as e:
+            logger.error(f"❌ Error adding favorite: {e}")
+            return False
+    
+    async def remove_favorite(self, user_id: int, favorite_type: str, favorite_id: str) -> bool:
+        """Remove a favorite team or player for user."""
+        if not self.enabled or not self.pool:
+            return False
+        
+        try:
+            async with self.get_connection() as conn:
+                await conn.execute("""
+                    DELETE FROM user_favorites
+                    WHERE user_id = $1 AND favorite_type = $2 AND favorite_id = $3
+                """, user_id, favorite_type, favorite_id)
+                logger.debug(f"✅ Favorite removed: user={user_id}, type={favorite_type}, id={favorite_id}")
+                return True
+        except Exception as e:
+            logger.error(f"❌ Error removing favorite: {e}")
+            return False
+    
+    async def get_user_favorites(self, user_id: int) -> List[Dict[str, Any]]:
+        """Get all favorites for a user."""
+        if not self.enabled or not self.pool:
+            return []
+        
+        try:
+            async with self.get_connection() as conn:
+                rows = await conn.fetch("""
+                    SELECT id, favorite_type, favorite_id, created_at
+                    FROM user_favorites
+                    WHERE user_id = $1
+                    ORDER BY created_at DESC
+                """, user_id)
+                favorites = [dict(row) for row in rows]
+                logger.debug(f"✅ Retrieved {len(favorites)} favorites for user {user_id}")
+                return favorites
+        except Exception as e:
+            logger.error(f"❌ Error getting favorites for user {user_id}: {e}")
+            return []
 
 
 # Global database instance

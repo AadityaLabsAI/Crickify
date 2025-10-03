@@ -16,7 +16,8 @@ from cricket_scraper import (
     get_tournaments, get_tournament_standings
 )
 from user_preferences import user_data_manager
-from supabase_db import CricketDatabase
+from postgres_db import db as cricket_db, CricketDatabase
+from live_update_worker import start_live_worker, stop_live_worker
 from message_formatter import MessageFormatter
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -739,6 +740,14 @@ class CricketBot:
                 parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+            
+            if query.message and query.from_user:
+                await self.db.track_live_message(
+                    chat_id=query.message.chat_id,
+                    message_id=query.message.message_id,
+                    match_id=match.match_id,
+                    user_id=query.from_user.id
+                )
             
         except Exception as e:
             logger.error(f"❌ Error showing match details: {e}", exc_info=True)
@@ -1469,8 +1478,12 @@ class CricketBot:
         
         self.application = Application.builder().token(self.token).build()
         
-        self.db = CricketDatabase()
-        await self.db.initialize()
+        await cricket_db.connect()
+        self.db = cricket_db
+        
+        bot_instance = self.application.bot
+        self.live_worker = await start_live_worker(bot_instance, update_interval=3)
+        logger.info("✅ Live update worker started")
         
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("live", self.live_command))
@@ -1505,6 +1518,10 @@ class CricketBot:
             
             self.application.run_polling(allowed_updates=Update.ALL_TYPES)
         finally:
+            if hasattr(self, 'live_worker') and self.live_worker:
+                asyncio.run(stop_live_worker())
+            if self.db:
+                asyncio.run(self.db.disconnect())
             loop.close()
 
 def main():
