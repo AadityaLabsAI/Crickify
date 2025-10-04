@@ -741,7 +741,7 @@ class CricketBot:
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
-            if query.message and query.from_user:
+            if query.message and query.from_user and self.db:
                 await self.db.track_live_message(
                     chat_id=query.message.chat_id,
                     message_id=query.message.message_id,
