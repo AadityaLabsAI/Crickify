@@ -1,5 +1,4 @@
 # Clean requirements.txt for Railway deployment
-# Removes all hash requirements to fix Railway --require-hashes mode errors
 # Includes all necessary dependencies with proper version pinning
 
 # Core web scraping and HTTP dependencies
@@ -15,13 +14,13 @@ python-telegram-bot>=22.4
 apscheduler>=3.11.0
 nest-asyncio>=1.6.0
 
-# System monitoring (was causing the Railway build error)
+# System monitoring
 psutil>=5.9.0
 
 # File I/O for user preferences
 aiofiles>=24.1.0
 
-# Performance optimization dependencies (pinned for stability)
+# Performance optimization dependencies
 cachetools>=5.3.0
 lz4>=4.3.2
 orjson>=3.10.0
@@ -31,9 +30,5 @@ xxhash>=3.4.1
 asyncpg>=0.29.0
 psycopg2-binary>=2.9.9
 
-# Note: python-telegram-bot already provides telegram functionality
-telegram
-asyncpg
-psycopg2-binary
-supabase
-supabase
+# Supabase integration (optional)
+supabase>=2.0.0
