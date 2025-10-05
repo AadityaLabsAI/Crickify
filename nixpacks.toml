@@ -34,7 +34,6 @@ nixPkgs = [
 # Optimized dependency installation with Railway-specific configurations
 cmds = [
     "echo '🚀 Starting Railway-optimized installation...'",
-    "pip install --upgrade pip setuptools wheel",
     "pip install --no-cache-dir --prefer-binary -r requirements.txt",
     "echo '✅ Dependencies installed successfully'",
     "python -c 'import telegram; print(f\"✅ Telegram Bot API: {telegram.__version__}\")'",
