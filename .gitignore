@@ -1,7 +1,33 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
 *.log
+
+# Local data
 user_data/
+
+# Replit
+.pythonlibs/
+.replit
+replit.nix
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak

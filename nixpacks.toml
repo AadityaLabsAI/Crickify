@@ -1,57 +1,7 @@
-# Railway Nixpacks Configuration for Cricket Bot
-# Production-optimized for Railway deployment with advanced monitoring and health checks
+# Cricket Bot - Railway/Nixpacks Configuration
+# This is the MINIMAL config that lets Nixpacks handle everything automatically
+# DO NOT add custom install commands - they break NixOS package management
 
 [variables]
-# Core deployment environment variables
 NIXPACKS_PYTHON_VERSION = "3.11"
 PYTHONUNBUFFERED = "1"
-PYTHONDONTWRITEBYTECODE = "1"
-PYTHONIOENCODING = "utf-8"
-
-# Railway-specific optimizations
-PORT = "5000"
-RAILWAY_HEALTHCHECK_TIMEOUT_SEC = "300"
-RAILWAY_RESTART_LIMIT = "10"
-
-# Memory and performance optimization
-MALLOC_TRIM_THRESHOLD_ = "100000"
-PYTHONMALLOC = "malloc"
-
-# Logging optimization for Railway
-PYTHONFAULTHANDLER = "1"
-PYTHONHASHSEED = "random"
-
-[phases.setup]
-# Install Python 3.11 and essential system dependencies for Railway
-nixPkgs = [
-    "python311", 
-    "python311Packages.pip",
-    "python311Packages.setuptools",
-    "python311Packages.wheel"
-]
-
-[phases.install]
-# Optimized dependency installation with Railway-specific configurations
-cmds = [
-    "echo '🚀 Starting Railway-optimized installation...'",
-    "pip install --no-cache-dir --prefer-binary -r requirements.txt",
-    "echo '✅ Dependencies installed successfully'",
-    "python -c 'import telegram; print(f\"✅ Telegram Bot API: {telegram.__version__}\")'",
-    "python -c 'import aiohttp; print(f\"✅ AsyncIO HTTP: {aiohttp.__version__}\")'",
-    "echo '🏏 Cricket Bot dependencies verified'"
-]
-
-[phases.build]
-# Build phase with safe dependency validation
-cmds = [
-    "echo '🔧 Starting Railway build validation...'",
-    "python -c 'import sys; print(f\"✅ Python {sys.version}\")'",
-    "python -c 'import platform; print(f\"✅ Platform: {platform.system()} {platform.machine()}\")'",
-    "echo '🔍 Validating core Python modules...'",
-    "python -c 'import asyncio, logging, os; print(\"✅ Core modules available\")'",
-    "echo '✅ Railway build completed successfully - Cricket Bot ready for deployment! 🏏'"
-]
-
-# Railway-specific start configuration (fallback if Procfile not found)
-[start]
-cmd = "python -u main.py"
