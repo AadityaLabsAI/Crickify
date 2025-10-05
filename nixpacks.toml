@@ -43,7 +43,7 @@ cmds = [
 ]
 
 [phases.build]
-# Enhanced build phase with comprehensive validation and health check setup
+# Enhanced build phase with comprehensive validation
 cmds = [
     "echo '🔧 Starting Railway build validation...'",
     "python -c 'import sys; print(f\"✅ Python {sys.version}\")'",
@@ -52,17 +52,7 @@ cmds = [
     "python -c 'from bot import CricketBot; print(\"✅ Bot class loads successfully\")'",
     "echo '🔍 Validating critical imports...'",
     "python -c 'import asyncio, logging, os; print(\"✅ Core modules available\")'",
-    "echo '🏗️ Creating runtime directories...'",
-    "mkdir -p /tmp/logs /tmp/cache",
-    "echo '🎯 Setting up health check endpoint...'",
-    "echo 'import os; print(\"HEALTHY\" if os.getenv(\"TELEGRAM_BOT_TOKEN\") else \"MISSING_TOKEN\")' > health_check.py",
     "echo '✅ Railway build completed successfully - Cricket Bot ready for deployment! 🏏'"
-]
-
-# Health check configuration for Railway
-[phases.healthcheck]
-cmds = [
-    "python health_check.py"
 ]
 
 # Railway-specific start configuration (fallback if Procfile not found)
