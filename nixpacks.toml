@@ -28,9 +28,9 @@ nixPkgs = [
     "python311Packages.pip",
     "python311Packages.setuptools",
     "python311Packages.wheel",
-    "procps",          # For process monitoring
-    "curl",            # For health checks
-    "ca-certificates"  # For secure HTTPS connections
+    "procps",
+    "curl",
+    "cacert"
 ]
 
 [phases.install]
