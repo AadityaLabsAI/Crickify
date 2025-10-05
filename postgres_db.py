@@ -23,28 +23,38 @@ class CricketDatabase:
         self.pool: Optional[asyncpg.Pool] = None
         self.enabled = False
         
-        # Get connection details from environment
-        self.host = os.getenv('PGHOST', 'helium')
-        self.database = os.getenv('PGDATABASE', 'heliumdb')
-        self.user = os.getenv('PGUSER', 'postgres')
-        self.password = os.getenv('PGPASSWORD', 'password')
-        self.port = int(os.getenv('PGPORT', '5432'))
-        
     async def connect(self) -> bool:
         """Create connection pool to PostgreSQL database."""
         try:
+            # Read connection details from environment at connect time (after main.py parses DATABASE_URL)
+            host = os.getenv('PGHOST')
+            database = os.getenv('PGDATABASE')
+            user = os.getenv('PGUSER')
+            password = os.getenv('PGPASSWORD')
+            port = int(os.getenv('PGPORT', '5432'))
+            
+            if not all([host, database, user, password]):
+                missing = []
+                if not host: missing.append('PGHOST')
+                if not database: missing.append('PGDATABASE')
+                if not user: missing.append('PGUSER')
+                if not password: missing.append('PGPASSWORD')
+                logger.error(f"❌ Missing PostgreSQL credentials: {', '.join(missing)}")
+                self.enabled = False
+                return False
+            
             self.pool = await asyncpg.create_pool(
-                host=self.host,
-                database=self.database,
-                user=self.user,
-                password=self.password,
-                port=self.port,
+                host=host,
+                database=database,
+                user=user,
+                password=password,
+                port=port,
                 min_size=2,
                 max_size=10,
                 command_timeout=30
             )
             self.enabled = True
-            logger.info(f"✅ PostgreSQL connected: {self.host}:{self.port}/{self.database}")
+            logger.info(f"✅ PostgreSQL connected: {host}:{port}/{database}")
             return True
         except Exception as e:
             logger.error(f"❌ Failed to connect to PostgreSQL: {e}")
@@ -57,6 +67,21 @@ class CricketDatabase:
             await self.pool.close()
             self.enabled = False
             logger.info("🔌 PostgreSQL disconnected")
+    
+    async def health_check(self) -> bool:
+        """Check if database connection is healthy."""
+        if not self.enabled or not self.pool:
+            logger.error("❌ Health check failed: Database not enabled")
+            return False
+        
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            logger.debug("✅ Database health check passed")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Database health check failed: {e}")
+            return False
     
     @asynccontextmanager
     async def get_connection(self):

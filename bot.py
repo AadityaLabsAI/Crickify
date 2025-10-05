@@ -1478,8 +1478,17 @@ class CricketBot:
         
         self.application = Application.builder().token(self.token).build()
         
-        await cricket_db.connect()
+        logger.info("🔌 Connecting to PostgreSQL database...")
+        db_connected = await cricket_db.connect()
+        
+        if not db_connected:
+            logger.error("❌ CRITICAL: Failed to connect to PostgreSQL database")
+            logger.error("❌ Database connection is REQUIRED for this bot to function")
+            logger.error("❌ Please check your database credentials and try again")
+            raise RuntimeError("Database connection failed - bot cannot start without database")
+        
         self.db = cricket_db
+        logger.info("✅ PostgreSQL database connected successfully")
         
         bot_instance = self.application.bot
         self.live_worker = await start_live_worker(bot_instance, update_interval=3)

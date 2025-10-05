@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 Main entry point for the Cricket Live Match Centre Telegram Bot.
-Simplified version - loads environment variables and starts the bot.
+Production version - validates required environment variables and starts the bot.
 """
 
 import os
 import logging
 import sys
+from urllib.parse import urlparse
 from bot import main
 
 # Configure logging
@@ -25,36 +26,89 @@ logging.getLogger('telegram.request').setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
+def parse_database_url(database_url: str) -> dict:
+    """Parse DATABASE_URL into PostgreSQL connection parameters."""
+    try:
+        parsed = urlparse(database_url)
+        return {
+            'PGHOST': parsed.hostname,
+            'PGPORT': str(parsed.port or 5432),
+            'PGDATABASE': parsed.path.lstrip('/'),
+            'PGUSER': parsed.username,
+            'PGPASSWORD': parsed.password
+        }
+    except Exception as e:
+        logger.error(f"❌ Failed to parse DATABASE_URL: {e}")
+        return {}
+
 def main_entry_point():
-    """Simple main entry point - validates env vars and starts bot."""
+    """Main entry point - validates required env vars and starts bot."""
     logger.info("🚀 Starting Cricket Bot...")
+    logger.info("=" * 60)
     
-    # Load and validate required environment variables
+    # 1. Validate TELEGRAM_BOT_TOKEN (REQUIRED)
     telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
-    supabase_url = os.getenv('SUPABASE_URL')
-    supabase_anon_key = os.getenv('SUPABASE_ANON_KEY')
-    
-    # Validate critical environment variable
     if not telegram_token:
-        logger.error("❌ ERROR: TELEGRAM_BOT_TOKEN environment variable is required")
-        logger.error("📖 Please set this environment variable")
+        logger.error("❌ CRITICAL: TELEGRAM_BOT_TOKEN environment variable is REQUIRED")
+        logger.error("📖 Get your token from @BotFather on Telegram")
         sys.exit(1)
     
     logger.info("✅ TELEGRAM_BOT_TOKEN: SET")
     
-    # Optional environment variables for database
-    if supabase_url and supabase_anon_key:
-        logger.info("✅ SUPABASE_URL: SET")
-        logger.info("✅ SUPABASE_ANON_KEY: SET")
-        logger.info("🗄️  Database features enabled")
-    else:
-        if not supabase_url:
-            logger.info("⚠️  SUPABASE_URL not set")
-        if not supabase_anon_key:
-            logger.info("⚠️  SUPABASE_ANON_KEY not set")
-        logger.info("📡 Bot will use live scraping only")
+    # 2. Validate DATABASE credentials (REQUIRED)
+    database_url = os.getenv('DATABASE_URL')
     
-    logger.info("=" * 50)
+    if database_url:
+        logger.info("✅ DATABASE_URL found - parsing connection parameters...")
+        db_params = parse_database_url(database_url)
+        for key, value in db_params.items():
+            if value:
+                os.environ[key] = value
+                logger.info(f"✅ {key}: SET from DATABASE_URL")
+    
+    # Check individual PostgreSQL parameters
+    pghost = os.getenv('PGHOST')
+    pgdatabase = os.getenv('PGDATABASE')
+    pguser = os.getenv('PGUSER')
+    pgpassword = os.getenv('PGPASSWORD')
+    pgport = os.getenv('PGPORT', '5432')
+    
+    missing_vars = []
+    if not pghost:
+        missing_vars.append('PGHOST')
+    if not pgdatabase:
+        missing_vars.append('PGDATABASE')
+    if not pguser:
+        missing_vars.append('PGUSER')
+    if not pgpassword:
+        missing_vars.append('PGPASSWORD')
+    
+    if missing_vars:
+        logger.error("=" * 60)
+        logger.error("❌ CRITICAL: Database credentials are REQUIRED for this bot")
+        logger.error(f"❌ Missing environment variables: {', '.join(missing_vars)}")
+        logger.error("")
+        logger.error("📖 Railway Deployment:")
+        logger.error("   1. Add PostgreSQL plugin in Railway dashboard")
+        logger.error("   2. Railway will auto-set DATABASE_URL")
+        logger.error("")
+        logger.error("📖 Manual PostgreSQL Setup:")
+        logger.error("   Set these environment variables:")
+        logger.error("   - PGHOST (database host)")
+        logger.error("   - PGDATABASE (database name)")
+        logger.error("   - PGUSER (database user)")
+        logger.error("   - PGPASSWORD (database password)")
+        logger.error("   - PGPORT (default: 5432)")
+        logger.error("=" * 60)
+        sys.exit(1)
+    
+    logger.info(f"✅ PGHOST: {pghost}")
+    logger.info(f"✅ PGDATABASE: {pgdatabase}")
+    logger.info(f"✅ PGUSER: {pguser}")
+    logger.info(f"✅ PGPORT: {pgport}")
+    logger.info("✅ PGPASSWORD: SET (hidden)")
+    logger.info("🗄️  PostgreSQL database connection configured")
+    logger.info("=" * 60)
     
     # Start the bot
     try:

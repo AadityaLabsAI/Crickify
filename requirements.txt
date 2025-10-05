@@ -26,9 +26,7 @@ lz4>=4.3.2
 orjson>=3.10.0
 xxhash>=3.4.1
 
-# PostgreSQL database dependencies
+# PostgreSQL database dependencies (REQUIRED)
+# Railway provides PostgreSQL with DATABASE_URL
 asyncpg>=0.29.0
 psycopg2-binary>=2.9.9
-
-# Supabase integration (optional)
-supabase>=2.0.0
