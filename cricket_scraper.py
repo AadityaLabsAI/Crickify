@@ -1744,25 +1744,48 @@ def _parse_score_card(score_card_elem) -> Dict[str, Any]:
     return data
 
 def _extract_partnership(card_elem) -> str:
-    """Extract current partnership information."""
+    """Extract current partnership information using robust methods."""
     try:
-        partnership_elem = card_elem.find('div', class_=re.compile(r'partnership|cb-text-partnership'))
+        partnership_elem = card_elem.find('div', class_=re.compile(r'partnership|cb-text-partnership|cb-hmscg-ptrnrshp'))
         if partnership_elem:
             return partnership_elem.get_text(strip=True)
+
+        # Regex fallback
+        text = card_elem.get_text()
+        ptr_match = re.search(r'Partnership:\s*(\d+\(\d+\))', text, re.I)
+        if ptr_match:
+            return ptr_match.group(1)
+
     except Exception as e:
         logger.debug(f"No partnership found: {e}")
     
     return ""
 
 def _extract_recent_overs(card_elem) -> List[str]:
-    """Extract recent overs information."""
+    """Extract recent overs information using robust methods."""
     recent_overs = []
     
     try:
-        overs_elem = card_elem.find('div', class_=re.compile(r'recent-overs|cb-recent'))
+        # Standard Cricbuzz class
+        overs_elem = card_elem.find('div', class_=re.compile(r'recent-overs|cb-recent|cb-col-100.*cb-font-12'))
         if overs_elem:
+            # Look for spans or text within the div
             over_spans = overs_elem.find_all('span')
-            recent_overs = [span.get_text(strip=True) for span in over_spans]
+            if over_spans:
+                recent_overs = [span.get_text(strip=True) for span in over_spans if span.get_text(strip=True)]
+            else:
+                # Try to find common over patterns like "1 . 4 6 W 0"
+                text = overs_elem.get_text(strip=True)
+                if '|' in text:
+                    recent_overs = [o.strip() for o in text.split('|')]
+
+        # Regex fallback for patterns like "Recent: 0 1 4 1 W 1"
+        if not recent_overs:
+            text = card_elem.get_text()
+            recent_match = re.search(r'Recent:\s*([0-9\sW|.]+)', text, re.I)
+            if recent_match:
+                recent_overs = [o.strip() for o in recent_match.group(1).split() if o.strip()]
+
     except Exception as e:
         logger.debug(f"No recent overs found: {e}")
     

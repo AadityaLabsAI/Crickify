@@ -20,12 +20,11 @@
 5. Railway will automatically detect the configuration
 
 ### Step 3: Add PostgreSQL Database (REQUIRED)
-**The bot requires a PostgreSQL database to store and refresh match data every second.**
+**The bot requires a PostgreSQL database to store and refresh match data.**
 
 1. In your Railway project dashboard, click "New" → "Database" → "Add PostgreSQL"
-2. Railway will automatically create the database and set the `DATABASE_URL` environment variable
-3. Go to the PostgreSQL service → "Data" tab
-4. Click "Query" and run the SQL from `database_schema.sql` to create tables
+2. Railway will automatically create the database and set the `DATABASE_URL` environment variable.
+3. **Automatic Setup**: The bot is designed to automatically initialize the database schema on startup if a valid connection is found. You don't need to manually run the SQL script anymore!
 
 ### Step 4: Add Environment Variables
 In Railway dashboard, go to your bot service → Variables and add:

@@ -33,50 +33,50 @@ class MessageFormatter:
         text += f"📅 <b>Date:</b> <code>{match.date}</code>\n\n"
         
         if match.status.value == "live":
-            text += f"<b>━━━━━━━ 🔴 LIVE SCORECARD 🔴 ━━━━━━━</b>\n\n"
+            text += f"<b>━━━ 🔴 LIVE SCORECARD 🔴 ━━━</b>\n\n"
             
-            text += f"<code>⚡ {match.team1.short_name}: {match.team1.score}/{match.team1.wickets}"
+            text += f"🏏 <b>{match.team1.short_name}:</b> <code>{match.team1.score}/{match.team1.wickets}</code>"
             if match.team1.overs != "0.0":
-                text += f" ({match.team1.overs} ov)"
-            text += f"</code>\n"
+                text += f" <i>({match.team1.overs} ov)</i>"
+            text += f"\n"
             
-            if match.team2.score > 0:
-                text += f"<code>⚡ {match.team2.short_name}: {match.team2.score}/{match.team2.wickets}"
+            if match.team2.score > 0 or match.team2.overs != "0.0":
+                text += f"🏏 <b>{match.team2.short_name}:</b> <code>{match.team2.score}/{match.team2.wickets}</code>"
                 if match.team2.overs != "0.0":
-                    text += f" ({match.team2.overs} ov)"
-                text += f"</code>\n\n"
+                    text += f" <i>({match.team2.overs} ov)</i>"
+                text += f"\n\n"
             else:
-                text += f"<code>⚪ {match.team2.short_name}: Yet to bat</code>\n\n"
+                text += f"🏏 <b>{match.team2.short_name}:</b> <i>Yet to bat</i>\n\n"
             
             if match.match_status_detail:
-                text += f"<b>📊 Status:</b> <i>{match.match_status_detail}</i>\n\n"
+                text += f"📊 <b>Status:</b> <i>{match.match_status_detail}</i>\n\n"
             
             if match.current_partnership:
-                text += f"🤝 <u>Partnership:</u> <code>{match.current_partnership}</code>\n\n"
+                text += f"🤝 <b>Partnership:</b> <code>{match.current_partnership}</code>\n\n"
             
             if match.recent_overs:
-                text += f"📈 <u>Recent Overs:</u> <code>{' | '.join(match.recent_overs[:5])}</code>\n\n"
+                text += f"📈 <b>Recent Overs:</b> <code>{' | '.join(match.recent_overs[:5])}</code>\n\n"
                 
         elif match.status.value == "completed":
-            text += f"<b>━━━━━━━ ✅ MATCH COMPLETED ━━━━━━━</b>\n\n"
+            text += f"<b>━━━ ✅ MATCH COMPLETED ━━━</b>\n\n"
             
-            text += f"<code>🏏 {match.team1.short_name}: {match.team1.score}/{match.team1.wickets}"
+            text += f"🏏 <b>{match.team1.short_name}:</b> <code>{match.team1.score}/{match.team1.wickets}</code>"
             if match.team1.overs != "0.0":
-                text += f" ({match.team1.overs} ov)"
-            text += f"</code>\n"
-            text += f"<code>🏏 {match.team2.short_name}: {match.team2.score}/{match.team2.wickets}"
+                text += f" <i>({match.team1.overs} ov)</i>"
+            text += f"\n"
+            text += f"🏏 <b>{match.team2.short_name}:</b> <code>{match.team2.score}/{match.team2.wickets}</code>"
             if match.team2.overs != "0.0":
-                text += f" ({match.team2.overs} ov)"
-            text += f"</code>\n\n"
+                text += f" <i>({match.team2.overs} ov)</i>"
+            text += f"\n\n"
             
             if match.result:
-                text += f"🏆 <b><u>Result:</u></b> <i>{match.result}</i>\n\n"
+                text += f"🏆 <b>Result:</b> <b><i>{match.result}</i></b>\n\n"
             
             if match.player_of_match:
                 text += f"⭐ <b>Player of the Match:</b> <u>{match.player_of_match}</u>\n\n"
                 
         else:
-            text += f"<b>━━━━━━━ ⚪ UPCOMING MATCH ━━━━━━━</b>\n\n"
+            text += f"<b>━━━ ⚪ UPCOMING MATCH ━━━</b>\n\n"
             text += f"⚡ <b>{match.team1.short_name}</b> <i>vs</i> <b>{match.team2.short_name}</b>\n\n"
             
             if match.start_time:
@@ -209,25 +209,25 @@ class MessageFormatter:
         
         text += f"\n<b>━━━ 📊 SCORECARD ━━━</b>\n\n"
         
-        text += f"<b>🏏 {match.team1.name} ({match.team1.short_name})</b>\n"
-        text += f"<code>Score: {match.team1.score}/{match.team1.wickets}"
+        text += f"🏏 <b>{match.team1.name} ({match.team1.short_name})</b>\n"
+        text += f"  Score: <code>{match.team1.score}/{match.team1.wickets}</code>"
         if match.team1.overs != "0.0":
-            text += f" ({match.team1.overs} ov)"
-        text += f"</code>\n"
+            text += f" <i>({match.team1.overs} ov)</i>"
+        text += f"\n"
         if match.team1.run_rate > 0:
-            text += f"<code>Run Rate: {match.team1.run_rate:.2f}</code>\n"
+            text += f"  RR: <code>{match.team1.run_rate:.2f}</code>\n"
         text += f"\n"
         
-        text += f"<b>🏏 {match.team2.name} ({match.team2.short_name})</b>\n"
-        if match.team2.score > 0:
-            text += f"<code>Score: {match.team2.score}/{match.team2.wickets}"
+        text += f"🏏 <b>{match.team2.name} ({match.team2.short_name})</b>\n"
+        if match.team2.score > 0 or match.team2.overs != "0.0":
+            text += f"  Score: <code>{match.team2.score}/{match.team2.wickets}</code>"
             if match.team2.overs != "0.0":
-                text += f" ({match.team2.overs} ov)"
-            text += f"</code>\n"
+                text += f" <i>({match.team2.overs} ov)</i>"
+            text += f"\n"
             if match.team2.run_rate > 0:
-                text += f"<code>Run Rate: {match.team2.run_rate:.2f}</code>\n"
+                text += f"  RR: <code>{match.team2.run_rate:.2f}</code>\n"
         else:
-            text += f"<code>Yet to bat</code>\n"
+            text += f"  <i>Yet to bat</i>\n"
         text += f"\n"
         
         if match.status.value == "live" and match.match_status_detail:

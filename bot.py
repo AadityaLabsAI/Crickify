@@ -15,7 +15,7 @@ from cricket_scraper import (
     get_live_matches, get_match_schedule, get_match_details,
     get_tournaments, get_tournament_standings
 )
-from user_preferences import user_data_manager
+from data_manager import data_manager
 from postgres_db import db as cricket_db, CricketDatabase
 from live_update_worker import start_live_worker, stop_live_worker
 from message_formatter import MessageFormatter
@@ -60,7 +60,7 @@ class CricketBot:
         user = update.effective_user
         logger.info(f"User {user.id} started the bot")
         
-        prefs = await user_data_manager.get_user_preferences(
+        prefs = await data_manager.get_user_preferences(
             user.id, user.username, user.first_name
         )
         
@@ -248,7 +248,7 @@ class CricketBot:
             return
         
         user = update.effective_user
-        prefs = await user_data_manager.get_user_preferences(user.id)
+        prefs = await data_manager.get_user_preferences(user.id)
         
         text = "╔══════════════════════════╗\n"
         text += "   ❤️ <b><u>MY FAVORITES</u></b> ❤️\n"
@@ -502,7 +502,7 @@ class CricketBot:
             await self._prompt_add_player(query)
         elif callback_data.startswith("add_team:"):
             team_name = callback_data.split(":", 1)[1]
-            await self._add_team_callback(query, team_name)
+            await self._add_team(query, team_name)
         elif callback_data.startswith("add_fav_team:"):
             team_name = callback_data.split(":", 1)[1]
             await self._add_team_to_db(query, team_name)
@@ -741,8 +741,8 @@ class CricketBot:
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
-            if query.message and query.from_user and self.db:
-                await self.db.track_live_message(
+            if query.message and query.from_user:
+                await data_manager.track_live_message(
                     chat_id=query.message.chat_id,
                     message_id=query.message.message_id,
                     match_id=match.match_id,
@@ -1051,7 +1051,7 @@ class CricketBot:
     async def _show_favorites(self, query) -> None:
         """Show user favorites."""
         user = query.from_user
-        prefs = await user_data_manager.get_user_preferences(user.id)
+        prefs = await data_manager.get_user_preferences(user.id)
         
         text = "╔══════════════════════════╗\n"
         text += "   ❤️ <b><u>MY FAVORITES</u></b> ❤️\n"
@@ -1149,16 +1149,14 @@ class CricketBot:
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
-    async def _add_team_callback(self, query, team_name: str) -> None:
+    async def _add_team(self, query, team_name: str) -> None:
         """Add a team to favorites via callback."""
         if not query.from_user:
             return
         
         user = query.from_user
-        prefs = await user_data_manager.get_user_preferences(user.id)
         
-        if prefs.add_favorite_team(team_name):
-            await user_data_manager.save_user_preferences(prefs)
+        if await data_manager.add_favorite(user.id, 'team', team_name):
             await query.answer(f"✅ Added {team_name} to favorites!")
             await self._show_favorites(query)
         else:
@@ -1170,10 +1168,8 @@ class CricketBot:
             return
         
         user = update.effective_user
-        prefs = await user_data_manager.get_user_preferences(user.id)
         
-        if prefs.add_favorite_team(team_name):
-            await user_data_manager.save_user_preferences(prefs)
+        if await data_manager.add_favorite(user.id, 'team', team_name):
             await update.message.reply_text(
                 f"✅ <b>Added <u>{team_name}</u> to your favorites!</b>",
                 parse_mode='HTML'
@@ -1190,11 +1186,8 @@ class CricketBot:
             return
         
         user = update.effective_user
-        prefs = await user_data_manager.get_user_preferences(user.id)
         
-        if player_name not in prefs.favorite_players:
-            prefs.favorite_players.append(player_name)
-            await user_data_manager.save_user_preferences(prefs)
+        if await data_manager.add_favorite(user.id, 'player', player_name):
             await update.message.reply_text(
                 f"✅ <b>Added <u>{player_name}</u> to your favorites!</b>",
                 parse_mode='HTML'
@@ -1208,7 +1201,7 @@ class CricketBot:
     async def _show_remove_team_menu(self, query) -> None:
         """Show menu to remove a team."""
         user = query.from_user
-        prefs = await user_data_manager.get_user_preferences(user.id)
+        prefs = await data_manager.get_user_preferences(user.id)
         
         if not prefs.favorite_teams:
             await query.edit_message_text(
@@ -1240,7 +1233,7 @@ class CricketBot:
     async def _show_remove_player_menu(self, query) -> None:
         """Show menu to remove a player."""
         user = query.from_user
-        prefs = await user_data_manager.get_user_preferences(user.id)
+        prefs = await data_manager.get_user_preferences(user.id)
         
         if not prefs.favorite_players:
             await query.edit_message_text(
@@ -1272,10 +1265,8 @@ class CricketBot:
     async def _remove_team(self, query, team_name: str) -> None:
         """Remove a team from favorites."""
         user = query.from_user
-        prefs = await user_data_manager.get_user_preferences(user.id)
         
-        if prefs.remove_favorite_team(team_name):
-            await user_data_manager.save_user_preferences(prefs)
+        if await data_manager.remove_favorite(user.id, 'team', team_name):
             await query.answer(f"✅ Removed {team_name} from favorites!")
             await self._show_favorites(query)
         else:
@@ -1284,129 +1275,34 @@ class CricketBot:
     async def _remove_player(self, query, player_name: str) -> None:
         """Remove a player from favorites."""
         user = query.from_user
-        prefs = await user_data_manager.get_user_preferences(user.id)
         
-        if player_name in prefs.favorite_players:
-            prefs.favorite_players.remove(player_name)
-            await user_data_manager.save_user_preferences(prefs)
+        if await data_manager.remove_favorite(user.id, 'player', player_name):
             await query.answer(f"✅ Removed {player_name} from favorites!")
             await self._show_favorites(query)
         else:
             await query.answer(f"❌ Player not found in favorites!")
     
     async def _add_team_to_db(self, query, team_name: str) -> None:
-        """Add a team to favorites using database."""
-        if not query.from_user:
-            return
-        
-        user = query.from_user
-        
-        try:
-            if self.db and self.db.enabled:
-                success = await self.db.add_favorite(user.id, 'team', team_name)
-                if success:
-                    await query.answer(f"✅ Added {team_name} to favorites!")
-                else:
-                    await query.answer(f"ℹ️ {team_name} is already in favorites!")
-            else:
-                prefs = await user_data_manager.get_user_preferences(user.id)
-                if prefs.add_favorite_team(team_name):
-                    await user_data_manager.save_user_preferences(prefs)
-                    await query.answer(f"✅ Added {team_name} to favorites!")
-                else:
-                    await query.answer(f"ℹ️ {team_name} is already in favorites!")
-            
-            await self._show_favorites(query)
-            
-        except Exception as e:
-            logger.error(f"Error adding team to favorites: {e}")
-            await query.answer("⚠️ Error adding to favorites!")
+        """Add a team to favorites."""
+        await self._add_team(query, team_name)
     
     async def _add_player_to_db(self, query, player_name: str) -> None:
-        """Add a player to favorites using database."""
-        if not query.from_user:
-            return
-        
+        """Add a player to favorites."""
+        if not query.from_user: return
         user = query.from_user
-        
-        try:
-            if self.db and self.db.enabled:
-                success = await self.db.add_favorite(user.id, 'player', player_name)
-                if success:
-                    await query.answer(f"✅ Added {player_name} to favorites!")
-                else:
-                    await query.answer(f"ℹ️ {player_name} is already in favorites!")
-            else:
-                prefs = await user_data_manager.get_user_preferences(user.id)
-                if player_name not in prefs.favorite_players:
-                    prefs.favorite_players.append(player_name)
-                    await user_data_manager.save_user_preferences(prefs)
-                    await query.answer(f"✅ Added {player_name} to favorites!")
-                else:
-                    await query.answer(f"ℹ️ {player_name} is already in favorites!")
-            
+        if await data_manager.add_favorite(user.id, 'player', player_name):
+            await query.answer(f"✅ Added {player_name} to favorites!")
             await self._show_favorites(query)
-            
-        except Exception as e:
-            logger.error(f"Error adding player to favorites: {e}")
-            await query.answer("⚠️ Error adding to favorites!")
+        else:
+            await query.answer(f"ℹ️ {player_name} is already in favorites!")
     
     async def _remove_team_from_db(self, query, team_name: str) -> None:
-        """Remove a team from favorites using database."""
-        if not query.from_user:
-            return
-        
-        user = query.from_user
-        
-        try:
-            if self.db and self.db.enabled:
-                success = await self.db.remove_favorite(user.id, 'team', team_name)
-                if success:
-                    await query.answer(f"✅ Removed {team_name} from favorites!")
-                else:
-                    await query.answer(f"❌ Team not found in favorites!")
-            else:
-                prefs = await user_data_manager.get_user_preferences(user.id)
-                if prefs.remove_favorite_team(team_name):
-                    await user_data_manager.save_user_preferences(prefs)
-                    await query.answer(f"✅ Removed {team_name} from favorites!")
-                else:
-                    await query.answer(f"❌ Team not found in favorites!")
-            
-            await self._show_favorites(query)
-            
-        except Exception as e:
-            logger.error(f"Error removing team from favorites: {e}")
-            await query.answer("⚠️ Error removing from favorites!")
+        """Remove a team from favorites."""
+        await self._remove_team(query, team_name)
     
     async def _remove_player_from_db(self, query, player_name: str) -> None:
-        """Remove a player from favorites using database."""
-        if not query.from_user:
-            return
-        
-        user = query.from_user
-        
-        try:
-            if self.db and self.db.enabled:
-                success = await self.db.remove_favorite(user.id, 'player', player_name)
-                if success:
-                    await query.answer(f"✅ Removed {player_name} from favorites!")
-                else:
-                    await query.answer(f"❌ Player not found in favorites!")
-            else:
-                prefs = await user_data_manager.get_user_preferences(user.id)
-                if player_name in prefs.favorite_players:
-                    prefs.favorite_players.remove(player_name)
-                    await user_data_manager.save_user_preferences(prefs)
-                    await query.answer(f"✅ Removed {player_name} from favorites!")
-                else:
-                    await query.answer(f"❌ Player not found in favorites!")
-            
-            await self._show_favorites(query)
-            
-        except Exception as e:
-            logger.error(f"Error removing player from favorites: {e}")
-            await query.answer("⚠️ Error removing from favorites!")
+        """Remove a player from favorites."""
+        await self._remove_player(query, player_name)
     
     async def _search_player(self, update: Update, player_name: str) -> None:
         """Search for a player."""
@@ -1479,20 +1375,28 @@ class CricketBot:
         self.application = Application.builder().token(self.token).build()
         
         logger.info("🔌 Connecting to PostgreSQL database...")
-        db_connected = await cricket_db.connect()
-        
-        if not db_connected:
-            logger.error("❌ CRITICAL: Failed to connect to PostgreSQL database")
-            logger.error("❌ Database connection is REQUIRED for this bot to function")
-            logger.error("❌ Please check your database credentials and try again")
-            raise RuntimeError("Database connection failed - bot cannot start without database")
-        
-        self.db = cricket_db
-        logger.info("✅ PostgreSQL database connected successfully")
+        try:
+            db_connected = await cricket_db.connect()
+
+            if not db_connected:
+                logger.warning("⚠️ Failed to connect to PostgreSQL database. Falling back to file-based storage.")
+                self.db = None
+            else:
+                self.db = cricket_db
+                logger.info("✅ PostgreSQL database connected successfully")
+                # Initialize schema
+                await self.db.initialize_schema()
+        except Exception as e:
+            logger.error(f"❌ Database connection error: {e}")
+            logger.warning("⚠️ Falling back to file-based storage.")
+            self.db = None
         
         bot_instance = self.application.bot
-        self.live_worker = await start_live_worker(bot_instance, update_interval=3)
-        logger.info("✅ Live update worker started")
+        if self.db and self.db.enabled:
+            self.live_worker = await start_live_worker(bot_instance, update_interval=3)
+            logger.info("✅ Live update worker started")
+        else:
+            logger.warning("⚠️ Live update worker NOT started (requires database)")
         
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("live", self.live_command))

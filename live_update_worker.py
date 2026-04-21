@@ -11,7 +11,7 @@ from datetime import datetime
 from telegram import Bot
 from telegram.error import TelegramError
 from cricket_scraper import get_live_matches, get_match_details
-from postgres_db import db
+from data_manager import data_manager
 from message_formatter import MessageFormatter
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ class LiveUpdateWorker:
     async def _update_messages_for_match(self, match_id: str, match):
         """Update all Telegram messages tracking this match."""
         # Get all active messages for this match
-        messages = await db.get_active_live_messages(match_id)
+        messages = await data_manager.get_active_live_messages(match_id)
         
         if not messages:
             logger.debug(f"No messages to update for match {match_id}")
@@ -171,7 +171,7 @@ class LiveUpdateWorker:
                     pass
                 elif "message to edit not found" in str(e).lower():
                     # Message was deleted, deactivate it
-                    await db.deactivate_message(msg['chat_id'], msg['message_id'])
+                    await data_manager.deactivate_message(msg['chat_id'], msg['message_id'])
                     logger.debug(f"🗑️ Deactivated deleted message {msg['message_id']}")
                 else:
                     logger.error(f"❌ Error updating message {msg['message_id']}: {e}")
