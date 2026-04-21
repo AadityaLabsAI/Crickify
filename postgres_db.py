@@ -23,6 +23,29 @@ class CricketDatabase:
         self.pool: Optional[asyncpg.Pool] = None
         self.enabled = False
         
+    async def initialize_schema(self) -> bool:
+        """Initialize the database schema from database_schema.sql."""
+        if not self.pool:
+            return False
+
+        try:
+            schema_file = 'database_schema.sql'
+            if not os.path.exists(schema_file):
+                logger.error(f"❌ Schema file {schema_file} not found")
+                return False
+
+            with open(schema_file, 'r') as f:
+                schema_sql = f.read()
+
+            async with self.get_connection() as conn:
+                await conn.execute(schema_sql)
+
+            logger.info("✅ Database schema initialized successfully")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize database schema: {e}")
+            return False
+
     async def connect(self) -> bool:
         """Create connection pool to PostgreSQL database."""
         try:
